@@ -1,0 +1,22 @@
+{
+  "name": "limitline",
+  "description": "Marketplace for the limitline status line plugin.",
+  "owner": {
+    "name": "venkatvellaichamy"
+  },
+  "plugins": [
+    {
+      "name": "limitline",
+      "description": "Compact colour-coded usage limits in the Claude Code status line. Reads local session data only and makes no network calls.",
+      "version": "0.1.0",
+      "author": {
+        "name": "Venkat Vellaichamy"
+      },
+      "homepage": "https://github.com/venkatvellaichamy/limitline",
+      "repository": "https://github.com/venkatvellaichamy/limitline",
+      "license": "MIT",
+      "category": "development",
+      "source": "./"
+    }
+  ]
+}

@@ -1,0 +1,12 @@
+{
+  "name": "limitline",
+  "version": "0.1.0",
+  "description": "Compact colour-coded usage limits in the Claude Code status line. Reads local session data only and makes no network calls.",
+  "author": {
+    "name": "Venkat Vellaichamy"
+  },
+  "homepage": "https://github.com/venkatvellaichamy/limitline",
+  "repository": "https://github.com/venkatvellaichamy/limitline",
+  "license": "MIT",
+  "keywords": ["statusline", "usage", "rate-limits", "claude-code"]
+}
