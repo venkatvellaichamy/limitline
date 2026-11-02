@@ -290,14 +290,14 @@ grok_got=$(LIMITLINE_GROK_DIR="$TEST_HOME/grok" "$ROOT/providers/grok")
 grok_got=${grok_got%$'\n'}
 check "provider-grok" "$grok_got" '{"observed_at":1762055400,"provider":"grok","source":"usage.json","stale":false,"windows":[]}'
 
-gem_got=$(LIMITLINE_GEMINI_LOG="$FIX/providers/gemini.log" "$ROOT/providers/gemini")
+gem_got=$(LIMITLINE_GEMINI_LOG="$FIX/providers/gemini-cli.txt" "$ROOT/providers/gemini")
 gem_got=${gem_got%$'\n'}
 check "provider-gemini" "$gem_got" '{"observed_at":1762052400,"provider":"gemini","source":"cli.log","stale":false,"windows":[{"name":"quota","resets_at":1762066800,"used_pct":100}]}'
 
 export LIMITLINE_CLAUDE_SNAPSHOT="$TEST_HOME/claude-snapshot.json"
 export LIMITLINE_CODEX_DIR="$codex_prov"
 export LIMITLINE_GROK_DIR="$TEST_HOME/grok"
-export LIMITLINE_GEMINI_LOG="$FIX/providers/gemini.log"
+export LIMITLINE_GEMINI_LOG="$FIX/providers/gemini-cli.txt"
 status_got=$("$BIN" status)
 check "status-table" "$status_got" "$(printf '%s\n' 'tool     limits' 'claude   5h 62% · 7d 38%' 'codex    5h 12% · 7d 55%' 'cursor   no local quota' 'grok     session tokens only' 'gemini   quota 100%')"
 

@@ -1,7 +1,7 @@
 {
   "name": "limitline",
-  "version": "0.1.0",
-  "description": "Compact colour-coded usage limits in the Claude Code status line. Reads local session data only and makes no network calls.",
+  "version": "0.2.0",
+  "description": "Compact colour-coded local usage limits for Claude Code and nearby CLIs. Reads local session data only and makes no network calls.",
   "author": {
     "name": "Venkat Vellaichamy"
   },
