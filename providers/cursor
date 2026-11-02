@@ -1,0 +1,11 @@
+#!/usr/bin/env python3
+"""Cursor has a status-line command, but no local quota file."""
+import json, sys
+
+json.dump(
+    {"observed_at": None, "provider": "cursor", "source": "none", "stale": False, "windows": []},
+    sys.stdout,
+    sort_keys=True,
+    separators=(",", ":"),
+)
+sys.stdout.write("\n")

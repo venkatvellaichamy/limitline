@@ -83,7 +83,12 @@ load_config() {
   if [[ -n "${LIMITLINE_CONFIG+x}" ]]; then
     cfg="$LIMITLINE_CONFIG"
   else
-    cfg="${XDG_CONFIG_HOME:-$HOME/.config}/limitline/config"
+    local base="${XDG_CONFIG_HOME:-$HOME/.config}/limitline"
+    if [[ -f "$base/config.toml" ]]; then
+      cfg="$base/config.toml"
+    else
+      cfg="$base/config"
+    fi
   fi
   [[ -f "$cfg" && -r "$cfg" ]] || return 0
   while IFS= read -r line || [[ -n "$line" ]]; do
@@ -176,6 +181,7 @@ if [[ -n "$SEGMENTS" ]]; then
   IFS=','
   for raw in $SEGMENTS; do
     name=$(trim "$raw")
+    name=${name//[\[\]\"\'[:space:]]/}
     case "$name" in
       model) ON_MODEL=1 ;;
       style) ON_STYLE=1 ;;
@@ -753,7 +759,7 @@ write_snapshot() {
   local dir dest windows item pct reset
   [[ -n "$five_pct" || -n "$seven_pct" || -n "$spend_pct" || -n "$spend_used" ]] || return 0
   dir="${XDG_CACHE_HOME:-$HOME/.cache}/limitline"
-  mkdir -p "$dir" 2>/dev/null || return 0
+  [[ -d "$dir" ]] || mkdir -p "$dir" 2>/dev/null || return 0
   dest="${LIMITLINE_CLAUDE_SNAPSHOT:-$dir/claude.json}"
   windows=""
   add_win() {
@@ -776,67 +782,16 @@ write_snapshot() {
     ;; esac
   ;; esac
   printf '{"observed_at":%s,"provider":"claude","source":"statusline","stale":false,%s"windows":[%s]}\n' \
-    "$NOW" "$spend_json" "$windows" > "$dest.tmp" 2>/dev/null \
-    && mv "$dest.tmp" "$dest" 2>/dev/null || true
+    "$NOW" "$spend_json" "$windows" > "$dest" 2>/dev/null || true
 }
 write_snapshot
 
-ctx_extra=""
-if [[ "$ON_CTX" == "1" && -n "$ctx" ]]; then
-  ctx_extra=$(awk -v size="$ctx_size" -v tokens="$ctx_tokens" -v pct="$ctx" -v at="${compact_at:-$AUTO_AT}" -v warn="$AUTO_WARN" '
-    BEGIN {
-      extra = ""
-      if (size ~ /^[0-9.]+$/) {
-        if (tokens ~ /^[0-9.]+$/) left = size - tokens
-        else left = size * (100 - pct) / 100
-        if (left >= 1000) extra = sprintf("%.0fk left", left / 1000)
-        else if (left > 0) extra = sprintf("%.0f left", left)
-      }
-      if (pct + 0 >= warn + 0) {
-        gap = int((at + 0) - (pct + 0) + 0.5)
-        if (gap > 0) note = sprintf("↯ auto-compact in ~%d%%", gap)
-        else note = "↯ auto-compact"
-        if (extra != "") extra = extra " " note
-        else extra = note
-      }
-      printf "%s", extra
-    }
-  ')
-fi
-
-burn_text=""
+hist_path=""
 if [[ "$ON_BURN" == "1" && -n "$five_pct" ]]; then
   hist_dir="${XDG_CACHE_HOME:-$HOME/.cache}/limitline"
-  mkdir -p "$hist_dir" 2>/dev/null || true
-  hist="$hist_dir/history-5h.tsv"
-  if [[ -f "$hist" ]]; then
-    burn_text=$(awk -v now="$NOW" -v pct="$five_pct" '
-      { t=$1+0; p=$2+0; n++; tt[n]=t; pp[n]=p }
-      END {
-        base_t = 0
-        start = n - 30
-        if (start < 1) start = 1
-        for (i = start; i <= n; i++) {
-          if (now - tt[i] <= 1800 && now - tt[i] >= 30) {
-            if (base_t == 0 || tt[i] < base_t) { base_t = tt[i]; base_p = pp[i] }
-          }
-        }
-        if (base_t == 0) exit
-        dt = now - base_t
-        dp = pct - base_p
-        if (dp <= 0.05 || dt <= 0) exit
-        remain = 100 - pct
-        if (remain <= 0) exit
-        eta = remain / (dp / dt)
-        if (eta <= 0 || eta >= 86400) exit
-        mins = int(eta / 60 + 0.5)
-        if (mins < 1) mins = 1
-        if (mins >= 60) printf "pace ~%dh%dm", int(mins / 60), mins % 60
-        else printf "pace ~%dm", mins
-      }
-    ' "$hist" 2>/dev/null || true)
-  fi
-  printf '%s %s\n' "$NOW" "$five_pct" >> "$hist" 2>/dev/null || true
+  [[ -d "$hist_dir" ]] || mkdir -p "$hist_dir" 2>/dev/null || true
+  hist_path="$hist_dir/history-5h.tsv"
+  printf '%s %s\n' "$NOW" "$five_pct" >> "$hist_path" 2>/dev/null || true
 fi
 
 git_text=""
@@ -902,7 +857,7 @@ fi
 [[ "$ON_SPEND" == "1" ]] || { spend_pct=""; spend_used=""; spend_limit=""; }
 [[ "$ON_COST" == "1" ]] || { cost_usd=""; cost_ms=""; lines_added=""; lines_removed=""; }
 [[ "$ON_CODEX" == "1" ]] || { codex5=""; codex7=""; }
-[[ "$ON_BURN" == "1" ]] || burn_text=""
+[[ "$ON_BURN" == "1" ]] || hist_path=""
 
 max_cols="${LIMITLINE_COLUMNS:-${COLUMNS:-}}"
 if [[ -z "$max_cols" && -n "$render_cols" ]]; then max_cols="$render_cols"; fi
@@ -922,7 +877,10 @@ emit_kv() {
   emit_kv model "$model"
   emit_kv style "$style"
   emit_kv ctx "$ctx"
-  emit_kv ctx_extra "$ctx_extra"
+  emit_kv ctx_size "$ctx_size"
+  emit_kv ctx_tokens "$ctx_tokens"
+  emit_kv compact_at "${compact_at:-$AUTO_AT}"
+  emit_kv auto_warn "$AUTO_WARN"
   emit_kv five_pct "$five_pct"
   emit_kv five_reset "$five_epoch"
   emit_kv five_abs "$five_abs"
@@ -943,7 +901,7 @@ emit_kv() {
   emit_kv session "$session_text"
   emit_kv codex5 "$codex5"
   emit_kv codex7 "$codex7"
-  emit_kv burn "$burn_text"
+  emit_kv hist "$hist_path"
 } | awk '
 function val(k) { return (k in v) ? v[k] : "" }
 function pct(p) {
@@ -1071,11 +1029,60 @@ function codex_seg(a, b,    left, right, out) {
   if (out == "") return ""
   return "codex " out
 }
+function ctx_note(pct, size, tokens, at, warn,    left, extra, gap, note) {
+  if (pct == "") return ""
+  extra = ""
+  if (size ~ /^[0-9.]+$/) {
+    if (tokens ~ /^[0-9.]+$/) left = size - tokens
+    else left = size * (100 - pct) / 100
+    if (left >= 1000) extra = sprintf("%.0fk left", left / 1000)
+    else if (left > 0) extra = sprintf("%.0f left", left)
+  }
+  if (pct + 0 >= warn + 0) {
+    gap = int((at + 0) - (pct + 0) + 0.5)
+    if (gap > 0) note = sprintf("↯ auto-compact in ~%d%%", gap)
+    else note = "↯ auto-compact"
+    if (extra != "") extra = extra " " note
+    else extra = note
+  }
+  return extra
+}
 function ctx_seg(p, extra,    body) {
   if (p == "") return ""
   body = "ctx " meter(p)
   if (extra != "") body = body " " extra
   return body
+}
+function burn_pace(path, now, pct,    line, n, a, i, start, base_t, base_p, dt, dp, remain, eta, mins) {
+  if (path == "" || pct == "") return ""
+  n = 0
+  while ((getline line < path) > 0) {
+    n++
+    split(line, a, " ")
+    tt[n] = a[1] + 0
+    pp[n] = a[2] + 0
+  }
+  close(path)
+  base_t = 0
+  start = n - 30
+  if (start < 1) start = 1
+  for (i = start; i <= n; i++) {
+    if (now - tt[i] <= 1800 && now - tt[i] >= 30) {
+      if (base_t == 0 || tt[i] < base_t) { base_t = tt[i]; base_p = pp[i] }
+    }
+  }
+  if (base_t == 0) return ""
+  dt = now - base_t
+  dp = pct - base_p
+  if (dp <= 0.05 || dt <= 0) return ""
+  remain = 100 - pct
+  if (remain <= 0) return ""
+  eta = remain / (dp / dt)
+  if (eta <= 0 || eta >= 86400) return ""
+  mins = int(eta / 60 + 0.5)
+  if (mins < 1) mins = 1
+  if (mins >= 60) return sprintf("pace ~%dh%dm", int(mins / 60), mins % 60)
+  return sprintf("pace ~%dm", mins)
 }
 function plain_len(s) {
   gsub(/\033\[[0-9;]*m/, "", s)
@@ -1131,11 +1138,11 @@ END {
   nseg = 0
   push(100, val("model"))
   push(25, val("style"))
-  push(70, ctx_seg(val("ctx"), val("ctx_extra")))
+  push(70, ctx_seg(val("ctx"), ctx_note(val("ctx"), val("ctx_size"), val("ctx_tokens"), val("compact_at"), val("auto_warn"))))
   push(90, window_seg("5h", val("five_pct"), val("five_reset"), val("five_abs")))
   push(80, window_seg("7d", val("seven_pct"), val("seven_reset"), val("seven_abs")))
   push(60, spend_seg(val("spend_pct"), val("spend_used"), val("spend_limit")))
-  push(30, val("burn"))
+  push(30, burn_pace(val("hist"), val("now") + 0, val("five_pct")))
   push(50, cost_seg(val("cost_usd"), val("cost_ms"), val("lines_added"), val("lines_removed")))
   push(40, val("git"))
   push(20, val("pr"))

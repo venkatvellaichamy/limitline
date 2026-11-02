@@ -1,0 +1,63 @@
+#!/usr/bin/env python3
+"""Grok usage.json is a session ledger, not an account quota. Windows stay empty."""
+import json, os, sys, time
+
+def emit(obj):
+    json.dump(obj, sys.stdout, sort_keys=True, separators=(",", ":"))
+    sys.stdout.write("\n")
+
+def to_epoch(value):
+    if not isinstance(value, str) or not value:
+        return None
+    iso = value[:-1] + "+00:00" if value.endswith(("Z", "z")) else value
+    try:
+        from datetime import datetime
+        return int(datetime.fromisoformat(iso).timestamp())
+    except Exception:
+        return None
+
+def newest(root):
+    best = None
+    best_m = -1.0
+    for dirpath, _dirs, files in os.walk(root):
+        for name in files:
+            if name != "usage.json":
+                continue
+            path = os.path.join(dirpath, name)
+            try:
+                mtime = os.path.getmtime(path)
+            except OSError:
+                continue
+            if mtime > best_m:
+                best_m = mtime
+                best = path
+    return best
+
+def main():
+    now = int(os.environ.get("LIMITLINE_NOW") or time.time())
+    stale_s = int(os.environ.get("LIMITLINE_STALE_MINUTES") or "15") * 60
+    root = os.environ.get("LIMITLINE_GROK_DIR") or os.path.join(os.path.expanduser("~"), ".grok", "sessions")
+    empty = {"observed_at": None, "provider": "grok", "source": "none", "stale": False, "windows": []}
+    path = newest(root) if os.path.isdir(root) else None
+    if not path:
+        emit(empty)
+        return
+    try:
+        data = json.load(open(path))
+    except Exception:
+        emit(empty)
+        return
+    observed = to_epoch(data.get("updatedAt") if isinstance(data, dict) else None)
+    emit({
+        "observed_at": observed,
+        "provider": "grok",
+        "source": "usage.json",
+        "stale": observed is None or now - observed > stale_s,
+        "windows": [],
+    })
+
+if __name__ == "__main__":
+    try:
+        main()
+    except Exception:
+        sys.exit(0)

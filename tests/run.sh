@@ -26,7 +26,9 @@ export LIMITLINE_CODEX=0
 export LIMITLINE_GIT=0
 export TZ=UTC
 export LC_ALL=C
-unset NO_COLOR LIMITLINE_DEBUG LIMITLINE_DEBUG_FILE LIMITLINE_CODEX_DIR LIMITLINE_BAR_WIDTH LIMITLINE_NOCACHE
+unset NO_COLOR LIMITLINE_DEBUG LIMITLINE_DEBUG_FILE LIMITLINE_CODEX_DIR LIMITLINE_BAR_WIDTH LIMITLINE_NOCACHE \
+  LIMITLINE_THEME LIMITLINE_ASCII LIMITLINE_SESSION LIMITLINE_COLUMNS COLUMNS LIMITLINE_LINES \
+  LIMITLINE_CLAUDE_SNAPSHOT LIMITLINE_GROK_DIR LIMITLINE_GEMINI_LOG LIMITLINE_STALE_MINUTES
 
 fail=0
 pass=0
@@ -202,6 +204,150 @@ done
 py_codex=$(PATH="$nojq" LIMITLINE_CODEX=1 LIMITLINE_CODEX_DIR="$fresh_dir" LIMITLINE_NOCACHE=1 "$BIN" < "$FIX/full.json" | strip_ansi)
 py_codex=${py_codex%$'\n'}
 check "python-fallback-codex" "$py_codex" "$example_want"
+
+# Themes, width, burn, git, and the other providers.
+ascii_got=$(NO_COLOR=1 LIMITLINE_THEME=ascii "$BIN" < "$FIX/full.json" | strip_ansi)
+ascii_got=${ascii_got%$'\n'}
+check "theme-ascii" "$ascii_got" 'Opus 5.5 | ctx ##--- ·41% | 5h ###-- +62% in 1h42m | 7d ##--- ·38% in Thu 09:00 | $1.25'
+
+ascii_env=$(NO_COLOR=1 LIMITLINE_ASCII=1 "$BIN" < "$FIX/full.json" | strip_ansi)
+ascii_env=${ascii_env%$'\n'}
+check "theme-ascii-env" "$ascii_env" "$ascii_got"
+
+power_got=$(NO_COLOR=1 LIMITLINE_THEME=powerline "$BIN" < "$FIX/full.json" | strip_ansi)
+power_got=${power_got%$'\n'}
+check "theme-powerline" "$power_got" 'Opus 5.5  ctx ██░░░ ·41%  5h ███░░ +62% ↻1h42m  7d ██░░░ ·38% ↻Thu 09:00  $1.25'
+
+two_got=$(NO_COLOR=1 LIMITLINE_LINES=2 "$BIN" < "$FIX/full.json" | strip_ansi)
+printf '%s' "$two_got" | grep -q $'\n' && printf '%s' "$two_got" | grep -q -F '5h' \
+  && check "two-line" "yes" "yes" || check "two-line" "no" "yes"
+
+narrow_got=$(NO_COLOR=1 LIMITLINE_SESSION=1 LIMITLINE_COLUMNS=60 "$BIN" < "$FIX/narrow.json" | strip_ansi)
+narrow_got=${narrow_got%$'\n'}
+narrow_len=$(printf '%s' "$narrow_got" | python3 -c 'import sys; print(len(sys.stdin.read()))')
+if [[ "$narrow_len" -le 60 ]] && printf '%s' "$narrow_got" | grep -q -F 'Opus 5.5' \
+  && printf '%s' "$narrow_got" | grep -q -F '5h' \
+  && ! printf '%s' "$narrow_got" | grep -q -F 'abcdef'; then
+  check "narrow-60" "yes" "yes"
+else
+  check "narrow-60" "$narrow_got" "width<=60 with model and 5h, session dropped"
+fi
+
+hist="$XDG_CACHE_HOME/limitline/history-5h.tsv"
+mkdir -p "$(dirname "$hist")"
+printf '%s\n' "1762054200 50" > "$hist"
+burn_got=$(NO_COLOR=1 "$BIN" < "$FIX/full.json" | strip_ansi)
+burn_got=${burn_got%$'\n'}
+printf '%s' "$burn_got" | grep -q -F 'pace ~1h35m' \
+  && check "burn-pace" "yes" "yes" || check "burn-pace" "$burn_got" "pace ~1h35m"
+rm -f "$hist"
+
+git_repo="$TEST_HOME/repo"
+mkdir -p "$git_repo"
+git -C "$git_repo" init -q -b demo
+git -C "$git_repo" -c user.name=limitline -c user.email=limitline@example.com commit -q --allow-empty -m init
+printf 'x\n' > "$git_repo/file"
+git_payload=$(printf '{"workspace":{"current_dir":"%s","repo":{"owner":"example","name":"demo"}}}' "$git_repo")
+git_got=$(printf '%s' "$git_payload" | LIMITLINE_GIT=1 NO_COLOR=1 "$BIN" | strip_ansi)
+git_got=${git_got%$'\n'}
+check "git-branch" "$git_got" "example/demo demo*"
+
+toml="$TEST_HOME/.config/limitline/config.toml"
+mkdir -p "$(dirname "$toml")"
+printf '%s\n' 'theme = "ascii"' 'bar_width = 5' > "$toml"
+toml_got=$(LIMITLINE_CONFIG="$toml" NO_COLOR=1 "$BIN" < "$FIX/full.json" | strip_ansi)
+toml_got=${toml_got%$'\n'}
+check "config-toml" "$toml_got" "$ascii_got"
+
+# Providers. Home stays on the test directory, so real session logs are not read.
+cp "$FIX/providers/claude-snapshot.json" "$TEST_HOME/claude-snapshot.json"
+claude_got=$(LIMITLINE_CLAUDE_SNAPSHOT="$TEST_HOME/claude-snapshot.json" "$ROOT/providers/claude")
+claude_got=${claude_got%$'\n'}
+check "provider-claude" "$claude_got" '{"observed_at":1762055100,"provider":"claude","source":"statusline","stale":false,"windows":[{"name":"5h","resets_at":1762062120,"used_pct":62},{"name":"7d","resets_at":1762419600,"used_pct":38}]}'
+
+codex_prov="$TEST_HOME/codex-prov"
+mkdir -p "$codex_prov"
+cp "$FIX/codex/fresh.jsonl" "$codex_prov/fresh.jsonl"
+codex_got=$(LIMITLINE_CODEX_DIR="$codex_prov" "$ROOT/providers/codex")
+codex_got=${codex_got%$'\n'}
+check "provider-codex" "$codex_got" '{"observed_at":1762054200,"provider":"codex","source":"session","stale":false,"windows":[{"name":"5h","resets_at":1762062120,"used_pct":12},{"name":"7d","resets_at":1762419600,"used_pct":55}]}'
+
+stale_prov="$TEST_HOME/codex-stale"
+mkdir -p "$stale_prov"
+cp "$FIX/codex/stale.jsonl" "$stale_prov/stale.jsonl"
+stale_got=$(LIMITLINE_CODEX_DIR="$stale_prov" "$ROOT/providers/codex")
+stale_got=${stale_got%$'\n'}
+check "provider-codex-stale" "$stale_got" '{"observed_at":1761955200,"provider":"codex","source":"session","stale":true,"windows":[]}'
+
+cursor_got=$("$ROOT/providers/cursor")
+cursor_got=${cursor_got%$'\n'}
+check "provider-cursor" "$cursor_got" '{"observed_at":null,"provider":"cursor","source":"none","stale":false,"windows":[]}'
+
+grok_root="$TEST_HOME/grok/sess"
+mkdir -p "$grok_root"
+cp "$FIX/providers/grok-usage.json" "$grok_root/usage.json"
+grok_got=$(LIMITLINE_GROK_DIR="$TEST_HOME/grok" "$ROOT/providers/grok")
+grok_got=${grok_got%$'\n'}
+check "provider-grok" "$grok_got" '{"observed_at":1762055400,"provider":"grok","source":"usage.json","stale":false,"windows":[]}'
+
+gem_got=$(LIMITLINE_GEMINI_LOG="$FIX/providers/gemini.log" "$ROOT/providers/gemini")
+gem_got=${gem_got%$'\n'}
+check "provider-gemini" "$gem_got" '{"observed_at":1762052400,"provider":"gemini","source":"cli.log","stale":false,"windows":[{"name":"quota","resets_at":1762066800,"used_pct":100}]}'
+
+export LIMITLINE_CLAUDE_SNAPSHOT="$TEST_HOME/claude-snapshot.json"
+export LIMITLINE_CODEX_DIR="$codex_prov"
+export LIMITLINE_GROK_DIR="$TEST_HOME/grok"
+export LIMITLINE_GEMINI_LOG="$FIX/providers/gemini.log"
+status_got=$("$BIN" status)
+check "status-table" "$status_got" "$(printf '%s\n' 'tool     limits' 'claude   5h 62% · 7d 38%' 'codex    5h 12% · 7d 55%' 'cursor   no local quota' 'grok     session tokens only' 'gemini   quota 100%')"
+
+host_got=$("$BIN" --host prompt)
+check "host-prompt" "$host_got" 'claude 5h 62% · 7d 38% | codex 5h 12% · 7d 55% | gemini quota 100%'
+
+swift_got=$("$BIN" --host swiftbar)
+printf '%s' "$swift_got" | grep -q -F '5h 62%' && printf '%s' "$swift_got" | grep -q -F -- '---' \
+  && printf '%s' "$swift_got" | grep -q -F 'cursor  no local quota' \
+  && check "host-swiftbar" "yes" "yes" || check "host-swiftbar" "$swift_got" "swiftbar menu"
+
+preview_got=$("$BIN" preview)
+printf '%s' "$preview_got" | grep -q -F '## minimal' && printf '%s' "$preview_got" | grep -q -F '## ascii' \
+  && printf '%s' "$preview_got" | grep -q -F '## powerline' \
+  && check "preview-themes" "yes" "yes" || check "preview-themes" "no" "yes"
+
+doctor_got=$("$BIN" doctor < "$FIX/full.json")
+printf '%s' "$doctor_got" | grep -q -F 'model.display_name present' \
+  && printf '%s' "$doctor_got" | grep -q -F 'jq: yes' \
+  && check "doctor" "yes" "yes" || check "doctor" "no" "yes"
+
+# A status-line run writes the Claude snapshot other hosts read back.
+rm -f "$XDG_CACHE_HOME/limitline/claude.json"
+env -u LIMITLINE_CLAUDE_SNAPSHOT NO_COLOR=1 "$BIN" < "$FIX/full.json" >/dev/null
+snap_got=$(LIMITLINE_CLAUDE_SNAPSHOT="$XDG_CACHE_HOME/limitline/claude.json" "$ROOT/providers/claude")
+printf '%s' "$snap_got" | grep -q -F '"source":"statusline"' && printf '%s' "$snap_got" | grep -q -F '"used_pct":62' \
+  && check "claude-snapshot" "yes" "yes" || check "claude-snapshot" "$snap_got" "snapshot"
+
+unset LIMITLINE_CLAUDE_SNAPSHOT LIMITLINE_CODEX_DIR LIMITLINE_GROK_DIR LIMITLINE_GEMINI_LOG
+
+if "$ROOT/integrations/codex/install.sh" | grep -q -F 'five-hour-limit'; then
+  check "codex-install-print" "yes" "yes"
+else
+  check "codex-install-print" "no" "yes"
+fi
+if "$ROOT/integrations/codex/install.sh" --write >/dev/null 2>&1; then
+  check "codex-install-write" "wrote" "refused"
+else
+  check "codex-install-write" "refused" "refused"
+fi
+if "$ROOT/integrations/cursor/install.sh" | grep -q -F 'statusLine'; then
+  check "cursor-install-print" "yes" "yes"
+else
+  check "cursor-install-print" "no" "yes"
+fi
+if "$ROOT/integrations/grok/install.sh" | grep -q -F 'ui.status_line'; then
+  check "grok-install-print" "yes" "yes"
+else
+  check "grok-install-print" "no" "yes"
+fi
 
 # Typical speed without the Codex scan: average of 8 runs after one warmup.
 "$BIN" < "$FIX/full.json" >/dev/null

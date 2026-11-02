@@ -1,0 +1,8 @@
+# Add to ~/.config/starship.toml. The module stays local.
+[custom.limitline]
+command = "limitline --host starship"
+when = "command -v limitline"
+format = "[$output]($style) "
+style = "bold"
+shell = ["bash", "--noprofile", "--norc"]
+description = "Local AI usage limits"

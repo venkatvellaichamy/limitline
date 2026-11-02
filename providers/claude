@@ -1,0 +1,44 @@
+#!/usr/bin/env python3
+"""Read the Claude limit snapshot written by the status line. Local file only."""
+import json, os, sys, time
+
+def emit(obj):
+    json.dump(obj, sys.stdout, sort_keys=True, separators=(",", ":"))
+    sys.stdout.write("\n")
+
+def main():
+    now = int(os.environ.get("LIMITLINE_NOW") or time.time())
+    stale_s = int(os.environ.get("LIMITLINE_STALE_MINUTES") or "15") * 60
+    path = os.environ.get("LIMITLINE_CLAUDE_SNAPSHOT")
+    if not path:
+        base = os.environ.get("XDG_CACHE_HOME") or os.path.join(os.path.expanduser("~"), ".cache")
+        path = os.path.join(base, "limitline", "claude.json")
+    empty = {"observed_at": None, "provider": "claude", "source": "none", "stale": False, "windows": []}
+    if not os.path.isfile(path):
+        emit(empty)
+        return
+    try:
+        data = json.load(open(path))
+    except Exception:
+        emit(empty)
+        return
+    if not isinstance(data, dict):
+        emit(empty)
+        return
+    data["provider"] = "claude"
+    data.setdefault("windows", [])
+    data.setdefault("source", "statusline")
+    observed = data.get("observed_at")
+    try:
+        observed = int(observed)
+    except (TypeError, ValueError):
+        observed = None
+    data["observed_at"] = observed
+    data["stale"] = bool(observed is None or now - observed > stale_s)
+    emit(data)
+
+if __name__ == "__main__":
+    try:
+        main()
+    except Exception:
+        sys.exit(0)

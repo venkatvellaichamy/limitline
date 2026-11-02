@@ -1,0 +1,127 @@
+#!/usr/bin/env python3
+"""Newest Codex session rate_limits event, if it is under six hours old."""
+import json, os, sys, time
+
+def emit(obj):
+    json.dump(obj, sys.stdout, sort_keys=True, separators=(",", ":"))
+    sys.stdout.write("\n")
+
+def num(value):
+    if isinstance(value, bool) or value is None:
+        return None
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return None
+    if number != number:
+        return None
+    if number.is_integer():
+        return int(number)
+    return round(number, 2)
+
+def to_epoch(value):
+    if isinstance(value, bool) or value is None or value == "":
+        return None
+    if isinstance(value, (int, float)):
+        return int(value)
+    text = str(value).strip()
+    if text.isdigit():
+        return int(text)
+    iso = text[:-1] + "+00:00" if text.endswith(("Z", "z")) else text
+    try:
+        from datetime import datetime
+        return int(datetime.fromisoformat(iso).timestamp())
+    except Exception:
+        return None
+
+def newest_jsonl(root):
+    best = None
+    best_m = -1.0
+    for dirpath, _dirs, files in os.walk(root):
+        for name in files:
+            if not name.endswith(".jsonl"):
+                continue
+            path = os.path.join(dirpath, name)
+            try:
+                mtime = os.path.getmtime(path)
+            except OSError:
+                continue
+            if mtime > best_m:
+                best_m = mtime
+                best = path
+    return best, best_m
+
+def last_limits(path):
+    try:
+        size = os.path.getsize(path)
+        with open(path, "rb") as fh:
+            if size > 8000000:
+                fh.seek(size - 8000000)
+                fh.readline()
+            blob = fh.read().decode("utf-8", "replace")
+    except OSError:
+        return None
+    line = None
+    for row in blob.splitlines():
+        if "rate_limits" in row:
+            line = row
+    if not line:
+        return None
+    try:
+        obj = json.loads(line)
+    except Exception:
+        return None
+    return obj if isinstance(obj, dict) else None
+
+def main():
+    now = int(os.environ.get("LIMITLINE_NOW") or time.time())
+    root = os.environ.get("LIMITLINE_CODEX_DIR") or os.path.join(os.path.expanduser("~"), ".codex", "sessions")
+    empty = {"observed_at": None, "provider": "codex", "source": "none", "stale": False, "windows": []}
+    if not os.path.isdir(root):
+        emit(empty)
+        return
+    path, mtime = newest_jsonl(root)
+    if not path:
+        emit(empty)
+        return
+    obj = last_limits(path)
+    if not obj:
+        emit(empty)
+        return
+    payload = obj.get("payload") if isinstance(obj.get("payload"), dict) else {}
+    limits = payload.get("rate_limits") if isinstance(payload.get("rate_limits"), dict) else None
+    if limits is None and isinstance(obj.get("rate_limits"), dict):
+        limits = obj.get("rate_limits")
+    if not isinstance(limits, dict):
+        emit(empty)
+        return
+    observed = to_epoch(obj.get("timestamp"))
+    if observed is None and mtime >= 0:
+        observed = int(mtime)
+    stale = observed is None or now - observed >= 21600
+    windows = []
+    if not stale:
+        primary = limits.get("primary") if isinstance(limits.get("primary"), dict) else {}
+        secondary = limits.get("secondary") if isinstance(limits.get("secondary"), dict) else {}
+        for name, block in (("5h", primary), ("7d", secondary)):
+            used = num(block.get("used_percent", block.get("used_percentage")))
+            if used is None:
+                continue
+            item = {"name": name, "used_pct": used}
+            reset = to_epoch(block.get("resets_at"))
+            if reset is not None:
+                item["resets_at"] = reset
+            windows.append(item)
+    emit({
+        "observed_at": observed,
+        "provider": "codex",
+        "source": "session",
+        "stale": stale,
+        "windows": windows,
+    })
+
+if __name__ == "__main__":
+    try:
+        main()
+    except Exception:
+        sys.exit(0)

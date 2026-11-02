@@ -1,0 +1,5 @@
+theme = "ascii"
+bar_width = 5
+lines = 1
+auto_compact = 95
+auto_compact_warn = 80

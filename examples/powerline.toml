@@ -1,0 +1,4 @@
+theme = "powerline"
+bar_width = 5
+lines = 1
+# LIMITLINE_ASCII=1 falls back to the ascii theme when a Nerd Font is unavailable.
