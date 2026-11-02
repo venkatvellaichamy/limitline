@@ -1,0 +1,5 @@
+{
+  "rate_limits": {
+    "spend_limit": {"used_usd": 4.5, "limit_usd": 10, "used_percentage": 45}
+  }
+}

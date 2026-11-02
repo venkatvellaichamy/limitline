@@ -1,0 +1,10 @@
+{
+  "model": {"display_name": "Opus 5.5"},
+  "rate_limits": {
+    "five_hour": {"used_percentage": 62, "resets_at": 1762062120},
+    "seven_day": {"used_percentage": 38, "resets_at": 1762419600}
+  },
+  "context_window": {"used_percentage": 41, "remaining_percentage": 59},
+  "workspace": {"current_dir": "/work/demo"},
+  "cost": {"total_cost_usd": 1.25}
+}
