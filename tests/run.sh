@@ -28,7 +28,10 @@ export TZ=UTC
 export LC_ALL=C
 unset NO_COLOR LIMITLINE_DEBUG LIMITLINE_DEBUG_FILE LIMITLINE_CODEX_DIR LIMITLINE_BAR_WIDTH LIMITLINE_NOCACHE \
   LIMITLINE_THEME LIMITLINE_ASCII LIMITLINE_SESSION LIMITLINE_COLUMNS COLUMNS LIMITLINE_LINES \
-  LIMITLINE_CLAUDE_SNAPSHOT LIMITLINE_GROK_DIR LIMITLINE_GEMINI_LOG LIMITLINE_STALE_MINUTES
+  LIMITLINE_CLAUDE_SNAPSHOT LIMITLINE_GROK_DIR LIMITLINE_GEMINI_LOG LIMITLINE_STALE_MINUTES \
+  LIMITLINE_PACE LIMITLINE_SPARK LIMITLINE_NUDGES LIMITLINE_FRESH LIMITLINE_VALUE LIMITLINE_VITALS \
+  LIMITLINE_ALERTS LIMITLINE_QUIET LIMITLINE_SYNC_DIR LIMITLINE_HOST LIMITLINE_VALUE_FILE \
+  LIMITLINE_ALERT_LOG LIMITLINE_WATCH_ONCE
 
 fail=0
 pass=0
@@ -348,6 +351,177 @@ if "$ROOT/integrations/grok/install.sh" | grep -q -F 'ui.status_line'; then
 else
   check "grok-install-print" "no" "yes"
 fi
+
+# Pace compares percent used with percent of the window already elapsed.
+pace_got=$(NO_COLOR=1 LIMITLINE_PACE=1 "$BIN" < "$FIX/full.json" | strip_ansi)
+pace_got=${pace_got%$'\n'}
+check "pace-week" "$pace_got" 'Opus 5.5 │ ctx ▓▓░░░ ·41% │ 5h ▓▓▓░░ +62% ↻1h42m │ 7d ▓▓░░░ ·38% ↻Thu 09:00 │ ~15%/day left for 4d │ $1.25'
+
+ahead_got=$(NO_COLOR=1 LIMITLINE_PACE=1 "$BIN" < "$FIX/over_80.json" | strip_ansi)
+ahead_got=${ahead_got%$'\n'}
+check "pace-ahead" "$ahead_got" 'Opus 5.5 │ 5h ▓▓▓▓▓ !91% ↻3h15m │ 7d ▓▓▓▓░ +80% ↻Thu 09:00 │ ▲ 5h ahead of pace · ▲ 7d ahead of pace · ~5%/day left for 4d │ spend ▓▓▓▓░ !88% $18/$20'
+ahead_raw=$(LIMITLINE_PACE=1 "$BIN" < "$FIX/over_80.json")
+printf '%s' "$ahead_raw" | grep -q -F $'\033[31m' && printf '%s' "$ahead_raw" | grep -q -F 'ahead of pace' \
+  && check "pace-ahead-colour" "yes" "yes" || check "pace-ahead-colour" "no" "yes"
+
+under_got=$(NO_COLOR=1 LIMITLINE_PACE=1 "$BIN" < "$FIX/near_reset.json" | strip_ansi)
+under_got=${under_got%$'\n'}
+check "pace-under" "$under_got" 'Sonnet 4.5 │ 5h ▓▓▓▓▓ !96% ↻8m │ 7d ▓░░░░ ·10% ↻30m │ ▼ 7d under pace'
+under_raw=$(LIMITLINE_PACE=1 "$BIN" < "$FIX/near_reset.json")
+printf '%s' "$under_raw" | grep -q -F $'\033[32m' && printf '%s' "$under_raw" | grep -q -F 'under pace' \
+  && check "pace-under-colour" "yes" "yes" || check "pace-under-colour" "no" "yes"
+
+pace_off=$(NO_COLOR=1 LIMITLINE_PACE=0 LIMITLINE_SEGMENTS=model,pace,5h,7d "$BIN" < "$FIX/full.json" | strip_ansi)
+pace_off=${pace_off%$'\n'}
+check "pace-off" "$pace_off" 'Opus 5.5 │ 5h ▓▓▓░░ +62% ↻1h42m │ 7d ▓▓░░░ ·38% ↻Thu 09:00'
+
+pace_only=$(NO_COLOR=1 LIMITLINE_SEGMENTS=model,pace "$BIN" < "$FIX/full.json" | strip_ansi)
+pace_only=${pace_only%$'\n'}
+check "pace-segment" "$pace_only" 'Opus 5.5 │ ~15%/day left for 4d'
+
+pace_cfg="$TEST_HOME/.config/limitline/pace.toml"
+printf '%s\n' 'pace = "on"' > "$pace_cfg"
+pace_cfg_got=$(NO_COLOR=1 LIMITLINE_CONFIG="$pace_cfg" "$BIN" < "$FIX/full.json" | strip_ansi)
+pace_cfg_got=${pace_cfg_got%$'\n'}
+check "pace-config" "$pace_cfg_got" "$pace_got"
+
+# Sparklines from local snapshots, including one bar per day for a week.
+rm -f "$XDG_CACHE_HOME/limitline/history-5h.tsv" "$XDG_CACHE_HOME/limitline/history-7d.tsv"
+mkdir -p "$XDG_CACHE_HOME/limitline"
+printf '%s\n' "1762050000 10" "1762051000 30" "1762052000 50" "1762053000 70" > "$XDG_CACHE_HOME/limitline/history-5h.tsv"
+python3 - << 'PY' > "$XDG_CACHE_HOME/limitline/history-7d.tsv"
+now = 1762056000
+today = now // 86400
+for offset, pct in enumerate((12, 25, 37, 50, 62, 75)):
+    print((today - 6 + offset) * 86400 + 3600, pct)
+PY
+spark_got=$(NO_COLOR=1 LIMITLINE_SPARK=1 "$BIN" < "$FIX/full.json" | strip_ansi)
+spark_got=${spark_got%$'\n'}
+check "sparkline" "$spark_got" 'Opus 5.5 │ ctx ▓▓░░░ ·41% │ 5h ▓▓▓░░ +62% ↻1h42m │ 5h ▁▃▅▆▅ 62% │ 7d ▓▓░░░ ·38% ↻Thu 09:00 │ 7d ▁▃▃▅▅▇▄ 38% │ $1.25'
+rm -f "$XDG_CACHE_HOME/limitline/history-5h.tsv" "$XDG_CACHE_HOME/limitline/history-7d.tsv"
+
+# Reset wording, and a single sparkle on the first prompt after usage falls.
+fresh_got=$(NO_COLOR=1 LIMITLINE_FRESH=1 "$BIN" < "$FIX/full.json" | strip_ansi)
+fresh_got=${fresh_got%$'\n'}
+check "fresh-wording" "$fresh_got" 'Opus 5.5 │ ctx ▓▓░░░ ·41% │ 5h ▓▓▓░░ +62% fresh in 1h42m │ 7d ▓▓░░░ ·38% fresh Thu 09:00 │ $1.25'
+rm -f "$XDG_CACHE_HOME/limitline/fresh.state"
+high='{"model":{"display_name":"Opus"},"rate_limits":{"five_hour":{"used_percentage":90,"resets_at":1762062120}}}'
+low='{"model":{"display_name":"Opus"},"rate_limits":{"five_hour":{"used_percentage":8,"resets_at":1762080000}}}'
+first_fresh=$(printf '%s' "$high" | NO_COLOR=1 LIMITLINE_FRESH=1 "$BIN" | strip_ansi)
+second_fresh=$(printf '%s' "$low" | NO_COLOR=1 LIMITLINE_FRESH=1 "$BIN" | strip_ansi)
+printf '%s' "$first_fresh" | grep -q -F '✨' && check "fresh-not-yet" "no" "yes" || check "fresh-not-yet" "yes" "yes"
+printf '%s' "$second_fresh" | grep -q -F '✨ Opus' && check "fresh-sparkle" "yes" "yes" || check "fresh-sparkle" "$second_fresh" "sparkle"
+third_fresh=$(printf '%s' "$low" | NO_COLOR=1 LIMITLINE_FRESH=1 "$BIN" | strip_ansi)
+printf '%s' "$third_fresh" | grep -q -F '✨' && check "fresh-once" "no" "yes" || check "fresh-once" "yes" "yes"
+
+# Nudges are opt-in and stay short.
+nudge_ok=$(NO_COLOR=1 LIMITLINE_NUDGES=1 "$BIN" < "$FIX/over_80.json" | strip_ansi)
+printf '%s' "$nudge_ok" | grep -q -F '→ cursor ok' && check "nudge-cursor" "yes" "yes" || check "nudge-cursor" "$nudge_ok" "cursor ok"
+nudge_codex=$(NO_COLOR=1 LIMITLINE_NUDGES=1 LIMITLINE_CODEX_DIR="$fresh_dir" "$BIN" < "$FIX/over_80.json" | strip_ansi)
+printf '%s' "$nudge_codex" | grep -q -F '→ codex 12%' && check "nudge-codex" "yes" "yes" || check "nudge-codex" "$nudge_codex" "codex 12%"
+nudge_ctx=$(NO_COLOR=1 LIMITLINE_NUDGES=1 "$BIN" < "$FIX/near_compact.json" | strip_ansi)
+printf '%s' "$nudge_ctx" | grep -q -F '↯ compact soon: /compact' && check "nudge-compact" "yes" "yes" || check "nudge-compact" "$nudge_ctx" "compact"
+cold_nudge=$(NO_COLOR=1 LIMITLINE_NUDGES=1 "$BIN" < "$FIX/cold_cache.json" | strip_ansi)
+cold_nudge=${cold_nudge%$'\n'}
+cold_want=$(cat "$FIX/cold_cache.expected")
+cold_want=${cold_want%$'\n'}
+check "nudge-cache-reason" "$cold_nudge" "$cold_want"
+cache_off=$(printf '%s' '{"prompt_cache":{"warm":false,"last_miss_cause":{"causes":["tools"]}}}' | NO_COLOR=1 LIMITLINE_NUDGES=1 LIMITLINE_SEGMENTS=nudge "$BIN" | strip_ansi)
+printf '%s' "$cache_off" | grep -q -F 'cache cold: tools' && check "nudge-cache-segment-off" "yes" "yes" || check "nudge-cache-segment-off" "$cache_off" "reason"
+
+# Value is an estimate from a local cost file. Session text is not read.
+val_file="$TEST_HOME/week.json"
+printf '%s\n' '{"week_usd":412}' > "$val_file"
+val_got=$(printf '%s' '{"model":{"display_name":"Opus"}}' | NO_COLOR=1 LIMITLINE_VALUE=1 LIMITLINE_VALUE_FILE="$val_file" "$BIN" | strip_ansi)
+val_got=${val_got%$'\n'}
+check "value-week" "$val_got" 'Opus │ ≈ $412 of value this week'
+tok_file="$TEST_HOME/tokens.json"
+printf '%s\n' '{"model":"opus","input_tokens":2000000,"output_tokens":0}' > "$tok_file"
+tok_got=$(printf '%s' '{"model":{"display_name":"Opus"}}' | NO_COLOR=1 LIMITLINE_VALUE=1 LIMITLINE_VALUE_FILE="$tok_file" "$BIN" | strip_ansi)
+tok_got=${tok_got%$'\n'}
+check "value-tokens" "$tok_got" 'Opus │ ≈ $10 of value this week'
+
+# Session vitals replace the cost segment when the switch is on.
+rm -f "$XDG_CACHE_HOME/limitline/history-cost.tsv"
+mkdir -p "$XDG_CACHE_HOME/limitline"
+printf '%s\n' "1762050000 1.00" > "$XDG_CACHE_HOME/limitline/history-cost.tsv"
+vitals_payload='{"model":{"display_name":"Opus"},"cost":{"total_cost_usd":1.25,"total_duration_ms":180000,"total_lines_added":10,"total_lines_removed":2},"context_window":{"used_percentage":40,"auto_compact_count":2}}'
+vitals_got=$(printf '%s' "$vitals_payload" | NO_COLOR=1 LIMITLINE_VITALS=1 "$BIN" | strip_ansi)
+vitals_got=${vitals_got%$'\n'}
+check "vitals" "$vitals_got" 'Opus │ ctx ▓▓░░░ ·40% │ session 3m · compact ×2 · +10 -2 · $1.25↑'
+printf '%s\n' "1762050000 1.00" > "$XDG_CACHE_HOME/limitline/history-cost.tsv"
+vitals_py=$(printf '%s' "$vitals_payload" | PATH="$nojq" NO_COLOR=1 LIMITLINE_VITALS=1 "$BIN" | strip_ansi)
+vitals_py=${vitals_py%$'\n'}
+check "vitals-python" "$vitals_py" "$vitals_got"
+
+# Alerts fire once per window, skip quiet hours, and can ring without a notification.
+alert_log="$TEST_HOME/alerts.log"
+rm -f "$alert_log" "$XDG_CACHE_HOME/limitline/alerts.tsv"
+LIMITLINE_ALERTS=test LIMITLINE_ALERT_LOG="$alert_log" LIMITLINE_QUIET=9-17 "$BIN" < "$FIX/over_80.json" >/dev/null
+LIMITLINE_ALERTS=test LIMITLINE_ALERT_LOG="$alert_log" LIMITLINE_QUIET=9-17 "$BIN" < "$FIX/over_80.json" >/dev/null
+alert_lines=$(wc -l < "$alert_log" | tr -d ' ')
+check "alert-once" "$alert_lines" "1"
+check "alert-80" "$(cat "$alert_log")" "test 80 5h 91%"
+printf '%s' '{"rate_limits":{"five_hour":{"used_percentage":96,"resets_at":1762067700}}}' | LIMITLINE_ALERTS=test LIMITLINE_ALERT_LOG="$alert_log" LIMITLINE_QUIET=9-17 "$BIN" >/dev/null
+grep -q -F 'test 95 5h 96%' "$alert_log" && check "alert-95" "yes" "yes" || check "alert-95" "$(cat "$alert_log")" "95"
+rm -f "$alert_log" "$XDG_CACHE_HOME/limitline/alerts.tsv"
+LIMITLINE_ALERTS=test LIMITLINE_ALERT_LOG="$alert_log" LIMITLINE_QUIET=22-7 "$BIN" < "$FIX/over_80.json" >/dev/null
+if [[ -s "$alert_log" ]]; then
+  check "alert-quiet" "fired" "quiet"
+else
+  check "alert-quiet" "quiet" "quiet"
+fi
+rm -f "$alert_log" "$XDG_CACHE_HOME/limitline/alerts.tsv"
+LIMITLINE_ALERTS=bell LIMITLINE_ALERT_LOG="$alert_log" LIMITLINE_QUIET=9-17 "$BIN" < "$FIX/over_80.json" >/dev/null 2>"$TEST_HOME/bell.err"
+if [[ -s "$alert_log" ]] && grep -q -F $'\a' "$TEST_HOME/bell.err"; then
+  check "alert-bell" "yes" "yes"
+else
+  check "alert-bell" "no" "yes"
+fi
+
+# Themes.
+pill_got=$(NO_COLOR=1 LIMITLINE_THEME=pill "$BIN" < "$FIX/full.json" | strip_ansi)
+pill_got=${pill_got%$'\n'}
+check "theme-pill" "$pill_got" '⟨Opus 5.5⟩ ⟨ctx ▓▓░░░ ·41%⟩ ⟨5h ▓▓▓░░ +62% ↻1h42m⟩ ⟨7d ▓▓░░░ ·38% ↻Thu 09:00⟩ ⟨$1.25⟩'
+emoji_got=$(NO_COLOR=1 LIMITLINE_THEME=emoji "$BIN" < "$FIX/full.json" | strip_ansi)
+emoji_got=${emoji_got%$'\n'}
+check "theme-emoji" "$emoji_got" '🧠 Opus 5.5 │ 🪟 ctx ▓▓░░░ ·41% │ ⏱ 5h ▓▓▓░░ +62% ⏳1h42m │ 📅 7d ▓▓░░░ ·38% ⏳Thu 09:00 │ 💵 $1.25'
+mono_raw=$(LIMITLINE_THEME=mono "$BIN" < "$FIX/full.json")
+mono_got=$(printf '%s' "$mono_raw" | strip_ansi)
+mono_got=${mono_got%$'\n'}
+check "theme-mono" "$mono_got" 'Opus 5.5  ctx 41%  5h 62% in 1h42m  7d 38% in Thu 09:00  $1.25'
+if printf '%s' "$mono_raw" | grep -q -F $'\033'; then
+  check "theme-mono-plain" "ansi" "plain"
+else
+  check "theme-mono-plain" "plain" "plain"
+fi
+theme_got=$("$BIN" theme)
+printf '%s' "$theme_got" | grep -q -F '## pill' && printf '%s' "$theme_got" | grep -q -F '## emoji' \
+  && printf '%s' "$theme_got" | grep -q -F '## mono' && printf '%s' "$theme_got" | grep -q -F 'LIMITLINE_THEME=pill' \
+  && check "theme-picker" "yes" "yes" || check "theme-picker" "no" "yes"
+
+# Report, watch, and a synced folder. Project names are basenames only.
+printf '%s\n' "1761969600 40" "1762056000 62" > "$XDG_CACHE_HOME/limitline/history-5h.tsv"
+printf '%s\n' "1762056000 4 demo" "1762052400 3 demo" "1762048800 3 widget" "1762045200 2 /Users/someone/secret" > "$XDG_CACHE_HOME/limitline/activity.tsv"
+report_got=$(LIMITLINE_CLAUDE_SNAPSHOT="$TEST_HOME/claude-snapshot.json" LIMITLINE_CODEX_DIR="$codex_prov" LIMITLINE_GROK_DIR="$TEST_HOME/grok" LIMITLINE_GEMINI_LOG="$FIX/providers/gemini-cli.txt" "$BIN" report)
+printf '%s' "$report_got" | grep -q -F '62%' && printf '%s' "$report_got" | grep -q -F 'demo' \
+  && printf '%s' "$report_got" | grep -q -F 'widget' && printf '%s' "$report_got" | grep -q -F '1h42m' \
+  && ! printf '%s' "$report_got" | grep -q -F '/Users' && ! printf '%s' "$report_got" | grep -q -F 'secret' \
+  && check "report" "yes" "yes" || check "report" "$report_got" "dashboard"
+md_got=$(LIMITLINE_CLAUDE_SNAPSHOT="$TEST_HOME/claude-snapshot.json" LIMITLINE_CODEX_DIR="$codex_prov" "$BIN" report --md)
+printf '%s' "$md_got" | grep -q -F '# limitline report' && printf '%s' "$md_got" | grep -q -F 'demo' \
+  && ! printf '%s' "$md_got" | grep -q -F '/Users' && check "report-md" "yes" "yes" || check "report-md" "$md_got" "markdown"
+watch_got=$(LIMITLINE_WATCH_ONCE=1 LIMITLINE_CLAUDE_SNAPSHOT="$TEST_HOME/claude-snapshot.json" LIMITLINE_CODEX_DIR="$codex_prov" LIMITLINE_GROK_DIR="$TEST_HOME/grok" LIMITLINE_GEMINI_LOG="$FIX/providers/gemini-cli.txt" "$BIN" watch)
+printf '%s' "$watch_got" | grep -q -F 'claude' && printf '%s' "$watch_got" | grep -q -F 'codex' \
+  && printf '%s' "$watch_got" | grep -q -F '62%' && check "watch" "yes" "yes" || check "watch" "$watch_got" "side by side"
+
+sync_dir="$TEST_HOME/sync"
+mkdir -p "$sync_dir/macbook"
+printf '%s\n' '{"observed_at":1762055100,"provider":"claude","source":"statusline","stale":false,"windows":[{"name":"5h","used_pct":80,"resets_at":1762062120},{"name":"7d","used_pct":50,"resets_at":1762419600}]}' > "$sync_dir/macbook/claude.json"
+sync_got=$(LIMITLINE_HOST=mini LIMITLINE_SYNC_DIR="$sync_dir" LIMITLINE_CLAUDE_SNAPSHOT="$TEST_HOME/claude-snapshot.json" LIMITLINE_CODEX_DIR="$codex_prov" "$BIN" status)
+printf '%s' "$sync_got" | grep -q -F '5h 80% ×2' && printf '%s' "$sync_got" | grep -q -F '7d 50% ×2' \
+  && check "sync-merge" "yes" "yes" || check "sync-merge" "$sync_got" "merged"
+test -f "$sync_dir/mini/claude.json" && check "sync-publish" "yes" "yes" || check "sync-publish" "no" "yes"
 
 # Typical speed without the Codex scan: average of 8 runs after one warmup.
 "$BIN" < "$FIX/full.json" >/dev/null

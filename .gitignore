@@ -3,3 +3,5 @@
 .cache/
 stdin-debug.json
 *.bak
+__pycache__/
+*.pyc

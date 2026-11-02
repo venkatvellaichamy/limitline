@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # limitline — local usage-limit status line for Claude Code.
 # Reads one JSON object on stdin. No network. Always exits 0.
-# Version: 0.2.0
+# Version: 0.3.0
 
 _here=${0%/*}
 [[ "$_here" == "$0" ]] && _here="."
@@ -14,7 +14,7 @@ limitline — local usage limits for Claude Code and nearby CLIs
   bin/limitline < status.json
   bin/limitline status
   bin/limitline --host tmux|starship|prompt|json|swiftbar|cursor|codex
-  bin/limitline preview|doctor|config
+  bin/limitline preview|doctor|config|report|watch|theme
 
 Config: ~/.config/limitline/config or config.toml
 EOF
@@ -22,7 +22,7 @@ EOF
 fi
 
 case "${1:-}" in
-  status|preview|doctor|config|--host)
+  status|preview|doctor|config|report|watch|theme|--host)
     if command -v python3 >/dev/null 2>&1; then
       exec python3 "$LIMITLINE_ROOT/lib/cli.py" "$@"
     fi
@@ -70,6 +70,21 @@ BURN_MODE=on
 LINKS_MODE=off
 AUTO_AT=95
 AUTO_WARN=80
+PACE_MODE=""
+SPARK_MODE=""
+NUDGE_MODE=""
+FRESH_MODE=""
+VALUE_MODE=""
+VITALS_MODE=""
+ALERTS_MODE="off"
+QUIET=""
+SYNC_DIR=""
+PACE_SET=0
+SPARK_SET=0
+NUDGE_SET=0
+FRESH_SET=0
+VALUE_SET=0
+VITALS_SET=0
 
 trim() {
   local v="$1"
@@ -115,6 +130,15 @@ load_config() {
       links) LINKS_MODE="$val" ;;
       auto_compact) AUTO_AT="$val" ;;
       auto_compact_warn) AUTO_WARN="$val" ;;
+      pace) PACE_MODE="$val"; PACE_SET=1 ;;
+      spark|sparklines) SPARK_MODE="$val"; SPARK_SET=1 ;;
+      nudges|nudge) NUDGE_MODE="$val"; NUDGE_SET=1 ;;
+      fresh) FRESH_MODE="$val"; FRESH_SET=1 ;;
+      value) VALUE_MODE="$val"; VALUE_SET=1 ;;
+      vitals) VITALS_MODE="$val"; VITALS_SET=1 ;;
+      alerts) ALERTS_MODE="$val" ;;
+      quiet|quiet_hours) QUIET="$val" ;;
+      sync_dir) SYNC_DIR="$val" ;;
     esac
   done < "$cfg"
 }
@@ -157,6 +181,15 @@ if [[ -n "${LIMITLINE_BURN:-}" ]]; then BURN_MODE="$LIMITLINE_BURN"; fi
 if [[ -n "${LIMITLINE_LINKS:-}" ]]; then LINKS_MODE="$LIMITLINE_LINKS"; fi
 if [[ -n "${LIMITLINE_AUTO_COMPACT:-}" ]]; then AUTO_AT="$LIMITLINE_AUTO_COMPACT"; fi
 if [[ -n "${LIMITLINE_AUTO_COMPACT_WARN:-}" ]]; then AUTO_WARN="$LIMITLINE_AUTO_COMPACT_WARN"; fi
+if [[ -n "${LIMITLINE_PACE:-}" ]]; then PACE_MODE="$LIMITLINE_PACE"; PACE_SET=1; fi
+if [[ -n "${LIMITLINE_SPARK:-}" ]]; then SPARK_MODE="$LIMITLINE_SPARK"; SPARK_SET=1; fi
+if [[ -n "${LIMITLINE_NUDGES:-}" ]]; then NUDGE_MODE="$LIMITLINE_NUDGES"; NUDGE_SET=1; fi
+if [[ -n "${LIMITLINE_FRESH:-}" ]]; then FRESH_MODE="$LIMITLINE_FRESH"; FRESH_SET=1; fi
+if [[ -n "${LIMITLINE_VALUE:-}" ]]; then VALUE_MODE="$LIMITLINE_VALUE"; VALUE_SET=1; fi
+if [[ -n "${LIMITLINE_VITALS:-}" ]]; then VITALS_MODE="$LIMITLINE_VITALS"; VITALS_SET=1; fi
+if [[ -n "${LIMITLINE_ALERTS:-}" ]]; then ALERTS_MODE="$LIMITLINE_ALERTS"; fi
+if [[ -n "${LIMITLINE_QUIET:-}" ]]; then QUIET="$LIMITLINE_QUIET"; fi
+if [[ -n "${LIMITLINE_SYNC_DIR:-}" ]]; then SYNC_DIR="$LIMITLINE_SYNC_DIR"; fi
 case "$LINES" in ''|*[!0-9]*) LINES=1 ;; esac
 if [[ "$LINES" -lt 1 ]]; then LINES=1; fi
 if [[ "$LINES" -gt 2 ]]; then LINES=2; fi
@@ -173,10 +206,12 @@ flag_on() {
 ON_MODEL=1; ON_STYLE=1; ON_CTX=1; ON_FIVE=1; ON_SEVEN=1; ON_SPEND=1
 ON_BURN=1; ON_COST=1; ON_GIT=1; ON_PR=1; ON_CACHE=1; ON_VIM=1
 ON_SESSION=0; ON_CODEX=1
+ON_PACE=0; ON_SPARK=0; ON_NUDGE=0; ON_FRESH=0; ON_VALUE=0; ON_VITALS=0
 if [[ -n "$SEGMENTS" ]]; then
   ON_MODEL=0; ON_STYLE=0; ON_CTX=0; ON_FIVE=0; ON_SEVEN=0; ON_SPEND=0
   ON_BURN=0; ON_COST=0; ON_GIT=0; ON_PR=0; ON_CACHE=0; ON_VIM=0
   ON_SESSION=0; ON_CODEX=0
+  ON_PACE=0; ON_SPARK=0; ON_NUDGE=0; ON_FRESH=0; ON_VALUE=0; ON_VITALS=0
   old_ifs=$IFS
   IFS=','
   for raw in $SEGMENTS; do
@@ -198,6 +233,12 @@ if [[ -n "$SEGMENTS" ]]; then
       vim) ON_VIM=1 ;;
       session) ON_SESSION=1 ;;
       codex|others) ON_CODEX=1 ;;
+      pace) ON_PACE=1 ;;
+      spark|sparklines) ON_SPARK=1 ;;
+      nudge|nudges) ON_NUDGE=1 ;;
+      fresh) ON_FRESH=1 ;;
+      value) ON_VALUE=1 ;;
+      vitals) ON_VITALS=1 ;;
     esac
   done
   IFS=$old_ifs
@@ -206,6 +247,16 @@ flag_on "$GIT_MODE" || ON_GIT=0
 flag_on "$SESSION_MODE" && ON_SESSION=1
 flag_on "$BURN_MODE" || ON_BURN=0
 flag_on "$LINKS_MODE" && LINKS=1 || LINKS=0
+if [[ "$PACE_SET" == "1" ]]; then flag_on "$PACE_MODE" && ON_PACE=1 || ON_PACE=0; fi
+if [[ "$SPARK_SET" == "1" ]]; then flag_on "$SPARK_MODE" && ON_SPARK=1 || ON_SPARK=0; fi
+if [[ "$NUDGE_SET" == "1" ]]; then flag_on "$NUDGE_MODE" && ON_NUDGE=1 || ON_NUDGE=0; fi
+if [[ "$FRESH_SET" == "1" ]]; then flag_on "$FRESH_MODE" && ON_FRESH=1 || ON_FRESH=0; fi
+if [[ "$VALUE_SET" == "1" ]]; then flag_on "$VALUE_MODE" && ON_VALUE=1 || ON_VALUE=0; fi
+if [[ "$VITALS_SET" == "1" ]]; then flag_on "$VITALS_MODE" && ON_VITALS=1 || ON_VITALS=0; fi
+case "$ALERTS_MODE" in
+  bell|notify|test|osascript) ;;
+  *) ALERTS_MODE=off ;;
+esac
 flag_on "$SESSION_MODE" || true
 
 NOW="${LIMITLINE_NOW:-$(date +%s)}"
@@ -238,6 +289,7 @@ repo=""
 cwd=""
 cache_warm=""
 cache_cause=""
+compactions=""
 render_cols=""
 codex5=""
 codex5_raw=""
@@ -362,6 +414,7 @@ emit("model"; .model.display_name)
 , emit("cost_ms"; .cost.total_duration_ms)
 , emit("lines_added"; .cost.total_lines_added)
 , emit("lines_removed"; .cost.total_lines_removed)
+, emit("compactions"; .context_window.auto_compact_count // .cost.auto_compactions)
 , emit("vim"; .vim.mode)
 , emit("session"; .session_id)
 , emit("pr_number"; .pr.number)
@@ -407,6 +460,7 @@ assign_field() {
     cost_ms) cost_ms=$val ;;
     lines_added) lines_added=$val ;;
     lines_removed) lines_removed=$val ;;
+    compactions) compactions=$val ;;
     vim) vim_mode=$val ;;
     session) session_id=$val ;;
     pr_number) pr_number=$val ;;
@@ -673,6 +727,9 @@ if not isinstance(ctx_tokens, (int, float)):
     ctx_tokens = dig(data, "context_window", "total_input_tokens")
 compact_at = dig(data, "context_window", "auto_compact_threshold_percent")
 cost = dig(data, "cost") if isinstance(dig(data, "cost"), dict) else {}
+compactions = dig(data, "context_window", "auto_compact_count")
+if not isinstance(compactions, (int, float)) or isinstance(compactions, bool):
+    compactions = cost.get("auto_compactions")
 vim_mode = dig(data, "vim", "mode")
 session_id = dig(data, "session_id")
 pr = dig(data, "pr") if isinstance(dig(data, "pr"), dict) else {}
@@ -715,6 +772,7 @@ lines = [
     emit("cost_ms", cost.get("total_duration_ms")),
     emit("lines_added", cost.get("total_lines_added")),
     emit("lines_removed", cost.get("total_lines_removed")),
+    emit("compactions", compactions),
     emit("vim", vim_mode),
     emit("session", session_id),
     emit("pr_number", pr.get("number")),
@@ -786,12 +844,221 @@ write_snapshot() {
 }
 write_snapshot
 
+append_sample() {
+  local file="$1" ts="$2" pct="$3" dir tmp
+  [[ -n "$pct" ]] || return 0
+  dir=${file%/*}
+  mkdir -p "$dir" 2>/dev/null || return 0
+  tmp="${file}.$$"
+  if [[ -f "$file" ]]; then
+    awk -v ts="$ts" '$1 != ts { print }' "$file" 2>/dev/null | tail -n 399 > "$tmp" || true
+  else
+    : > "$tmp"
+  fi
+  printf '%s %s\n' "$ts" "$pct" >> "$tmp" 2>/dev/null || true
+  mv "$tmp" "$file" 2>/dev/null || true
+}
+
+series_last() {
+  local file="$1" count="$2"
+  [[ -f "$file" ]] || return 0
+  tail -n "$count" "$file" | awk 'NF >= 2 { p[++i] = $2 } END { for (j = 1; j <= i; j++) printf "%s%s", (j > 1 ? "," : ""), p[j] }'
+}
+
+series_days() {
+  local file="$1" now="$2"
+  [[ -f "$file" ]] || return 0
+  awk -v now="$now" 'NF >= 2 { d = int($1 / 86400); last[d] = $2; seen[d] = 1 }
+    END {
+      today = int(now / 86400)
+      out = ""
+      for (d = today - 6; d <= today; d++) if (seen[d]) out = out (out == "" ? "" : ",") last[d]
+      print out
+    }' "$file"
+}
+
+quiet_now() {
+  local hour="$1" start end
+  [[ -z "$QUIET" || "$QUIET" != *-* ]] && return 1
+  start=${QUIET%%-*}
+  end=${QUIET#*-}
+  case "$start" in ''|*[!0-9]*) return 1 ;; esac
+  case "$end" in ''|*[!0-9]*) return 1 ;; esac
+  start=$((10#$start))
+  end=$((10#$end))
+  if [[ "$start" -eq "$end" ]]; then
+    return 1
+  fi
+  if [[ "$start" -lt "$end" ]]; then
+    [[ "$hour" -ge "$start" && "$hour" -lt "$end" ]]
+    return
+  fi
+  [[ "$hour" -ge "$start" || "$hour" -lt "$end" ]]
+}
+
+fire_alert() {
+  local level="$1" pct="$2" msg log
+  msg="5h ${pct}%"
+  log="${LIMITLINE_ALERT_LOG:-}"
+  if [[ -n "$log" ]]; then
+    printf '%s %s %s\n' "$ALERTS_MODE" "$level" "$msg" >> "$log" 2>/dev/null || true
+  fi
+  case "$ALERTS_MODE" in
+    bell) printf '\a' >&2 || true ;;
+    notify)
+      if command -v osascript >/dev/null 2>&1; then
+        osascript -e "display notification \"$msg\" with title \"limitline\"" >/dev/null 2>&1 || true
+      fi
+      ;;
+  esac
+}
+
+maybe_alert() {
+  local pct hour dir state token level
+  [[ "$ALERTS_MODE" == "off" ]] && return 0
+  pct="${five_pct%%.*}"
+  case "$pct" in ''|*[!0-9]*) return 0 ;; esac
+  hour=$(date -r "$NOW" "+%H" 2>/dev/null || date -d "@$NOW" "+%H" 2>/dev/null || echo "")
+  case "$hour" in ''|*[!0-9]*) hour=0 ;; esac
+  hour=$((10#$hour))
+  if quiet_now "$hour"; then
+    return 0
+  fi
+  if [[ "$pct" -ge 95 ]]; then
+    level=95
+  elif [[ "$pct" -ge 80 ]]; then
+    level=80
+  else
+    return 0
+  fi
+  dir="${XDG_CACHE_HOME:-$HOME/.cache}/limitline"
+  mkdir -p "$dir" 2>/dev/null || return 0
+  state="$dir/alerts.tsv"
+  token="${five_epoch:-0}"
+  if [[ -f "$state" ]] && grep -q -x -F "$level $token" "$state"; then
+    return 0
+  fi
+  if [[ "$level" == "95" ]]; then
+    if [[ ! -f "$state" ]] || ! grep -q -x -F "80 $token" "$state"; then
+      printf '80 %s\n' "$token" >> "$state" 2>/dev/null || true
+    fi
+  fi
+  printf '%s %s\n' "$level" "$token" >> "$state" 2>/dev/null || true
+  fire_alert "$level" "$pct"
+}
+
+cache_dir="${XDG_CACHE_HOME:-$HOME/.cache}/limitline"
 hist_path=""
+spark5=""
+spark7=""
+sparkle=0
+nudge_text=""
+value_text=""
+cost_trend=""
+
 if [[ "$ON_BURN" == "1" && -n "$five_pct" ]]; then
-  hist_dir="${XDG_CACHE_HOME:-$HOME/.cache}/limitline"
-  [[ -d "$hist_dir" ]] || mkdir -p "$hist_dir" 2>/dev/null || true
-  hist_path="$hist_dir/history-5h.tsv"
+  mkdir -p "$cache_dir" 2>/dev/null || true
+  hist_path="$cache_dir/history-5h.tsv"
   printf '%s %s\n' "$NOW" "$five_pct" >> "$hist_path" 2>/dev/null || true
+fi
+if [[ "$ON_SPARK" == "1" ]]; then
+  if [[ -n "$five_pct" ]]; then
+    append_sample "$cache_dir/history-5h.tsv" "$NOW" "$five_pct"
+    spark5=$(series_last "$cache_dir/history-5h.tsv" 5)
+  fi
+  if [[ -n "$seven_pct" ]]; then
+    append_sample "$cache_dir/history-7d.tsv" "$NOW" "$seven_pct"
+    spark7=$(series_days "$cache_dir/history-7d.tsv" "$NOW")
+  fi
+fi
+
+if [[ "$ON_FRESH" == "1" && -n "$five_epoch" && -n "$five_pct" ]]; then
+  fresh_state="$cache_dir/fresh.state"
+  prev_reset=""
+  prev_pct=""
+  shown=""
+  mkdir -p "$cache_dir" 2>/dev/null || true
+  if [[ -f "$fresh_state" ]]; then
+    read -r prev_reset prev_pct shown < "$fresh_state" || true
+  fi
+  cur_i=${five_pct%%.*}
+  prev_i=${prev_pct%%.*}
+  case "$cur_i" in ''|*[!0-9]*) cur_i=0 ;; esac
+  case "$prev_i" in ''|*[!0-9]*) prev_i=-1 ;; esac
+  fell=0
+  if [[ "$prev_i" -ge 40 && "$cur_i" -le 20 ]]; then
+    fell=1
+  fi
+  if [[ "$fell" == "1" && "$shown" != "$five_epoch" ]]; then
+    sparkle=1
+    shown="$five_epoch"
+  fi
+  printf '%s %s %s\n' "$five_epoch" "$five_pct" "$shown" > "$fresh_state" 2>/dev/null || true
+fi
+
+maybe_alert
+
+if [[ "$ON_NUDGE" == "1" ]]; then
+  five_i=${five_pct%%.*}
+  ctx_i=${ctx%%.*}
+  warn_i=${AUTO_WARN%%.*}
+  case "$five_i" in ''|*[!0-9]*) five_i=0 ;; esac
+  case "$ctx_i" in ''|*[!0-9]*) ctx_i=0 ;; esac
+  case "$warn_i" in ''|*[!0-9]*) warn_i=80 ;; esac
+  if [[ "$five_i" -gt 80 ]]; then
+    hint=$(python3 "$LIMITLINE_ROOT/lib/nudge.py" 2>/dev/null || true)
+    hint=${hint//$'\n'/}
+    [[ -n "$hint" ]] && nudge_text="→ $hint"
+  fi
+  if [[ "$ctx_i" -ge "$warn_i" ]]; then
+    bit="↯ compact soon: /compact"
+    if [[ -n "$nudge_text" ]]; then nudge_text="$nudge_text · $bit"; else nudge_text="$bit"; fi
+  fi
+  if [[ "$cache_warm" == "false" && "$ON_CACHE" != "1" ]]; then
+    cause="${cache_cause:-miss}"
+    bit="cache cold: $cause"
+    if [[ -n "$nudge_text" ]]; then nudge_text="$nudge_text · $bit"; else nudge_text="$bit"; fi
+  fi
+fi
+
+if [[ "$ON_VALUE" == "1" ]]; then
+  value_text=$(python3 "$LIMITLINE_ROOT/lib/value.py" 2>/dev/null || true)
+  value_text=${value_text//$'\n'/}
+fi
+
+if [[ "$ON_VITALS" == "1" && -n "$cost_usd" ]]; then
+  cost_file="$cache_dir/history-cost.tsv"
+  prev_line=""
+  [[ -f "$cost_file" ]] && prev_line=$(tail -n 1 "$cost_file" 2>/dev/null || true)
+  prev_cost=${prev_line#* }
+  if [[ -n "$prev_line" && "$prev_cost" != "$prev_line" ]]; then
+    cost_trend=$(awk -v c="$cost_usd" -v p="$prev_cost" 'BEGIN {
+      if (c+0 > p+0 + 0.005) print "↑"
+      else if (c+0 < p+0 - 0.005) print "↓"
+      else print "·"
+    }')
+  fi
+  append_sample "$cost_file" "$NOW" "$cost_usd"
+fi
+
+if [[ -n "$SYNC_DIR" ]]; then
+  snap="${LIMITLINE_CLAUDE_SNAPSHOT:-$cache_dir/claude.json}"
+  if [[ -f "$snap" ]]; then
+    LIMITLINE_SYNC_DIR="$SYNC_DIR" python3 "$LIMITLINE_ROOT/lib/sync.py" publish claude < "$snap" 2>/dev/null || true
+  fi
+fi
+
+if [[ -n "$cwd" && "$cwd" != "$HOME" ]]; then
+  project=${cwd##*/}
+  case "$project" in
+    ""|.|..|*@*|*/*) ;;
+    *)
+      hour=$(date -r "$NOW" "+%H" 2>/dev/null || date -d "@$NOW" "+%H" 2>/dev/null || echo "0")
+      case "$hour" in ''|*[!0-9]*) hour=0 ;; esac
+      mkdir -p "$cache_dir" 2>/dev/null || true
+      printf '%s %s %s\n' "$NOW" "$((10#$hour))" "$project" >> "$cache_dir/activity.tsv" 2>/dev/null || true
+      ;;
+  esac
 fi
 
 git_text=""
@@ -852,8 +1119,6 @@ fi
 [[ "$ON_MODEL" == "1" ]] || model=""
 [[ "$ON_STYLE" == "1" ]] || style=""
 [[ "$ON_CTX" == "1" ]] || ctx=""
-[[ "$ON_FIVE" == "1" ]] || five_pct=""
-[[ "$ON_SEVEN" == "1" ]] || seven_pct=""
 [[ "$ON_SPEND" == "1" ]] || { spend_pct=""; spend_used=""; spend_limit=""; }
 [[ "$ON_COST" == "1" ]] || { cost_usd=""; cost_ms=""; lines_added=""; lines_removed=""; }
 [[ "$ON_CODEX" == "1" ]] || { codex5=""; codex7=""; }
@@ -902,6 +1167,19 @@ emit_kv() {
   emit_kv codex5 "$codex5"
   emit_kv codex7 "$codex7"
   emit_kv hist "$hist_path"
+  emit_kv show_five "$ON_FIVE"
+  emit_kv show_seven "$ON_SEVEN"
+  emit_kv pace "$ON_PACE"
+  emit_kv spark "$ON_SPARK"
+  emit_kv fresh "$ON_FRESH"
+  emit_kv vitals "$ON_VITALS"
+  emit_kv spark5 "$spark5"
+  emit_kv spark7 "$spark7"
+  emit_kv nudge "$nudge_text"
+  emit_kv value "$value_text"
+  emit_kv sparkle "$sparkle"
+  emit_kv compactions "$compactions"
+  emit_kv cost_trend "$cost_trend"
 } | awk '
 function val(k) { return (k in v) ? v[k] : "" }
 function pct(p) {
@@ -915,7 +1193,7 @@ function color_of(p) {
   return "32"
 }
 function paint(code, text) {
-  if (val("use_color") != "1") return text
+  if (val("use_color") != "1" || val("theme") == "mono") return text
   return sprintf("%c[%sm%s%c[0m", 27, code, text, 27)
 }
 function mark_of(p) {
@@ -951,7 +1229,15 @@ function reset_bit(epoch, abs,    now, d, glyph) {
   if (epoch == "") return ""
   now = val("now") + 0
   d = (epoch + 0) - now
-  if (val("theme") == "ascii") glyph = " in "
+  if (val("fresh") == "1") {
+    if (d >= 86400) {
+      if (abs != "") return " fresh " abs
+      return ""
+    }
+    return " fresh in " rel(epoch + 0, now)
+  }
+  if (val("theme") == "ascii" || val("theme") == "mono") glyph = " in "
+  else if (val("theme") == "emoji") glyph = " ⏳"
   else glyph = " ↻"
   if (d >= 86400) {
     if (abs != "") return glyph abs
@@ -960,6 +1246,7 @@ function reset_bit(epoch, abs,    now, d, glyph) {
   return glyph rel(epoch + 0, now)
 }
 function meter(p) {
+  if (val("theme") == "mono") return pct(p) "%"
   return paint(color_of(p + 0), bar(p + 0) " " mark_of(p + 0) pct(p + 0) "%")
 }
 function money(n,    x, nearest, diff) {
@@ -1053,6 +1340,125 @@ function ctx_seg(p, extra,    body) {
   if (extra != "") body = body " " extra
   return body
 }
+function sep_of(    theme) {
+  theme = val("theme")
+  if (theme == "powerline" || theme == "mono") return "  "
+  if (theme == "pill") return " "
+  if (theme == "ascii") return " | "
+  if (val("use_color") == "1") return sprintf(" %c[2m│%c[0m ", 27, 27)
+  return " │ "
+}
+function themed(kind, text,    prefix) {
+  if (text == "") return ""
+  prefix = ""
+  if (val("theme") == "emoji") {
+    if (kind == "model") prefix = "🧠 "
+    else if (kind == "style") prefix = "🎨 "
+    else if (kind == "ctx") prefix = "🪟 "
+    else if (kind == "5h") prefix = "⏱ "
+    else if (kind == "7d") prefix = "📅 "
+    else if (kind == "spend") prefix = "💳 "
+    else if (kind == "cost") prefix = "💵 "
+    else if (kind == "git") prefix = "🌿 "
+    else if (kind == "pr") prefix = "🔀 "
+    else if (kind == "cache") prefix = "❄ "
+    else if (kind == "vim") prefix = "✏ "
+    else if (kind == "codex") prefix = "⌘ "
+    else if (kind == "session" || kind == "vitals") prefix = "♥ "
+    else if (kind == "spark") prefix = "📈 "
+    else if (kind == "pace") prefix = "🏃 "
+    else if (kind == "nudge") prefix = "💡 "
+    else if (kind == "value") prefix = "💰 "
+  }
+  text = prefix text
+  if (val("theme") == "pill") return "⟨" text "⟩"
+  return text
+}
+function spark_block(p,    idx) {
+  if (p < 0) p = 0
+  if (p > 100) p = 100
+  idx = int(p * 8 / 100)
+  if (idx > 7) idx = 7
+  if (idx < 0) idx = 0
+  if (idx == 0) return "▁"
+  if (idx == 1) return "▂"
+  if (idx == 2) return "▃"
+  if (idx == 3) return "▄"
+  if (idx == 4) return "▅"
+  if (idx == 5) return "▆"
+  if (idx == 6) return "▇"
+  return "█"
+}
+function spark_seg(label, series, current,    n, i, blocks, parts) {
+  if (val("spark") != "1" || series == "" || current == "") return ""
+  n = split(series, parts, ",")
+  if (n < 2) return ""
+  blocks = ""
+  for (i = 1; i <= n; i++) blocks = blocks spark_block(parts[i] + 0)
+  return label " " blocks " " pct(current) "%"
+}
+function dot_join(a, b) {
+  if (a == "") return b
+  if (b == "") return a
+  return a " · " b
+}
+function pace_one(label, used, reset, window,    now, left, elapsed, gap, phrase, days, per, extra) {
+  if (val("pace") != "1" || used == "" || reset == "") return ""
+  now = val("now") + 0
+  left = (reset + 0) - now
+  if (left < 0) left = 0
+  if (left > window) left = window
+  elapsed = (window - left) / window * 100
+  gap = (used + 0) - elapsed
+  phrase = ""
+  if (gap >= 8) phrase = "▲ " label " ahead of pace"
+  else if (gap <= -8) phrase = "▼ " label " under pace"
+  if (phrase != "") {
+    if (gap >= 8) phrase = paint(color_of(used + 0), phrase)
+    else phrase = paint("32", phrase)
+  }
+  extra = ""
+  if (label == "7d" && left >= 86400) {
+    days = int(left / 86400)
+    if (days < 1) days = 1
+    per = (100 - (used + 0)) / (left / 86400)
+    if (per < 0) per = 0
+    per = int(per + 0.5)
+    extra = sprintf("~%d%%/day left for %dd", per, days)
+  }
+  if (phrase != "" && extra != "") return phrase " · " extra
+  if (phrase != "") return phrase
+  return extra
+}
+function pace_seg() {
+  if (val("pace") != "1") return ""
+  return dot_join(pace_one("5h", val("five_pct"), val("five_reset"), 18000), pace_one("7d", val("seven_pct"), val("seven_reset"), 604800))
+}
+function vitals_seg(ms, added, removed, usd, comps, trend,    parts, text) {
+  if (val("vitals") != "1") return ""
+  parts = ""
+  text = dur(ms)
+  if (text != "" && text != "0s") parts = text
+  if (comps ~ /^[0-9.]+$/ && (comps + 0) > 0) {
+    text = sprintf("compact ×%d", int(comps + 0))
+    parts = (parts == "" ? text : parts " · " text)
+  }
+  if (added != "" || removed != "") {
+    if (added == "") added = "0"
+    if (removed == "") removed = "0"
+    text = "+" int(added + 0) " -" int(removed + 0)
+    parts = (parts == "" ? text : parts " · " text)
+  }
+  if (usd != "") {
+    text = "$" money(usd)
+    if (text != "$0") {
+      text = text trend
+      parts = (parts == "" ? text : parts " · " text)
+    }
+  }
+  if (parts == "") return ""
+  return "session " parts
+}
 function burn_pace(path, now, pct,    line, n, a, i, start, base_t, base_p, dt, dp, remain, eta, mins) {
   if (path == "" || pct == "") return ""
   n = 0
@@ -1098,12 +1504,7 @@ function push(pri, text,    i) {
 function join_range(lo, hi,    i, out, count, sep) {
   out = ""
   count = 0
-  sep = " | "
-  if (val("theme") == "powerline") sep = "  "
-  else if (val("theme") != "ascii") {
-    if (val("use_color") == "1") sep = sprintf(" %c[2m│%c[0m ", 27, 27)
-    else sep = " │ "
-  }
+  sep = sep_of()
   for (i = lo; i <= hi; i++) {
     if (drop[i]) continue
     if (count == 0) out = seg[i]
@@ -1136,20 +1537,35 @@ function fit(maxc,    total, i, best, best_i, guard) {
 }
 END {
   nseg = 0
-  push(100, val("model"))
-  push(25, val("style"))
-  push(70, ctx_seg(val("ctx"), ctx_note(val("ctx"), val("ctx_size"), val("ctx_tokens"), val("compact_at"), val("auto_warn"))))
-  push(90, window_seg("5h", val("five_pct"), val("five_reset"), val("five_abs")))
-  push(80, window_seg("7d", val("seven_pct"), val("seven_reset"), val("seven_abs")))
-  push(60, spend_seg(val("spend_pct"), val("spend_used"), val("spend_limit")))
+  model_text = val("model")
+  if (val("sparkle") == "1") {
+    if (model_text != "") model_text = "✨ " model_text
+    else model_text = "✨"
+  }
+  push(100, themed("model", model_text))
+  push(25, themed("style", val("style")))
+  push(70, themed("ctx", ctx_seg(val("ctx"), ctx_note(val("ctx"), val("ctx_size"), val("ctx_tokens"), val("compact_at"), val("auto_warn")))))
+  if (val("show_five") == "1")
+    push(90, themed("5h", window_seg("5h", val("five_pct"), val("five_reset"), val("five_abs"))))
+  push(88, themed("spark", spark_seg("5h", val("spark5"), val("five_pct"))))
+  if (val("show_seven") == "1")
+    push(80, themed("7d", window_seg("7d", val("seven_pct"), val("seven_reset"), val("seven_abs"))))
+  push(78, themed("spark", spark_seg("7d", val("spark7"), val("seven_pct"))))
+  push(72, themed("pace", pace_seg()))
+  push(60, themed("spend", spend_seg(val("spend_pct"), val("spend_used"), val("spend_limit"))))
   push(30, burn_pace(val("hist"), val("now") + 0, val("five_pct")))
-  push(50, cost_seg(val("cost_usd"), val("cost_ms"), val("lines_added"), val("lines_removed")))
-  push(40, val("git"))
-  push(20, val("pr"))
-  push(15, val("cache"))
-  push(10, val("vim"))
-  push(5, codex_seg(val("codex5"), val("codex7")))
-  push(1, val("session"))
+  if (val("vitals") == "1")
+    push(50, themed("vitals", vitals_seg(val("cost_ms"), val("lines_added"), val("lines_removed"), val("cost_usd"), val("compactions"), val("cost_trend"))))
+  else
+    push(50, themed("cost", cost_seg(val("cost_usd"), val("cost_ms"), val("lines_added"), val("lines_removed"))))
+  push(40, themed("git", val("git")))
+  push(20, themed("pr", val("pr")))
+  push(15, themed("cache", val("cache")))
+  push(10, themed("vim", val("vim")))
+  push(45, themed("nudge", val("nudge")))
+  push(48, themed("value", val("value")))
+  push(5, themed("codex", codex_seg(val("codex5"), val("codex7"))))
+  push(1, themed("session", val("session")))
   fit(val("max_cols") + 0)
   if (val("lines") + 0 >= 2) {
     line1 = ""
@@ -1161,12 +1577,7 @@ END {
       if (pri_of[i] >= 70) { n1++; a1[n1] = seg[i] }
       else { n2++; a2[n2] = seg[i] }
     }
-    sep = " | "
-    if (val("theme") == "powerline") sep = "  "
-    else if (val("theme") != "ascii") {
-      if (val("use_color") == "1") sep = sprintf(" %c[2m│%c[0m ", 27, 27)
-      else sep = " │ "
-    }
+    sep = sep_of()
     for (i = 1; i <= n1; i++) line1 = (line1 == "" ? a1[i] : line1 sep a1[i])
     for (i = 1; i <= n2; i++) line2 = (line2 == "" ? a2[i] : line2 sep a2[i])
     if (line1 != "") print line1

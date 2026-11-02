@@ -28,7 +28,32 @@ def window_text(window):
     text = name
     if isinstance(used, (int, float)) and not isinstance(used, bool):
         text += " %d%%" % int(used + 0.5)
+    machines = window.get("machines")
+    if isinstance(machines, int) and machines > 1:
+        text += " ×%d" % machines
     return text
+
+
+def load_lib(name):
+    import importlib.util
+    path = os.path.join(ROOT, "lib", name + ".py")
+    spec = importlib.util.spec_from_file_location("limitline_" + name, path)
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
+def prepare(rows):
+    sync_dir = os.environ.get("LIMITLINE_SYNC_DIR")
+    if not sync_dir:
+        return rows
+    try:
+        sync = load_lib("sync")
+        for row in rows:
+            sync.publish(sync_dir, row.get("provider") or "tool", row)
+        return sync.merge_rows(rows, sync_dir)
+    except Exception:
+        return rows
 
 
 def provider_brief(data):
@@ -51,14 +76,14 @@ def load_all():
 
 
 def cmd_status():
-    rows = load_all()
+    rows = prepare(load_all())
     print("%-8s %s" % ("tool", "limits"))
     for row in rows:
         print("%-8s %s" % (row.get("provider"), provider_brief(row)))
 
 
 def cmd_host(kind):
-    rows = load_all()
+    rows = prepare(load_all())
     if kind == "json":
         json.dump(rows, sys.stdout, sort_keys=True)
         sys.stdout.write("\n")
@@ -90,7 +115,7 @@ def cmd_preview():
         '"context_window":{"used_percentage":41}}'
     )
     binary = os.path.join(ROOT, "bin", "limitline")
-    for theme in ("minimal", "ascii", "powerline"):
+    for theme in ("minimal", "ascii", "powerline", "pill", "emoji", "mono"):
         env = os.environ.copy()
         env.update({
             "LIMITLINE_THEME": theme,
@@ -98,9 +123,17 @@ def cmd_preview():
             "LIMITLINE_CONFIG": "/dev/null",
             "LIMITLINE_CODEX": "0",
             "LIMITLINE_GIT": "0",
+            "LIMITLINE_PACE": "0",
+            "LIMITLINE_SPARK": "0",
+            "LIMITLINE_NUDGES": "0",
+            "LIMITLINE_FRESH": "0",
+            "LIMITLINE_VALUE": "0",
+            "LIMITLINE_VITALS": "0",
+            "LIMITLINE_ALERTS": "off",
             "NO_COLOR": "1",
             "TZ": "UTC",
         })
+        env.pop("LIMITLINE_SYNC_DIR", None)
         proc = subprocess.run([binary], input=sample.encode(), capture_output=True, env=env)
         print("## %s" % theme)
         sys.stdout.write(proc.stdout.decode())
@@ -158,12 +191,58 @@ def cmd_config():
     print("auto_compact_warn = 80")
     print('segments = ["model", "style", "context", "limits", "burn", "cost", "git", "pr", "cache", "vim"]')
     print("# session and other-tool segments stay off on the Claude Code line")
+    print("# pace, spark, nudges, fresh, value, and vitals are off until set")
+    print('# pace = "on"')
+    print('# spark = "on"')
+    print('# nudges = "on"')
+    print('# fresh = "on"')
+    print('# value = "on"')
+    print('# vitals = "on"')
+    print('# alerts = "off"')
+    print('# quiet = "22-7"')
+    print('# sync_dir = ""')
+    print("# themes: minimal, powerline, ascii, pill, emoji, mono")
     print("# LIMITLINE_ASCII=1 forces the ascii theme. NO_COLOR disables ANSI.")
+
+
+def cmd_report(markdown):
+    try:
+        rows = prepare(load_all())
+        sys.stdout.write(load_lib("report").render(rows, markdown=markdown))
+    except Exception:
+        sys.stdout.write("limitline report\n\nusage\n  no local windows yet\n")
+
+
+def cmd_watch():
+    import time
+    once = os.environ.get("LIMITLINE_WATCH_ONCE") == "1" or not sys.stdout.isatty()
+    try:
+        watch = load_lib("watch")
+    except Exception:
+        return
+    while True:
+        try:
+            rows = prepare(load_all())
+            text = watch.frame(rows)
+        except Exception:
+            text = "limitline watch\n"
+        if sys.stdout.isatty() and not once:
+            sys.stdout.write("\033[H\033[2J")
+        sys.stdout.write(text)
+        sys.stdout.flush()
+        if once:
+            return
+        time.sleep(5)
+
+
+def cmd_theme():
+    cmd_preview()
+    print('Set one with theme = "pill" or LIMITLINE_THEME=pill')
 
 
 def main(argv):
     if not argv or argv[0] in ("-h", "--help"):
-        print("usage: limitline status | --host NAME | preview | doctor | config")
+        print("usage: limitline status | --host NAME | preview | doctor | config | report | watch | theme")
         return
     cmd = argv[0]
     if cmd == "status":
@@ -177,8 +256,14 @@ def main(argv):
         cmd_doctor()
     elif cmd == "config":
         cmd_config()
+    elif cmd == "report":
+        cmd_report("--md" in argv[1:])
+    elif cmd == "watch":
+        cmd_watch()
+    elif cmd == "theme":
+        cmd_theme()
     else:
-        print("usage: limitline status | --host NAME | preview | doctor | config")
+        print("usage: limitline status | --host NAME | preview | doctor | config | report | watch | theme")
 
 
 if __name__ == "__main__":
