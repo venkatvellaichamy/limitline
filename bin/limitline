@@ -1,0 +1,654 @@
+#!/usr/bin/env bash
+# limitline — local usage-limit status line for Claude Code.
+# Reads one JSON object on stdin. No network. Always exits 0.
+# Version: 0.1.0
+
+if [[ "${1:-}" == "--help" || "${1:-}" == "-h" ]]; then
+  cat << 'EOF'
+limitline — colour-coded Claude Code usage limits
+
+  bin/limitline < status.json
+
+Config: ~/.config/limitline/config
+  bar_width=5
+  codex=auto
+  color=on
+
+Environment: LIMITLINE_BAR_WIDTH, LIMITLINE_CODEX, LIMITLINE_CONFIG,
+NO_COLOR, LIMITLINE_DEBUG, LIMITLINE_NOW
+EOF
+  exit 0
+fi
+
+if [[ -t 0 ]]; then
+  printf '%s\n' 'limitline reads a Claude Code status JSON object on stdin.' >&2
+  exit 0
+fi
+
+input=$(cat || true)
+
+debug_dump() {
+  [[ "${LIMITLINE_DEBUG:-}" == "1" ]] || return 0
+  local dest dir
+  dest="${LIMITLINE_DEBUG_FILE:-}"
+  if [[ -z "$dest" ]]; then
+    dir="${XDG_CACHE_HOME:-$HOME/.cache}/limitline"
+    mkdir -p "$dir" 2>/dev/null || return 0
+    dest="$dir/stdin.json"
+  else
+    dir=$(dirname "$dest")
+    mkdir -p "$dir" 2>/dev/null || return 0
+  fi
+  printf '%s\n' "$input" > "$dest" 2>/dev/null || true
+}
+
+debug_dump
+
+if [[ -z "${input//[[:space:]]/}" ]]; then
+  exit 0
+fi
+
+BAR_WIDTH=5
+CODEX_MODE=auto
+COLOR_MODE=on
+
+trim() {
+  local v="$1"
+  v="${v#"${v%%[![:space:]]*}"}"
+  v="${v%"${v##*[![:space:]]}"}"
+  printf '%s' "$v"
+}
+
+load_config() {
+  local cfg line key val
+  if [[ -n "${LIMITLINE_CONFIG+x}" ]]; then
+    cfg="$LIMITLINE_CONFIG"
+  else
+    cfg="${XDG_CONFIG_HOME:-$HOME/.config}/limitline/config"
+  fi
+  [[ -f "$cfg" && -r "$cfg" ]] || return 0
+  while IFS= read -r line || [[ -n "$line" ]]; do
+    line="${line%%#*}"
+    line=$(trim "$line")
+    [[ -z "$line" || "$line" != *=* ]] && continue
+    key=$(trim "${line%%=*}")
+    key=$(printf '%s' "$key" | tr -d '[:space:]')
+    val=$(trim "${line#*=}")
+    case "$val" in
+      \"*\") val="${val#\"}"; val="${val%\"}" ;;
+      \'*\') val="${val#\'}"; val="${val%\'}" ;;
+    esac
+    case "$key" in
+      bar_width) BAR_WIDTH="$val" ;;
+      codex) CODEX_MODE="$val" ;;
+      color|colour|colors|colours) COLOR_MODE="$val" ;;
+    esac
+  done < "$cfg"
+}
+
+load_config
+
+if [[ -n "${LIMITLINE_BAR_WIDTH:-}" ]]; then
+  BAR_WIDTH="$LIMITLINE_BAR_WIDTH"
+fi
+case "${LIMITLINE_CODEX:-}" in
+  "") ;;
+  0|off|false|no) CODEX_MODE=off ;;
+  1|on|true|yes) CODEX_MODE=on ;;
+  auto) CODEX_MODE=auto ;;
+esac
+if [[ -n "${NO_COLOR+x}" && -n "${NO_COLOR}" ]] || [[ "${COLOR_MODE}" == "off" || "${COLOR_MODE}" == "0" || "${COLOR_MODE}" == "false" ]]; then
+  COLOR_MODE=off
+fi
+case "$BAR_WIDTH" in
+  ''|*[!0-9]*) BAR_WIDTH=5 ;;
+esac
+if [[ "$BAR_WIDTH" -lt 1 ]]; then BAR_WIDTH=1; fi
+if [[ "$BAR_WIDTH" -gt 40 ]]; then BAR_WIDTH=40; fi
+
+USE_COLOR=1
+[[ "$COLOR_MODE" == "off" ]] && USE_COLOR=0
+
+CODEX_ENABLED=1
+case "$CODEX_MODE" in
+  off|0|false|no) CODEX_ENABLED=0 ;;
+esac
+
+NOW="${LIMITLINE_NOW:-$(date +%s)}"
+case "$NOW" in
+  ''|*[!0-9]*) NOW=$(date +%s) ;;
+esac
+
+model=""
+five_pct=""
+five_raw=""
+seven_pct=""
+seven_raw=""
+spend_pct=""
+spend_used=""
+spend_limit=""
+ctx=""
+codex5=""
+codex5_raw=""
+codex7=""
+codex7_raw=""
+
+to_epoch() {
+  local v="$1" base epoch
+  [[ -z "$v" || "$v" == "null" || "$v" == "-" ]] && return 0
+  case "$v" in
+    \"*\") v="${v#\"}"; v="${v%\"}" ;;
+  esac
+  case "$v" in
+    *[!0-9.]*) ;;
+    *.*)
+      printf '%s' "${v%%.*}"
+      return 0
+      ;;
+    *)
+      printf '%s' "$v"
+      return 0
+      ;;
+  esac
+  base="$v"
+  case "$base" in
+    *.*) base="${base%%.*}" ;;
+  esac
+  case "$v" in
+    *Z|*z) base="${base}Z" ;;
+  esac
+  if epoch=$(LC_ALL=C date -j -u -f "%Y-%m-%dT%H:%M:%SZ" "$base" "+%s" 2>/dev/null); then
+    printf '%s' "$epoch"
+    return 0
+  fi
+  if epoch=$(LC_ALL=C date -u -d "$v" "+%s" 2>/dev/null); then
+    printf '%s' "$epoch"
+    return 0
+  fi
+  if command -v python3 >/dev/null 2>&1; then
+    python3 -c 'import sys
+from datetime import datetime
+s = sys.argv[1]
+if s.endswith(("Z", "z")):
+    s = s[:-1] + "+00:00"
+print(int(datetime.fromisoformat(s).timestamp()))' "$v" 2>/dev/null || true
+  fi
+}
+
+abs_label() {
+  local epoch="$1" delta
+  [[ -z "$epoch" ]] && return 0
+  delta=$((epoch - NOW))
+  if [[ "$delta" -ge 86400 ]]; then
+    LC_TIME=C date -r "$epoch" "+%a %H:%M" 2>/dev/null \
+      || LC_TIME=C date -d "@$epoch" "+%a %H:%M" 2>/dev/null \
+      || true
+  fi
+}
+
+codex_cache_file() {
+  printf '%s/limitline-codex-%s.cache' "${TMPDIR:-/tmp}" "$(id -u)"
+}
+
+cache_hit=0
+if [[ "$CODEX_ENABLED" -eq 1 && -z "${LIMITLINE_CODEX_DIR:-}" && "${LIMITLINE_NOCACHE:-}" != "1" ]]; then
+  cache_file=$(codex_cache_file)
+  if [[ -f "$cache_file" ]]; then
+    wall=$(date +%s)
+    read -r cts ok c5 c5r c7 c7r < "$cache_file" || true
+    case "$cts" in
+      ''|*[!0-9]*) cts=0 ;;
+    esac
+    if [[ $((wall - cts)) -lt 30 && $((wall - cts)) -ge 0 ]]; then
+      cache_hit=1
+      if [[ "$ok" == "1" ]]; then
+        [[ "$c5" == "-" ]] && c5=""
+        [[ "$c5r" == "-" ]] && c5r=""
+        [[ "$c7" == "-" ]] && c7=""
+        [[ "$c7r" == "-" ]] && c7r=""
+        codex5="$c5"
+        codex5_raw="$c5r"
+        codex7="$c7"
+        codex7_raw="$c7r"
+      fi
+    fi
+  fi
+fi
+
+JQ_PROG='
+def emit(k; v):
+  if v == null or v == false then
+    k
+  elif (v|type) == "string" and (v|gsub("[\t\r\n]"; "") == "") then
+    k
+  else
+    k + " " + (v | tostring | gsub("[\t\r\n]"; " "))
+  end;
+emit("model"; .model.display_name)
+, emit("five_pct"; .rate_limits.five_hour.used_percentage)
+, emit("five_reset"; .rate_limits.five_hour.resets_at)
+, emit("seven_pct"; .rate_limits.seven_day.used_percentage)
+, emit("seven_reset"; .rate_limits.seven_day.resets_at)
+, emit("spend_pct"; .rate_limits.spend_limit.used_percentage)
+, emit("spend_used"; .rate_limits.spend_limit.used_usd)
+, emit("spend_limit"; .rate_limits.spend_limit.limit_usd)
+, emit("ctx";
+    .context_window.used_percentage
+    // .context_window.used_percent
+    // .context_window.percentage
+    // .context.used_percentage
+    // .context_usage.used_percentage
+    // null
+  )
+'
+
+assign_field() {
+  local line="$1" key val
+  [[ -z "$line" ]] && return 0
+  key=${line%% *}
+  if [[ "$line" == *" "* ]]; then
+    val=${line#* }
+  else
+    val=""
+  fi
+  case "$key" in
+    model) model=$val ;;
+    five_pct) five_pct=$val ;;
+    five_reset) five_raw=$val ;;
+    seven_pct) seven_pct=$val ;;
+    seven_reset) seven_raw=$val ;;
+    spend_pct) spend_pct=$val ;;
+    spend_used) spend_used=$val ;;
+    spend_limit) spend_limit=$val ;;
+    ctx) ctx=$val ;;
+    codex5) codex5=$val ;;
+    codex5_reset) codex5_raw=$val ;;
+    codex7) codex7=$val ;;
+    codex7_reset) codex7_raw=$val ;;
+  esac
+}
+
+parse_fields() {
+  local blob="$1" line
+  while IFS= read -r line; do
+    assign_field "$line"
+  done < <(printf '%s\n' "$blob")
+}
+
+find_newest_jsonl() {
+  local root="$1" f m best="" best_m=-1
+  while IFS= read -r f; do
+    [[ -n "$f" ]] || continue
+    m=$(date -r "$f" +%s 2>/dev/null) || continue
+    if [[ "$m" -gt "$best_m" ]]; then
+      best_m=$m
+      best=$f
+    fi
+  done << EOF
+$(find "$root" -type f -name '*.jsonl' -print 2>/dev/null)
+EOF
+  [[ -n "$best" ]] || return 1
+  printf '%s' "$best"
+}
+
+scan_codex_jq() {
+  local root newest line ts ev age parsed
+  root="${LIMITLINE_CODEX_DIR:-$HOME/.codex/sessions}"
+  [[ -d "$root" ]] || return 1
+  newest=$(find_newest_jsonl "$root") || return 1
+  line=$(grep -a -F 'rate_limits' "$newest" 2>/dev/null | tail -n 1) || true
+  [[ -n "$line" ]] || return 1
+  ts=$(printf '%s' "$line" | jq -r '.timestamp // empty' 2>/dev/null) || true
+  ev=$(to_epoch "$ts")
+  if [[ -z "$ev" ]]; then
+    ev=$(date -r "$newest" +%s 2>/dev/null) || return 1
+  fi
+  age=$((NOW - ev))
+  if [[ "$age" -ge 21600 ]]; then
+    return 1
+  fi
+  parsed=$(printf '%s' "$line" | jq -r '
+    def emit(k; v):
+      if v == null or v == false then k
+      else k + " " + (v | tostring | gsub("[\t\r\n]"; " "))
+      end;
+    (.payload.rate_limits // .rate_limits // {}) as $r |
+    emit("codex5"; $r.primary.used_percent // $r.primary.used_percentage)
+    , emit("codex5_reset"; $r.primary.resets_at)
+    , emit("codex7"; $r.secondary.used_percent // $r.secondary.used_percentage)
+    , emit("codex7_reset"; $r.secondary.resets_at)
+  ' 2>/dev/null) || return 1
+  codex5=""
+  codex5_raw=""
+  codex7=""
+  codex7_raw=""
+  parse_fields "$parsed"
+  [[ -n "$codex5" || -n "$codex7" ]] || return 1
+  return 0
+}
+
+write_codex_cache() {
+  local ok="$1" dest tmp dash
+  [[ -z "${LIMITLINE_CODEX_DIR:-}" && "${LIMITLINE_NOCACHE:-}" != "1" ]] || return 0
+  dest=$(codex_cache_file)
+  tmp="${dest}.$$"
+  dash() {
+    if [[ -z "$1" ]]; then printf '%s' "-"; else printf '%s' "$1"; fi
+  }
+  printf '%s %s %s %s %s %s\n' "$(date +%s)" "$ok" "$(dash "$codex5")" "$(dash "$codex5_raw")" "$(dash "$codex7")" "$(dash "$codex7_raw")" > "$tmp" 2>/dev/null \
+    && mv "$tmp" "$dest" 2>/dev/null || true
+}
+
+scanned=0
+if command -v jq >/dev/null 2>&1; then
+  tsv=$(printf '%s' "$input" | jq -r "$JQ_PROG" 2>/dev/null) || exit 0
+  parse_fields "$tsv"
+  if [[ "$CODEX_ENABLED" -eq 1 && "$cache_hit" -eq 0 ]]; then
+    if scan_codex_jq; then
+      write_codex_cache 1
+    else
+      codex5=""
+      codex5_raw=""
+      codex7=""
+      codex7_raw=""
+      write_codex_cache 0
+    fi
+    scanned=1
+  fi
+else
+  if ! command -v python3 >/dev/null 2>&1; then
+    exit 0
+  fi
+  scan_flag=0
+  if [[ "$CODEX_ENABLED" -eq 1 && "$cache_hit" -eq 0 ]]; then
+    scan_flag=1
+  fi
+  tsv=$(
+    LIMITLINE_INPUT="$input" \
+    LIMITLINE_SCAN_CODEX="$scan_flag" \
+    LIMITLINE_CODEX_ROOT="${LIMITLINE_CODEX_DIR:-$HOME/.codex/sessions}" \
+    LIMITLINE_NOW="$NOW" \
+    python3 - << 'PY' 2>/dev/null
+import json, os, sys
+
+raw = os.environ.get("LIMITLINE_INPUT", "")
+try:
+    data = json.loads(raw)
+except Exception:
+    sys.exit(2)
+if not isinstance(data, dict):
+    data = {}
+
+def dig(obj, *path):
+    cur = obj
+    for key in path:
+        if not isinstance(cur, dict) or key not in cur:
+            return None
+        cur = cur[key]
+    return cur
+
+def cell(value):
+    if value is None or isinstance(value, bool):
+        return ""
+    if isinstance(value, int):
+        return str(value)
+    if isinstance(value, float):
+        if value != value:
+            return ""
+        text = ("%f" % value).rstrip("0").rstrip(".")
+        return text
+    return str(value).replace("\t", " ").replace("\n", " ").replace("\r", " ")
+
+def emit(key, value):
+    text = cell(value)
+    if text == "":
+        return key
+    return key + " " + text
+
+model = dig(data, "model", "display_name")
+five = dig(data, "rate_limits", "five_hour") or {}
+seven = dig(data, "rate_limits", "seven_day") or {}
+spend = dig(data, "rate_limits", "spend_limit") or {}
+if not isinstance(five, dict):
+    five = {}
+if not isinstance(seven, dict):
+    seven = {}
+if not isinstance(spend, dict):
+    spend = {}
+
+ctx = None
+for path in (
+    ("context_window", "used_percentage"),
+    ("context_window", "used_percent"),
+    ("context_window", "percentage"),
+    ("context", "used_percentage"),
+    ("context_usage", "used_percentage"),
+):
+    val = dig(data, *path)
+    if isinstance(val, (int, float)) and not isinstance(val, bool):
+        ctx = val
+        break
+
+codex5 = codex5_reset = codex7 = codex7_reset = ""
+
+def to_epoch(value):
+    if value is None or value == "":
+        return ""
+    if isinstance(value, bool):
+        return ""
+    if isinstance(value, (int, float)):
+        return str(int(value))
+    text = str(value).strip()
+    if text.isdigit():
+        return text
+    iso = text[:-1] + "+00:00" if text.endswith(("Z", "z")) else text
+    try:
+        from datetime import datetime
+        return str(int(datetime.fromisoformat(iso).timestamp()))
+    except Exception:
+        return ""
+
+if os.environ.get("LIMITLINE_SCAN_CODEX") == "1":
+    root = os.environ.get("LIMITLINE_CODEX_ROOT", "")
+    now = int(os.environ.get("LIMITLINE_NOW") or "0")
+    newest = None
+    newest_m = -1.0
+    if root and os.path.isdir(root):
+        for dirpath, _dirs, files in os.walk(root):
+            for name in files:
+                if not name.endswith(".jsonl"):
+                    continue
+                path = os.path.join(dirpath, name)
+                try:
+                    mtime = os.path.getmtime(path)
+                except OSError:
+                    continue
+                if mtime > newest_m:
+                    newest_m = mtime
+                    newest = path
+    line = None
+    if newest:
+        try:
+            size = os.path.getsize(newest)
+            with open(newest, "rb") as fh:
+                if size > 8000000:
+                    fh.seek(size - 8000000)
+                    fh.readline()
+                blob = fh.read().decode("utf-8", "replace")
+            for row in blob.splitlines():
+                if "rate_limits" in row:
+                    line = row
+        except OSError:
+            line = None
+    if line:
+        try:
+            obj = json.loads(line)
+        except Exception:
+            obj = {}
+        if not isinstance(obj, dict):
+            obj = {}
+        payload = obj.get("payload") if isinstance(obj.get("payload"), dict) else {}
+        limits = payload.get("rate_limits") if isinstance(payload.get("rate_limits"), dict) else None
+        if limits is None and isinstance(obj.get("rate_limits"), dict):
+            limits = obj.get("rate_limits")
+        if not isinstance(limits, dict):
+            limits = {}
+        primary = limits.get("primary") if isinstance(limits.get("primary"), dict) else {}
+        secondary = limits.get("secondary") if isinstance(limits.get("secondary"), dict) else {}
+        event = to_epoch(obj.get("timestamp"))
+        if event == "" and newest_m >= 0:
+            event = str(int(newest_m))
+        fresh = True
+        if event != "" and now - int(event) >= 21600:
+            fresh = False
+        if fresh:
+            codex5 = cell(primary.get("used_percent", primary.get("used_percentage")))
+            codex5_reset = cell(primary.get("resets_at"))
+            codex7 = cell(secondary.get("used_percent", secondary.get("used_percentage")))
+            codex7_reset = cell(secondary.get("resets_at"))
+
+lines = [
+    emit("model", model),
+    emit("five_pct", five.get("used_percentage")),
+    emit("five_reset", five.get("resets_at")),
+    emit("seven_pct", seven.get("used_percentage")),
+    emit("seven_reset", seven.get("resets_at")),
+    emit("spend_pct", spend.get("used_percentage")),
+    emit("spend_used", spend.get("used_usd")),
+    emit("spend_limit", spend.get("limit_usd")),
+    emit("ctx", ctx),
+]
+if os.environ.get("LIMITLINE_SCAN_CODEX") == "1":
+    lines.extend([
+        emit("codex5", codex5),
+        emit("codex5_reset", codex5_reset),
+        emit("codex7", codex7),
+        emit("codex7_reset", codex7_reset),
+    ])
+sys.stdout.write("\n".join(lines) + "\n")
+PY
+  ) || exit 0
+  parse_fields "$tsv"
+  if [[ "$scan_flag" -eq 1 ]]; then
+    if [[ -n "$codex5" || -n "$codex7" ]]; then
+      write_codex_cache 1
+    else
+      write_codex_cache 0
+    fi
+    scanned=1
+  fi
+fi
+
+five_epoch=$(to_epoch "$five_raw")
+seven_epoch=$(to_epoch "$seven_raw")
+five_abs=$(abs_label "$five_epoch")
+seven_abs=$(abs_label "$seven_epoch")
+
+printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
+  "$model" "$five_pct" "$five_epoch" "$five_abs" \
+  "$seven_pct" "$seven_epoch" "$seven_abs" \
+  "$spend_pct" "$spend_used" "$spend_limit" \
+  "$ctx" "$codex5" "$codex7" \
+| awk -F '\t' -v now="$NOW" -v width="$BAR_WIDTH" -v use_color="$USE_COLOR" '
+function pct(p) {
+  if (p < 0) p = 0
+  if (p > 999) p = 999
+  return int(p + 0.5)
+}
+function color_of(p) {
+  if (p > 80) return "31"
+  else if (p >= 50) return "33"
+  return "32"
+}
+function paint(code, text) {
+  if (use_color != 1) return text
+  return sprintf("%c[%sm%s%c[0m", 27, code, text, 27)
+}
+function bar(p, w,    f, i, s) {
+  if (p < 0) p = 0
+  if (p > 100) p = 100
+  f = int(p * w / 100 + 0.5)
+  if (f < 0) f = 0
+  if (f > w) f = w
+  s = ""
+  for (i = 0; i < f; i++) s = s "▓"
+  for (i = 0; i < (w - f); i++) s = s "░"
+  return s
+}
+function rel(epoch, now,    d, h, m) {
+  d = epoch - now
+  if (d < 0) d = 0
+  h = int(d / 3600)
+  m = int((d % 3600) / 60)
+  if (h > 0) return sprintf("↻%dh%dm", h, m)
+  return sprintf("↻%dm", m)
+}
+function add(s) {
+  if (s == "") return
+  if (nseg == 0) line = s
+  else line = line sep s
+  nseg++
+}
+function window_seg(label, p, reset, abs,    body, when, d) {
+  if (p == "") return ""
+  body = paint(color_of(p + 0), bar(p + 0, width) " " pct(p + 0) "%")
+  when = ""
+  if (reset != "") {
+    d = (reset + 0) - (now + 0)
+    if (d >= 86400) {
+      if (abs != "") when = " ↻" abs
+    } else {
+      when = " " rel(reset + 0, now + 0)
+    }
+  }
+  return label " " body when
+}
+function money(n,    v, nearest, diff) {
+  v = n + 0
+  nearest = int(v + 0.5)
+  diff = v - nearest
+  if (diff < 0) diff = -diff
+  if (diff < 0.001) return sprintf("%d", nearest)
+  return sprintf("%.2f", v)
+}
+function spend_seg(p, used, limit,    body, money_s) {
+  if (p == "" && used == "" && limit == "") return ""
+  if (p == "" && used != "" && limit != "" && (limit + 0) != 0)
+    p = (used + 0) / (limit + 0) * 100
+  body = ""
+  if (p != "")
+    body = paint(color_of(p + 0), bar(p + 0, width) " " pct(p + 0) "%")
+  money_s = ""
+  if (used != "" && limit != "")
+    money_s = "$" money(used) "/$" money(limit)
+  if (body != "" && money_s != "") return "spend " body " " money_s
+  if (body != "") return "spend " body
+  if (money_s != "") return "spend " money_s
+  return ""
+}
+function codex_seg(a, b,    left, right, out) {
+  left = ""
+  right = ""
+  if (a != "") left = "5h " paint(color_of(a + 0), pct(a + 0) "%")
+  if (b != "") right = "7d " paint(color_of(b + 0), pct(b + 0) "%")
+  if (left != "" && right != "") out = left " · " right
+  else out = left right
+  if (out == "") return ""
+  return "codex " out
+}
+{
+  sep = " │ "
+  if (use_color == 1) sep = sprintf(" %c[2m│%c[0m ", 27, 27)
+  nseg = 0
+  line = ""
+  add($1)
+  add(window_seg("5h", $2, $3, $4))
+  add(window_seg("7d", $5, $6, $7))
+  add(spend_seg($8, $9, $10))
+  if ($11 != "") add("ctx " paint(color_of($11 + 0), pct($11 + 0) "%"))
+  add(codex_seg($12, $13))
+  if (nseg > 0) print line
+}
+'
+
+exit 0
