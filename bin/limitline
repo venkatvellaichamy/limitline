@@ -1,24 +1,34 @@
 #!/usr/bin/env bash
 # limitline — local usage-limit status line for Claude Code.
 # Reads one JSON object on stdin. No network. Always exits 0.
-# Version: 0.1.0
+# Version: 0.2.0
+
+_here=${0%/*}
+[[ "$_here" == "$0" ]] && _here="."
+LIMITLINE_ROOT=$(cd "$_here/.." && pwd)
 
 if [[ "${1:-}" == "--help" || "${1:-}" == "-h" ]]; then
   cat << 'EOF'
-limitline — colour-coded Claude Code usage limits
+limitline — local usage limits for Claude Code and nearby CLIs
 
   bin/limitline < status.json
+  bin/limitline status
+  bin/limitline --host tmux|starship|prompt|json|swiftbar|cursor|codex
+  bin/limitline preview|doctor|config
 
-Config: ~/.config/limitline/config
-  bar_width=5
-  codex=auto
-  color=on
-
-Environment: LIMITLINE_BAR_WIDTH, LIMITLINE_CODEX, LIMITLINE_CONFIG,
-NO_COLOR, LIMITLINE_DEBUG, LIMITLINE_NOW
+Config: ~/.config/limitline/config or config.toml
 EOF
   exit 0
 fi
+
+case "${1:-}" in
+  status|preview|doctor|config|--host)
+    if command -v python3 >/dev/null 2>&1; then
+      exec python3 "$LIMITLINE_ROOT/lib/cli.py" "$@"
+    fi
+    exit 0
+    ;;
+esac
 
 if [[ -t 0 ]]; then
   printf '%s\n' 'limitline reads a Claude Code status JSON object on stdin.' >&2
@@ -36,7 +46,7 @@ debug_dump() {
     mkdir -p "$dir" 2>/dev/null || return 0
     dest="$dir/stdin.json"
   else
-    dir=$(dirname "$dest")
+    dir=${dest%/*}
     mkdir -p "$dir" 2>/dev/null || return 0
   fi
   printf '%s\n' "$input" > "$dest" 2>/dev/null || true
@@ -51,6 +61,15 @@ fi
 BAR_WIDTH=5
 CODEX_MODE=auto
 COLOR_MODE=on
+THEME=minimal
+LINES=1
+SEGMENTS=""
+GIT_MODE=on
+SESSION_MODE=off
+BURN_MODE=on
+LINKS_MODE=off
+AUTO_AT=95
+AUTO_WARN=80
 
 trim() {
   local v="$1"
@@ -82,6 +101,15 @@ load_config() {
       bar_width) BAR_WIDTH="$val" ;;
       codex) CODEX_MODE="$val" ;;
       color|colour|colors|colours) COLOR_MODE="$val" ;;
+      theme) THEME="$val" ;;
+      lines) LINES="$val" ;;
+      segments) SEGMENTS="$val" ;;
+      git) GIT_MODE="$val" ;;
+      session) SESSION_MODE="$val" ;;
+      burn) BURN_MODE="$val" ;;
+      links) LINKS_MODE="$val" ;;
+      auto_compact) AUTO_AT="$val" ;;
+      auto_compact_warn) AUTO_WARN="$val" ;;
     esac
   done < "$cfg"
 }
@@ -114,6 +142,66 @@ case "$CODEX_MODE" in
   off|0|false|no) CODEX_ENABLED=0 ;;
 esac
 
+if [[ -n "${LIMITLINE_THEME:-}" ]]; then THEME="$LIMITLINE_THEME"; fi
+if [[ "${LIMITLINE_ASCII:-}" == "1" ]]; then THEME=ascii; fi
+if [[ -n "${LIMITLINE_LINES:-}" ]]; then LINES="$LIMITLINE_LINES"; fi
+if [[ -n "${LIMITLINE_SEGMENTS:-}" ]]; then SEGMENTS="$LIMITLINE_SEGMENTS"; fi
+if [[ -n "${LIMITLINE_GIT:-}" ]]; then GIT_MODE="$LIMITLINE_GIT"; fi
+if [[ -n "${LIMITLINE_SESSION:-}" ]]; then SESSION_MODE="$LIMITLINE_SESSION"; fi
+if [[ -n "${LIMITLINE_BURN:-}" ]]; then BURN_MODE="$LIMITLINE_BURN"; fi
+if [[ -n "${LIMITLINE_LINKS:-}" ]]; then LINKS_MODE="$LIMITLINE_LINKS"; fi
+if [[ -n "${LIMITLINE_AUTO_COMPACT:-}" ]]; then AUTO_AT="$LIMITLINE_AUTO_COMPACT"; fi
+if [[ -n "${LIMITLINE_AUTO_COMPACT_WARN:-}" ]]; then AUTO_WARN="$LIMITLINE_AUTO_COMPACT_WARN"; fi
+case "$LINES" in ''|*[!0-9]*) LINES=1 ;; esac
+if [[ "$LINES" -lt 1 ]]; then LINES=1; fi
+if [[ "$LINES" -gt 2 ]]; then LINES=2; fi
+case "$AUTO_AT" in ''|*[!0-9]*) AUTO_AT=95 ;; esac
+case "$AUTO_WARN" in ''|*[!0-9]*) AUTO_WARN=80 ;; esac
+
+flag_on() {
+  case "$1" in
+    1|on|true|yes) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
+ON_MODEL=1; ON_STYLE=1; ON_CTX=1; ON_FIVE=1; ON_SEVEN=1; ON_SPEND=1
+ON_BURN=1; ON_COST=1; ON_GIT=1; ON_PR=1; ON_CACHE=1; ON_VIM=1
+ON_SESSION=0; ON_CODEX=1
+if [[ -n "$SEGMENTS" ]]; then
+  ON_MODEL=0; ON_STYLE=0; ON_CTX=0; ON_FIVE=0; ON_SEVEN=0; ON_SPEND=0
+  ON_BURN=0; ON_COST=0; ON_GIT=0; ON_PR=0; ON_CACHE=0; ON_VIM=0
+  ON_SESSION=0; ON_CODEX=0
+  old_ifs=$IFS
+  IFS=','
+  for raw in $SEGMENTS; do
+    name=$(trim "$raw")
+    case "$name" in
+      model) ON_MODEL=1 ;;
+      style) ON_STYLE=1 ;;
+      context|ctx) ON_CTX=1 ;;
+      5h) ON_FIVE=1 ;;
+      7d) ON_SEVEN=1 ;;
+      spend) ON_SPEND=1 ;;
+      limits) ON_FIVE=1; ON_SEVEN=1; ON_SPEND=1 ;;
+      burn) ON_BURN=1 ;;
+      cost) ON_COST=1 ;;
+      git) ON_GIT=1 ;;
+      pr) ON_PR=1 ;;
+      cache) ON_CACHE=1 ;;
+      vim) ON_VIM=1 ;;
+      session) ON_SESSION=1 ;;
+      codex|others) ON_CODEX=1 ;;
+    esac
+  done
+  IFS=$old_ifs
+fi
+flag_on "$GIT_MODE" || ON_GIT=0
+flag_on "$SESSION_MODE" && ON_SESSION=1
+flag_on "$BURN_MODE" || ON_BURN=0
+flag_on "$LINKS_MODE" && LINKS=1 || LINKS=0
+flag_on "$SESSION_MODE" || true
+
 NOW="${LIMITLINE_NOW:-$(date +%s)}"
 case "$NOW" in
   ''|*[!0-9]*) NOW=$(date +%s) ;;
@@ -128,6 +216,23 @@ spend_pct=""
 spend_used=""
 spend_limit=""
 ctx=""
+style=""
+ctx_size=""
+ctx_tokens=""
+compact_at=""
+cost_usd=""
+cost_ms=""
+lines_added=""
+lines_removed=""
+vim_mode=""
+session_id=""
+pr_number=""
+pr_state=""
+repo=""
+cwd=""
+cache_warm=""
+cache_cause=""
+render_cols=""
 codex5=""
 codex5_raw=""
 codex7=""
@@ -240,6 +345,33 @@ emit("model"; .model.display_name)
     // .context_usage.used_percentage
     // null
   )
+, emit("style";
+    if (.output_style.name == null) then null
+    elif ((.output_style.name | ascii_downcase) == "default") then null
+    else .output_style.name end)
+, emit("ctx_size"; .context_window.context_window_size // .context_window.size)
+, emit("ctx_tokens"; .context_window.context_tokens // .context_window.total_input_tokens)
+, emit("compact_at"; .context_window.auto_compact_threshold_percent)
+, emit("cost_usd"; .cost.total_cost_usd)
+, emit("cost_ms"; .cost.total_duration_ms)
+, emit("lines_added"; .cost.total_lines_added)
+, emit("lines_removed"; .cost.total_lines_removed)
+, emit("vim"; .vim.mode)
+, emit("session"; .session_id)
+, emit("pr_number"; .pr.number)
+, emit("pr_state"; .pr.review_state // .pr.kind)
+, emit("repo";
+    if (.workspace.repo.owner != null and .workspace.repo.name != null) then
+      (.workspace.repo.owner + "/" + .workspace.repo.name)
+    elif .workspace.repo.name != null then .workspace.repo.name
+    else null end)
+, emit("cwd"; .workspace.current_dir)
+, emit("cache_warm";
+    if .prompt_cache.warm == true then "true"
+    elif .prompt_cache.warm == false then "false"
+    else null end)
+, emit("cache_cause"; .prompt_cache.last_miss_cause.causes[0])
+, emit("columns"; .render_width_chars)
 '
 
 assign_field() {
@@ -261,6 +393,23 @@ assign_field() {
     spend_used) spend_used=$val ;;
     spend_limit) spend_limit=$val ;;
     ctx) ctx=$val ;;
+    style) style=$val ;;
+    ctx_size) ctx_size=$val ;;
+    ctx_tokens) ctx_tokens=$val ;;
+    compact_at) compact_at=$val ;;
+    cost_usd) cost_usd=$val ;;
+    cost_ms) cost_ms=$val ;;
+    lines_added) lines_added=$val ;;
+    lines_removed) lines_removed=$val ;;
+    vim) vim_mode=$val ;;
+    session) session_id=$val ;;
+    pr_number) pr_number=$val ;;
+    pr_state) pr_state=$val ;;
+    repo) repo=$val ;;
+    cwd) cwd=$val ;;
+    cache_warm) cache_warm=$val ;;
+    cache_cause) cache_cause=$val ;;
+    columns) render_cols=$val ;;
     codex5) codex5=$val ;;
     codex5_reset) codex5_raw=$val ;;
     codex7) codex7=$val ;;
@@ -507,6 +656,41 @@ if os.environ.get("LIMITLINE_SCAN_CODEX") == "1":
             codex7 = cell(secondary.get("used_percent", secondary.get("used_percentage")))
             codex7_reset = cell(secondary.get("resets_at"))
 
+style = dig(data, "output_style", "name")
+if isinstance(style, str) and style.lower() == "default":
+    style = None
+ctx_size = dig(data, "context_window", "context_window_size")
+if not isinstance(ctx_size, (int, float)):
+    ctx_size = dig(data, "context_window", "size")
+ctx_tokens = dig(data, "context_window", "context_tokens")
+if not isinstance(ctx_tokens, (int, float)):
+    ctx_tokens = dig(data, "context_window", "total_input_tokens")
+compact_at = dig(data, "context_window", "auto_compact_threshold_percent")
+cost = dig(data, "cost") if isinstance(dig(data, "cost"), dict) else {}
+vim_mode = dig(data, "vim", "mode")
+session_id = dig(data, "session_id")
+pr = dig(data, "pr") if isinstance(dig(data, "pr"), dict) else {}
+repo_obj = dig(data, "workspace", "repo") if isinstance(dig(data, "workspace", "repo"), dict) else {}
+if repo_obj.get("owner") and repo_obj.get("name"):
+    repo_s = str(repo_obj.get("owner")) + "/" + str(repo_obj.get("name"))
+elif repo_obj.get("name"):
+    repo_s = str(repo_obj.get("name"))
+else:
+    repo_s = ""
+cwd = dig(data, "workspace", "current_dir")
+pcache = dig(data, "prompt_cache") if isinstance(dig(data, "prompt_cache"), dict) else {}
+warm = pcache.get("warm", None)
+if warm is True:
+    cache_warm = "true"
+elif warm is False:
+    cache_warm = "false"
+else:
+    cache_warm = ""
+miss = pcache.get("last_miss_cause") if isinstance(pcache.get("last_miss_cause"), dict) else {}
+causes = miss.get("causes") if isinstance(miss.get("causes"), list) else []
+cache_cause = str(causes[0]) if causes else ""
+columns = data.get("render_width_chars")
+
 lines = [
     emit("model", model),
     emit("five_pct", five.get("used_percentage")),
@@ -517,6 +701,23 @@ lines = [
     emit("spend_used", spend.get("used_usd")),
     emit("spend_limit", spend.get("limit_usd")),
     emit("ctx", ctx),
+    emit("style", style),
+    emit("ctx_size", ctx_size),
+    emit("ctx_tokens", ctx_tokens),
+    emit("compact_at", compact_at),
+    emit("cost_usd", cost.get("total_cost_usd")),
+    emit("cost_ms", cost.get("total_duration_ms")),
+    emit("lines_added", cost.get("total_lines_added")),
+    emit("lines_removed", cost.get("total_lines_removed")),
+    emit("vim", vim_mode),
+    emit("session", session_id),
+    emit("pr_number", pr.get("number")),
+    emit("pr_state", pr.get("review_state") or pr.get("kind")),
+    emit("repo", repo_s),
+    emit("cwd", cwd),
+    emit("cache_warm", cache_warm),
+    emit("cache_cause", cache_cause),
+    emit("columns", columns),
 ]
 if os.environ.get("LIMITLINE_SCAN_CODEX") == "1":
     lines.extend([
@@ -544,12 +745,207 @@ seven_epoch=$(to_epoch "$seven_raw")
 five_abs=$(abs_label "$five_epoch")
 seven_abs=$(abs_label "$seven_epoch")
 
-printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
-  "$model" "$five_pct" "$five_epoch" "$five_abs" \
-  "$seven_pct" "$seven_epoch" "$seven_abs" \
-  "$spend_pct" "$spend_used" "$spend_limit" \
-  "$ctx" "$codex5" "$codex7" \
-| awk -F '\t' -v now="$NOW" -v width="$BAR_WIDTH" -v use_color="$USE_COLOR" '
+case "$model" in
+  "Claude "*) model="${model#Claude }" ;;
+esac
+
+write_snapshot() {
+  local dir dest windows item pct reset
+  [[ -n "$five_pct" || -n "$seven_pct" || -n "$spend_pct" || -n "$spend_used" ]] || return 0
+  dir="${XDG_CACHE_HOME:-$HOME/.cache}/limitline"
+  mkdir -p "$dir" 2>/dev/null || return 0
+  dest="${LIMITLINE_CLAUDE_SNAPSHOT:-$dir/claude.json}"
+  windows=""
+  add_win() {
+    pct="$1"; reset="$2"; name="$3"
+    case "$pct" in ''|*[!0-9.]*) return 0 ;; esac
+    item=$(printf '{"name":"%s","used_pct":%s' "$name" "$pct")
+    case "$reset" in
+      ''|*[!0-9]*) ;;
+      *) item="$item"',"resets_at":'"$reset" ;;
+    esac
+    item="$item}"
+    if [[ -z "$windows" ]]; then windows="$item"; else windows="$windows,$item"; fi
+  }
+  add_win "$five_pct" "$five_epoch" "5h"
+  add_win "$seven_pct" "$seven_epoch" "7d"
+  spend_json=""
+  case "$spend_used" in ''|*[!0-9.]*) ;; *)
+    case "$spend_limit" in ''|*[!0-9.]*) ;; *)
+      spend_json=$(printf '"spend":{"used":%s,"limit":%s,"currency":"USD"},' "$spend_used" "$spend_limit")
+    ;; esac
+  ;; esac
+  printf '{"observed_at":%s,"provider":"claude","source":"statusline","stale":false,%s"windows":[%s]}\n' \
+    "$NOW" "$spend_json" "$windows" > "$dest.tmp" 2>/dev/null \
+    && mv "$dest.tmp" "$dest" 2>/dev/null || true
+}
+write_snapshot
+
+ctx_extra=""
+if [[ "$ON_CTX" == "1" && -n "$ctx" ]]; then
+  ctx_extra=$(awk -v size="$ctx_size" -v tokens="$ctx_tokens" -v pct="$ctx" -v at="${compact_at:-$AUTO_AT}" -v warn="$AUTO_WARN" '
+    BEGIN {
+      extra = ""
+      if (size ~ /^[0-9.]+$/) {
+        if (tokens ~ /^[0-9.]+$/) left = size - tokens
+        else left = size * (100 - pct) / 100
+        if (left >= 1000) extra = sprintf("%.0fk left", left / 1000)
+        else if (left > 0) extra = sprintf("%.0f left", left)
+      }
+      if (pct + 0 >= warn + 0) {
+        gap = int((at + 0) - (pct + 0) + 0.5)
+        if (gap > 0) note = sprintf("↯ auto-compact in ~%d%%", gap)
+        else note = "↯ auto-compact"
+        if (extra != "") extra = extra " " note
+        else extra = note
+      }
+      printf "%s", extra
+    }
+  ')
+fi
+
+burn_text=""
+if [[ "$ON_BURN" == "1" && -n "$five_pct" ]]; then
+  hist_dir="${XDG_CACHE_HOME:-$HOME/.cache}/limitline"
+  mkdir -p "$hist_dir" 2>/dev/null || true
+  hist="$hist_dir/history-5h.tsv"
+  if [[ -f "$hist" ]]; then
+    burn_text=$(awk -v now="$NOW" -v pct="$five_pct" '
+      { t=$1+0; p=$2+0; n++; tt[n]=t; pp[n]=p }
+      END {
+        base_t = 0
+        start = n - 30
+        if (start < 1) start = 1
+        for (i = start; i <= n; i++) {
+          if (now - tt[i] <= 1800 && now - tt[i] >= 30) {
+            if (base_t == 0 || tt[i] < base_t) { base_t = tt[i]; base_p = pp[i] }
+          }
+        }
+        if (base_t == 0) exit
+        dt = now - base_t
+        dp = pct - base_p
+        if (dp <= 0.05 || dt <= 0) exit
+        remain = 100 - pct
+        if (remain <= 0) exit
+        eta = remain / (dp / dt)
+        if (eta <= 0 || eta >= 86400) exit
+        mins = int(eta / 60 + 0.5)
+        if (mins < 1) mins = 1
+        if (mins >= 60) printf "pace ~%dh%dm", int(mins / 60), mins % 60
+        else printf "pace ~%dm", mins
+      }
+    ' "$hist" 2>/dev/null || true)
+  fi
+  printf '%s %s\n' "$NOW" "$five_pct" >> "$hist" 2>/dev/null || true
+fi
+
+git_text=""
+if [[ "$ON_GIT" == "1" && ( -n "$cwd" || -n "$repo" ) ]]; then
+  target="${cwd:-$PWD}"
+  branch=""
+  dirty=""
+  ahead=""
+  behind=""
+  if git -C "$target" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+    branch=$(git -C "$target" rev-parse --abbrev-ref HEAD 2>/dev/null || true)
+    if [[ -n "$(git -C "$target" status --porcelain 2>/dev/null | head -n 1)" ]]; then
+      dirty="*"
+    fi
+    counts=$(git -C "$target" rev-list --left-right --count '@{upstream}...HEAD' 2>/dev/null || true)
+    if [[ -n "$counts" ]]; then
+      behind=${counts%% *}
+      ahead=${counts##* }
+    fi
+  fi
+  git_text="$repo"
+  if [[ -n "$branch" ]]; then
+    if [[ -n "$git_text" ]]; then git_text="$git_text $branch$dirty"; else git_text="$branch$dirty"; fi
+    if [[ -n "$ahead" && "$ahead" != "0" ]]; then git_text="$git_text ↑$ahead"; fi
+    if [[ -n "$behind" && "$behind" != "0" ]]; then git_text="$git_text ↓$behind"; fi
+  fi
+  if [[ "$LINKS" == "1" && "$repo" == */* && -n "$git_text" ]]; then
+    git_text=$(printf '\033]8;;https://github.com/%s\a%s\033]8;;\a' "$repo" "$git_text")
+  fi
+fi
+
+pr_text=""
+if [[ "$ON_PR" == "1" && -n "$pr_number" ]]; then
+  pr_text="PR #$pr_number"
+  [[ -n "$pr_state" ]] && pr_text="$pr_text $pr_state"
+  if [[ "$LINKS" == "1" && "$repo" == */* ]]; then
+    pr_text=$(printf '\033]8;;https://github.com/%s/pull/%s\a%s\033]8;;\a' "$repo" "$pr_number" "$pr_text")
+  fi
+fi
+
+cache_text=""
+if [[ "$ON_CACHE" == "1" && "$cache_warm" == "false" ]]; then
+  cause="$cache_cause"
+  [[ -z "$cause" ]] && cause="miss"
+  cache_text="cache cold: $cause"
+fi
+
+vim_text=""
+if [[ "$ON_VIM" == "1" && -n "$vim_mode" ]]; then
+  vim_text="vim $vim_mode"
+fi
+
+session_text=""
+if [[ "$ON_SESSION" == "1" && -n "$session_id" ]]; then
+  session_text=${session_id:0:6}
+fi
+
+[[ "$ON_MODEL" == "1" ]] || model=""
+[[ "$ON_STYLE" == "1" ]] || style=""
+[[ "$ON_CTX" == "1" ]] || ctx=""
+[[ "$ON_FIVE" == "1" ]] || five_pct=""
+[[ "$ON_SEVEN" == "1" ]] || seven_pct=""
+[[ "$ON_SPEND" == "1" ]] || { spend_pct=""; spend_used=""; spend_limit=""; }
+[[ "$ON_COST" == "1" ]] || { cost_usd=""; cost_ms=""; lines_added=""; lines_removed=""; }
+[[ "$ON_CODEX" == "1" ]] || { codex5=""; codex7=""; }
+[[ "$ON_BURN" == "1" ]] || burn_text=""
+
+max_cols="${LIMITLINE_COLUMNS:-${COLUMNS:-}}"
+if [[ -z "$max_cols" && -n "$render_cols" ]]; then max_cols="$render_cols"; fi
+case "$max_cols" in ''|*[!0-9]*) max_cols=0 ;; esac
+
+emit_kv() {
+  if [[ -z "$2" ]]; then printf '%s\n' "$1"; else printf '%s %s\n' "$1" "$2"; fi
+}
+
+{
+  emit_kv theme "$THEME"
+  emit_kv lines "$LINES"
+  emit_kv width "$BAR_WIDTH"
+  emit_kv max_cols "$max_cols"
+  emit_kv use_color "$USE_COLOR"
+  emit_kv now "$NOW"
+  emit_kv model "$model"
+  emit_kv style "$style"
+  emit_kv ctx "$ctx"
+  emit_kv ctx_extra "$ctx_extra"
+  emit_kv five_pct "$five_pct"
+  emit_kv five_reset "$five_epoch"
+  emit_kv five_abs "$five_abs"
+  emit_kv seven_pct "$seven_pct"
+  emit_kv seven_reset "$seven_epoch"
+  emit_kv seven_abs "$seven_abs"
+  emit_kv spend_pct "$spend_pct"
+  emit_kv spend_used "$spend_used"
+  emit_kv spend_limit "$spend_limit"
+  emit_kv cost_usd "$cost_usd"
+  emit_kv cost_ms "$cost_ms"
+  emit_kv lines_added "$lines_added"
+  emit_kv lines_removed "$lines_removed"
+  emit_kv git "$git_text"
+  emit_kv pr "$pr_text"
+  emit_kv cache "$cache_text"
+  emit_kv vim "$vim_text"
+  emit_kv session "$session_text"
+  emit_kv codex5 "$codex5"
+  emit_kv codex7 "$codex7"
+  emit_kv burn "$burn_text"
+} | awk '
+function val(k) { return (k in v) ? v[k] : "" }
 function pct(p) {
   if (p < 0) p = 0
   if (p > 999) p = 999
@@ -561,18 +957,28 @@ function color_of(p) {
   return "32"
 }
 function paint(code, text) {
-  if (use_color != 1) return text
+  if (val("use_color") != "1") return text
   return sprintf("%c[%sm%s%c[0m", 27, code, text, 27)
 }
-function bar(p, w,    f, i, s) {
+function mark_of(p) {
+  if (p > 80) return "!"
+  else if (p >= 50) return "+"
+  return "·"
+}
+function bar(p,    w, f, i, s, fill, empty) {
+  w = val("width") + 0
+  if (w < 1) w = 5
   if (p < 0) p = 0
   if (p > 100) p = 100
   f = int(p * w / 100 + 0.5)
   if (f < 0) f = 0
   if (f > w) f = w
+  if (val("theme") == "ascii") { fill = "#"; empty = "-" }
+  else if (val("theme") == "powerline") { fill = "█"; empty = "░" }
+  else { fill = "▓"; empty = "░" }
   s = ""
-  for (i = 0; i < f; i++) s = s "▓"
-  for (i = 0; i < (w - f); i++) s = s "░"
+  for (i = 0; i < f; i++) s = s fill
+  for (i = 0; i < (w - f); i++) s = s empty
   return s
 }
 function rel(epoch, now,    d, h, m) {
@@ -580,74 +986,188 @@ function rel(epoch, now,    d, h, m) {
   if (d < 0) d = 0
   h = int(d / 3600)
   m = int((d % 3600) / 60)
-  if (h > 0) return sprintf("↻%dh%dm", h, m)
-  return sprintf("↻%dm", m)
+  if (h > 0) return sprintf("%dh%dm", h, m)
+  return sprintf("%dm", m)
 }
-function add(s) {
-  if (s == "") return
-  if (nseg == 0) line = s
-  else line = line sep s
-  nseg++
-}
-function window_seg(label, p, reset, abs,    body, when, d) {
-  if (p == "") return ""
-  body = paint(color_of(p + 0), bar(p + 0, width) " " pct(p + 0) "%")
-  when = ""
-  if (reset != "") {
-    d = (reset + 0) - (now + 0)
-    if (d >= 86400) {
-      if (abs != "") when = " ↻" abs
-    } else {
-      when = " " rel(reset + 0, now + 0)
-    }
+function reset_bit(epoch, abs,    now, d, glyph) {
+  if (epoch == "") return ""
+  now = val("now") + 0
+  d = (epoch + 0) - now
+  if (val("theme") == "ascii") glyph = " in "
+  else glyph = " ↻"
+  if (d >= 86400) {
+    if (abs != "") return glyph abs
+    return ""
   }
-  return label " " body when
+  return glyph rel(epoch + 0, now)
 }
-function money(n,    v, nearest, diff) {
-  v = n + 0
-  nearest = int(v + 0.5)
-  diff = v - nearest
+function meter(p) {
+  return paint(color_of(p + 0), bar(p + 0) " " mark_of(p + 0) pct(p + 0) "%")
+}
+function money(n,    x, nearest, diff) {
+  x = n + 0
+  nearest = int(x + 0.5)
+  diff = x - nearest
   if (diff < 0) diff = -diff
   if (diff < 0.001) return sprintf("%d", nearest)
-  return sprintf("%.2f", v)
+  return sprintf("%.2f", x)
+}
+function dur(ms,    s, h, m) {
+  if (ms == "") return ""
+  s = int((ms + 0) / 1000)
+  if (s < 0) s = 0
+  h = int(s / 3600)
+  m = int((s % 3600) / 60)
+  if (h > 0) return sprintf("%dh%dm", h, m)
+  if (m > 0) return sprintf("%dm", m)
+  return sprintf("%ds", s)
+}
+function window_seg(label, p, reset, abs) {
+  if (p == "") return ""
+  return label " " meter(p) reset_bit(reset, abs)
 }
 function spend_seg(p, used, limit,    body, money_s) {
   if (p == "" && used == "" && limit == "") return ""
   if (p == "" && used != "" && limit != "" && (limit + 0) != 0)
     p = (used + 0) / (limit + 0) * 100
   body = ""
-  if (p != "")
-    body = paint(color_of(p + 0), bar(p + 0, width) " " pct(p + 0) "%")
+  if (p != "") body = meter(p)
   money_s = ""
-  if (used != "" && limit != "")
-    money_s = "$" money(used) "/$" money(limit)
+  if (used != "" && limit != "") money_s = "$" money(used) "/$" money(limit)
   if (body != "" && money_s != "") return "spend " body " " money_s
   if (body != "") return "spend " body
   if (money_s != "") return "spend " money_s
   return ""
 }
+function cost_seg(usd, ms, added, removed,    parts, text) {
+  parts = ""
+  if (usd != "") {
+    text = "$" money(usd)
+    if (text != "$0") parts = text
+  }
+  text = dur(ms)
+  if (text != "" && text != "0s") {
+    if (parts != "") parts = parts " " text
+    else parts = text
+  }
+  if (added != "" || removed != "") {
+    if (added == "") added = "0"
+    if (removed == "") removed = "0"
+    text = "+" int(added + 0) " -" int(removed + 0)
+    if (parts != "") parts = parts " " text
+    else parts = text
+  }
+  return parts
+}
+function compact_pct(p) {
+  return paint(color_of(p + 0), mark_of(p + 0) pct(p + 0) "%")
+}
 function codex_seg(a, b,    left, right, out) {
-  left = ""
-  right = ""
-  if (a != "") left = "5h " paint(color_of(a + 0), pct(a + 0) "%")
-  if (b != "") right = "7d " paint(color_of(b + 0), pct(b + 0) "%")
+  left = ""; right = ""
+  if (a != "") left = "5h " compact_pct(a)
+  if (b != "") right = "7d " compact_pct(b)
   if (left != "" && right != "") out = left " · " right
   else out = left right
   if (out == "") return ""
   return "codex " out
 }
+function ctx_seg(p, extra,    body) {
+  if (p == "") return ""
+  body = "ctx " meter(p)
+  if (extra != "") body = body " " extra
+  return body
+}
+function plain_len(s) {
+  gsub(/\033\[[0-9;]*m/, "", s)
+  gsub(/\033\]8;;[^\007]*\007/, "", s)
+  return length(s)
+}
+function push(pri, text,    i) {
+  if (text == "") return
+  nseg++
+  seg[nseg] = text
+  pri_of[nseg] = pri
+}
+function join_range(lo, hi,    i, out, count, sep) {
+  out = ""
+  count = 0
+  sep = " | "
+  if (val("theme") == "powerline") sep = "  "
+  else if (val("theme") != "ascii") {
+    if (val("use_color") == "1") sep = sprintf(" %c[2m│%c[0m ", 27, 27)
+    else sep = " │ "
+  }
+  for (i = lo; i <= hi; i++) {
+    if (drop[i]) continue
+    if (count == 0) out = seg[i]
+    else out = out sep seg[i]
+    count++
+  }
+  return out
+}
+function fit(maxc,    total, i, best, best_i, guard) {
+  if (maxc <= 0) return
+  guard = 0
+  while (guard < 30) {
+    guard++
+    total = plain_len(join_range(1, nseg))
+    if (total <= maxc) return
+    best = 999
+    best_i = 0
+    for (i = 1; i <= nseg; i++) {
+      if (drop[i]) continue
+      if (pri_of[i] < best) { best = pri_of[i]; best_i = i }
+    }
+    if (best_i == 0) return
+    drop[best_i] = 1
+  }
+}
 {
-  sep = " │ "
-  if (use_color == 1) sep = sprintf(" %c[2m│%c[0m ", 27, 27)
+  key = $1
+  if (index($0, " ") > 0) v[key] = substr($0, index($0, " ") + 1)
+  else v[key] = ""
+}
+END {
   nseg = 0
-  line = ""
-  add($1)
-  add(window_seg("5h", $2, $3, $4))
-  add(window_seg("7d", $5, $6, $7))
-  add(spend_seg($8, $9, $10))
-  if ($11 != "") add("ctx " paint(color_of($11 + 0), pct($11 + 0) "%"))
-  add(codex_seg($12, $13))
-  if (nseg > 0) print line
+  push(100, val("model"))
+  push(25, val("style"))
+  push(70, ctx_seg(val("ctx"), val("ctx_extra")))
+  push(90, window_seg("5h", val("five_pct"), val("five_reset"), val("five_abs")))
+  push(80, window_seg("7d", val("seven_pct"), val("seven_reset"), val("seven_abs")))
+  push(60, spend_seg(val("spend_pct"), val("spend_used"), val("spend_limit")))
+  push(30, val("burn"))
+  push(50, cost_seg(val("cost_usd"), val("cost_ms"), val("lines_added"), val("lines_removed")))
+  push(40, val("git"))
+  push(20, val("pr"))
+  push(15, val("cache"))
+  push(10, val("vim"))
+  push(5, codex_seg(val("codex5"), val("codex7")))
+  push(1, val("session"))
+  fit(val("max_cols") + 0)
+  if (val("lines") + 0 >= 2) {
+    line1 = ""
+    line2 = ""
+    # rebuild by priority: >= 70 on line 1
+    n1 = 0; n2 = 0
+    for (i = 1; i <= nseg; i++) {
+      if (drop[i]) continue
+      if (pri_of[i] >= 70) { n1++; a1[n1] = seg[i] }
+      else { n2++; a2[n2] = seg[i] }
+    }
+    sep = " | "
+    if (val("theme") == "powerline") sep = "  "
+    else if (val("theme") != "ascii") {
+      if (val("use_color") == "1") sep = sprintf(" %c[2m│%c[0m ", 27, 27)
+      else sep = " │ "
+    }
+    for (i = 1; i <= n1; i++) line1 = (line1 == "" ? a1[i] : line1 sep a1[i])
+    for (i = 1; i <= n2; i++) line2 = (line2 == "" ? a2[i] : line2 sep a2[i])
+    if (line1 != "") print line1
+    if (line2 != "") print line2
+  } else {
+    out = join_range(1, nseg)
+    if (out != "") print out
+  }
 }
 '
 

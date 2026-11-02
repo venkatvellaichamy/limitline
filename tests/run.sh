@@ -23,6 +23,7 @@ mkdir -p "$TMPDIR" "$XDG_CONFIG_HOME" "$XDG_CACHE_HOME"
 export LIMITLINE_NOW=1762056000
 export LIMITLINE_CONFIG=/dev/null
 export LIMITLINE_CODEX=0
+export LIMITLINE_GIT=0
 export TZ=UTC
 export LC_ALL=C
 unset NO_COLOR LIMITLINE_DEBUG LIMITLINE_DEBUG_FILE LIMITLINE_CODEX_DIR LIMITLINE_BAR_WIDTH LIMITLINE_NOCACHE
@@ -105,17 +106,17 @@ fi
 # ISO-8601 reset matches the unix timestamp used in full.json (2025-11-02T05:42:00Z).
 iso_got=$(printf '%s' '{"model":{"display_name":"Opus 5.5"},"rate_limits":{"five_hour":{"used_percentage":62,"resets_at":"2025-11-02T05:42:00Z"}}}' | "$BIN" | strip_ansi)
 iso_got=${iso_got%$'\n'}
-check "iso-reset" "$iso_got" "Opus 5.5 │ 5h ▓▓▓░░ 62% ↻1h42m"
+check "iso-reset" "$iso_got" "Opus 5.5 │ 5h ▓▓▓░░ +62% ↻1h42m"
 
 # Alternate context field name.
 alt_got=$(printf '%s' '{"context":{"used_percentage":12}}' | "$BIN" | strip_ansi)
 alt_got=${alt_got%$'\n'}
-check "alt-context" "$alt_got" "ctx 12%"
+check "alt-context" "$alt_got" "ctx ▓░░░░ ·12%"
 
 # Spend computed from dollars when the percentage is absent.
 spend_got=$(printf '%s' '{"rate_limits":{"spend_limit":{"used_usd":2,"limit_usd":8}}}' | "$BIN" | strip_ansi)
 spend_got=${spend_got%$'\n'}
-check "spend-computed" "$spend_got" 'spend ▓░░░░ 25% $2/$8'
+check "spend-computed" "$spend_got" 'spend ▓░░░░ ·25% $2/$8'
 
 # Codex segment uses the last rate_limits event in the newest log, when it is under 6h old.
 fresh_dir="$TEST_HOME/fresh"
@@ -151,7 +152,7 @@ color = on
 EOF
 cfg_got=$(LIMITLINE_CONFIG="$cfg" LIMITLINE_CODEX=0 "$BIN" < "$FIX/full.json" | strip_ansi)
 cfg_got=${cfg_got%$'\n'}
-check "config-bar-width" "$cfg_got" "Opus 5.5 │ 5h ▓ 62% ↻1h42m │ 7d ░ 38% ↻Thu 09:00 │ ctx 41%"
+check "config-bar-width" "$cfg_got" 'Opus 5.5 │ ctx ░ ·41% │ 5h ▓ +62% ↻1h42m │ 7d ░ ·38% ↻Thu 09:00 │ $1.25'
 
 env_got=$(LIMITLINE_CONFIG="$cfg" LIMITLINE_BAR_WIDTH=5 LIMITLINE_CODEX=0 "$BIN" < "$FIX/full.json" | strip_ansi)
 env_got=${env_got%$'\n'}
@@ -162,14 +163,14 @@ cache="$TMPDIR/limitline-codex-$(id -u).cache"
 printf '%s\n' "$(date +%s) 1 12 - 55 -" > "$cache"
 cached_got=$(LIMITLINE_CONFIG=/dev/null LIMITLINE_CODEX=1 "$BIN" < "$FIX/no_rate_limits.json" | strip_ansi)
 cached_got=${cached_got%$'\n'}
-check "codex-cache" "$cached_got" "Opus 5.5 │ ctx 41% │ codex 5h 12% · 7d 55%"
+check "codex-cache" "$cached_got" 'Opus 5.5 │ ctx ▓▓░░░ ·41% │ $0.12 │ codex 5h ·12% · 7d +55%'
 rm -f "$cache"
 
 # Debug dump writes stdin and does not change the line.
 debug_file="$TEST_HOME/debug.json"
 debug_got=$(LIMITLINE_DEBUG=1 LIMITLINE_DEBUG_FILE="$debug_file" "$BIN" < "$FIX/no_rate_limits.json" | strip_ansi)
 debug_got=${debug_got%$'\n'}
-check "debug-stdout" "$debug_got" "Opus 5.5 │ ctx 41%"
+check "debug-stdout" "$debug_got" 'Opus 5.5 │ ctx ▓▓░░░ ·41% │ $0.12'
 if cmp -s "$FIX/no_rate_limits.json" "$debug_file"; then
   check "debug-file" "match" "match"
 else
