@@ -51,3 +51,21 @@ The bundled user guide is explicit: the stdin JSON has model, context, cost, and
 ## Gemini / Antigravity
 
 `agy` 1.4.12 writes `~/.gemini/antigravity-cli/cli.log`. When the account is exhausted the log contains an error like `RESOURCE_EXHAUSTED (code 429): Individual quota reached. … Resets in <duration>`. The line is prefixed with a Go log stamp (`EMMDD HH:MM:SS`, month and day, no year). `~/.gemini/state.json` only tracks banner and tip counters. There is no structured quota file. limitline can read that one log line as "quota reached, 100%, reset after the stated duration" and otherwise reports nothing. It does not read OAuth files or conversation transcripts.
+
+A Pharos run whose `tool` is `agy` and whose `status` is `paused-quota` carries `resume_at`. That is the same 100% window. Run logs can also contain the `quota reached` / `Resets in` line.
+
+## Grok session ledger
+
+`~/.grok/sessions/<scope>/<id>/usage.json` is still not an account quota. The fields present are `sessionId`, `updatedAt`, and `session` / `turns` objects with `inputTokens`, `outputTokens`, `cachedReadTokens`, `cacheCreationTokens`, `reasoningTokens`, `totalTokens`, `modelCalls`, `costUsdTicks`, `turnCount`, and `primaryModelId`. `modelUsage` repeats those counters per model id. There is no reset time and no used-percent. limitline keeps the Grok window empty and labels the source `usage.json`.
+
+## Cursor usage objects
+
+No quota file turned up in a shallow listing of `~/.cursor` (`usage.json` / `ai-usage.json` at the top of that directory would be read if one is added later). Pharos stores cursor-agent stream-json on `~/.pharos/runs/<id>/stdout.log`. Usage objects on those lines use `input_tokens`, `output_tokens`, `cached_input_tokens`, `cache_write_input_tokens`, and `reasoning_output_tokens`. limitline sums input and output tokens from cursor runs in the last seven days, or from `LIMITLINE_CURSOR_LOG`, and divides by `cursor_week_tokens` (default 1,000,000) to estimate a weekly percent. The estimate is capped at 100. It is not an account balance.
+
+## Pharos runs
+
+Pharos is optional. Each run is `~/.pharos/runs/<id>/state.json` with `id`, `status`, `tool`, `repo`, `started_at`, and sometimes `resume_at`. Status values limitline counts are `starting`, `running`, `stalled`, `awaiting-verify`, `failed`, `verify-failed`, and `paused-quota`. `stalled` means no log or commit growth. `paused-quota` means a usage-limit line with a clock time to retry. `done` is only after verify. A machine list, when present, is `~/.pharos/machines.json` as `{"hosts":[{"name":"mini","ssh":"mini"}]}`. There is no hard dependency: missing files produce an empty segment.
+
+## Ollama on a worker
+
+`limitline refresh` asks each configured host, over SSH with `BatchMode` and a connect timeout, for load average, CPU count, physical memory, `memory_pressure`, `ollama ps`, and `ollama list`. Load percent is the one-minute load divided by the CPU count. The loaded model is the first `ollama ps` row. A warning is recorded when that model would leave free memory under 15% (the free percentage from `memory_pressure`, or total memory minus the model size). The status line reads the cached summary and does not open SSH.

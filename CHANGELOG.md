@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.4.0
+
+- Fleet segment for Pharos runs, or a local process scan when Pharos is absent. `⚠` marks a stalled or quota-paused run. Status, watch, and SwiftBar list runs and can open a run log.
+- Machines segment from a background SSH refresh (60-second cache, strict timeout). Load, the loaded Ollama model, installed models, and a memory warning under 15% free. Unreachable hosts show `∅`.
+- Cursor weekly estimate from local usage objects, Antigravity pause times from run state, and an API ledger row when one exists. The tightest provider is listed first.
+- Nudges name the roomiest measured tool and an idle worker, such as `→ codex 12% · mini idle`.
+
 ## 0.3.0
 
 - Pace against the window, sparklines from local snapshots, fresh reset wording, and a one-time sparkle after a reset.
