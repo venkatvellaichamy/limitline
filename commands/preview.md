@@ -9,7 +9,7 @@ allowed-tools: Bash
 Render the status line with the sample session below. Do not edit settings.
 
 1. Resolve the script as `"${CLAUDE_PLUGIN_ROOT}/bin/limitline"`. If `CLAUDE_PLUGIN_ROOT` is empty, use `bin/limitline` from the repository that contains this command.
-2. Run `preview` so the user sees minimal, ascii, and powerline. Then run the sample once more with colour left on, and once with `NO_COLOR=1`.
+2. Run `preview` so the user sees minimal, ascii, powerline, pill, emoji, and mono. Then run the sample once more with colour left on, and once with `NO_COLOR=1`.
 3. Explain the segments in one sentence each: model, context, 5-hour limit, weekly limit. Codex is omitted here because this sample has no local Codex log.
 
 ```bash
@@ -25,6 +25,12 @@ Opus 5.5 │ ctx ▓▓░░░ ·41% │ 5h ▓▓▓░░ +62% ↻1h42m │ 
 Opus 5.5 | ctx ##--- ·41% | 5h ###-- +62% in 1h42m | 7d ##--- ·38% in Thu 09:00
 ## powerline
 Opus 5.5  ctx ██░░░ ·41%  5h ███░░ +62% ↻1h42m  7d ██░░░ ·38% ↻Thu 09:00
+## pill
+⟨Opus 5.5⟩ ⟨ctx ▓▓░░░ ·41%⟩ ⟨5h ▓▓▓░░ +62% ↻1h42m⟩ ⟨7d ▓▓░░░ ·38% ↻Thu 09:00⟩
+## emoji
+🧠 Opus 5.5 │ 🪟 ctx ▓▓░░░ ·41% │ ⏱ 5h ▓▓▓░░ +62% ⏳1h42m │ 📅 7d ▓▓░░░ ·38% ⏳Thu 09:00
+## mono
+Opus 5.5  ctx 41%  5h 62% in 1h42m  7d 38% in Thu 09:00
 ```
 
 The same sample, if you need to call the renderer directly:

@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.3.0
+
+- Pace against the window, sparklines from local snapshots, fresh reset wording, and a one-time sparkle after a reset.
+- Opt-in nudges, an estimated weekly value, and session vitals. Each one can be turned off.
+- Optional terminal bell or macOS notification at 80% and 95%, once per window, with quiet hours.
+- `limitline report` (and `--md`), `limitline watch`, and an opt-in synced folder so two Macs share snapshots. No network.
+- Themes `pill`, `emoji`, and `mono`, and a `/limitline:theme` picker.
+
 ## 0.2.0
 
 - Claude Code line can show style, a context bar, auto-compact warning, spend, cost, pace, git, PR, cold cache, and vim mode. Segments are toggleable. Themes are minimal, powerline, and ascii.

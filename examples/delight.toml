@@ -1,0 +1,12 @@
+theme = "pill"
+bar_width = 5
+lines = 1
+pace = "on"
+spark = "on"
+fresh = "on"
+nudges = "on"
+vitals = "on"
+# value = "on"
+# alerts = "bell"
+# quiet = "22-7"
+# sync_dir = ""

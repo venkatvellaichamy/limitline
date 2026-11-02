@@ -30,7 +30,39 @@ Opus 5.5  ctx ██░░░ ·41%  5h ███░░ +62% ↻1h42m  7d ██
 Opus 5.5 | ctx ##--- ·41% | 5h ###-- +62% in 1h42m | 7d ##--- ·38% in Thu 09:00 | $1.25
 ```
 
-Presets live in `examples/`. `limitline preview` prints all three from the same sample.
+`pill` puts each segment in a rounded chip:
+
+```
+⟨Opus 5.5⟩ ⟨ctx ▓▓░░░ ·41%⟩ ⟨5h ▓▓▓░░ +62% ↻1h42m⟩ ⟨7d ▓▓░░░ ·38% ↻Thu 09:00⟩ ⟨$1.25⟩
+```
+
+`emoji`:
+
+```
+🧠 Opus 5.5 │ 🪟 ctx ▓▓░░░ ·41% │ ⏱ 5h ▓▓▓░░ +62% ⏳1h42m │ 📅 7d ▓▓░░░ ·38% ⏳Thu 09:00 │ 💵 $1.25
+```
+
+`mono` is plain text. It stays plain even when colour is on:
+
+```
+Opus 5.5  ctx 41%  5h 62% in 1h42m  7d 38% in Thu 09:00  $1.25
+```
+
+Presets live in `examples/`. `limitline preview` and `limitline theme` print every theme from the same sample. `/limitline:theme` is the same picker inside Claude Code.
+
+With pace, sparklines, and fresh wording turned on, the same session looks like this:
+
+```
+Opus 5.5 │ ctx ▓▓░░░ ·41% │ 5h ▓▓▓░░ +62% fresh in 1h42m │ 5h ▁▃▅▆▅ 62% │ 7d ▓▓░░░ ·38% fresh Thu 09:00 │ 7d ▁▃▃▅▅▇▄ 38% │ ~15%/day left for 4d │ $1.25
+```
+
+## Why limitline
+
+The number you care about is already on the machine: the status payload Claude Code just handed you, the newest Codex log line, a snapshot from the last prompt. limitline turns that into one row you can read without opening a dashboard. It does not phone home, and a missing field is skipped instead of guessed.
+
+## Doing it by hand
+
+Check Claude's usage screen, note the 5-hour and weekly percents and when they reset, then do the same for Codex, remember that Cursor and Grok do not publish a local quota, and skim the Gemini log for a quota line. Repeat that every time the window moves. limitline reads those local files once per prompt and prints the row. The switches below add pace, a sparkline, a nudge, or a second machine when you want them, and each one can be turned off.
 
 ## Install with the plugin
 
@@ -44,7 +76,7 @@ Inside Claude Code:
 
 `/limitline:install` backs up `~/.claude/settings.json`, keeps every other key, and asks before replacing an existing `statusLine`. It points `statusLine` at the installed `bin/limitline`.
 
-`/limitline:preview` prints a sample line. `/limitline:config` prints a config template and does not write it. `/limitline:doctor` names the tools on `PATH` and which stdin fields are present, without printing their values. `/limitline:uninstall` removes the limitline status line and leaves the rest of the file alone.
+`/limitline:preview` prints a sample line. `/limitline:theme` previews every theme. `/limitline:config` prints a config template and does not write it. `/limitline:doctor` names the tools on `PATH` and which stdin fields are present, without printing their values. `/limitline:uninstall` removes the limitline status line and leaves the rest of the file alone.
 
 ## Manual install
 
@@ -92,6 +124,12 @@ Each segment can be turned off or reordered with `segments` in the config file.
 | Vim | `.vim.mode` |
 | Codex | newest local Codex rate-limit event under 6 hours old |
 | Session | first 6 characters of `.session_id`. Off unless you opt in |
+| Pace | `▲ ahead of pace` or `▼ under pace` when usage and elapsed time differ by 8 points or more, plus `~15%/day left for 4d` on the weekly window. Off until `pace = "on"` |
+| Sparkline | `5h ▁▃▅▆▅ 62%` from local snapshots, and a 7-day daily history. Off until `spark = "on"` |
+| Fresh | `fresh in 1h42m`, and `✨` on the first prompt after usage drops into a new window. Off until `fresh = "on"` |
+| Nudge | `→ codex 12%`, `→ cursor ok`, or `↯ compact soon: /compact`. Off until `nudges = "on"` |
+| Value | `≈ $412 of value this week`, an estimate. Off until `value = "on"` |
+| Vitals | session duration, auto-compactions, lines, and the cost trend. Off until `vitals = "on"` |
 
 A second line is `lines = 2` or `LIMITLINE_LINES=2`. When `COLUMNS` or `LIMITLINE_COLUMNS` is set, the lowest-priority segments drop until the row fits.
 
@@ -132,18 +170,88 @@ auto_compact_warn = 80
 segments = ["model", "style", "context", "limits", "burn", "cost", "git", "pr", "cache", "vim"]
 ```
 
-`limitline config` prints that template and does not write it.
+`limitline config` prints that template and does not write it. The block below is the quiet default. `examples/delight.toml` turns on pace, sparklines, fresh wording, nudges, and vitals.
+
+```toml
+# pace = "on"
+# spark = "on"
+# nudges = "on"
+# fresh = "on"
+# value = "on"
+# vitals = "on"
+# alerts = "off"
+# quiet = "22-7"
+# sync_dir = ""
+```
+
+## Pace
+
+Pace compares the percent you have used with the percent of that window that has already elapsed. The 5-hour window is 5 hours ending at `resets_at`. The weekly window is 7 days ending at its `resets_at`. A gap of 8 points or more is `▲ 5h ahead of pace` (painted with the same yellow and red as the meter) or `▼ 7d under pace` (green). The weekly segment also shows the budget that is left, such as `~15%/day left for 4d`, when at least one day remains. `pace = "off"` or `LIMITLINE_PACE=0` removes it. Naming `pace` in `segments` turns it on without the env var.
+
+## Sparklines
+
+With `spark = "on"`, each status line stores the current percent under `~/.cache/limitline/`. The 5-hour file is the same one the burn projection reads. The 5-hour sparkline is the last five samples (`▁` through `█`). The weekly sparkline keeps the last sample of each UTC day for seven days: `7d ▁▃▃▅▅▇▄ 38%`. One sample is not enough to draw, so the first prompt stays unchanged.
+
+## Nudges
+
+`nudges = "on"` adds a short hint. When the Claude 5-hour meter is over 80%, limitline looks at the other local tools and suggests the one with the most room: `→ codex 12%` when a measured window is under 50%, or `→ cursor ok` when nothing measured is roomy and Cursor has no local quota. When context is at the auto-compact warning line, the nudge is `↯ compact soon: /compact`. A cold prompt cache still prints its reason (`cache cold: tools`). If the cache segment is off, the nudge carries that reason instead.
+
+## Reset moments
+
+`fresh = "on"` replaces `↻1h42m` with `fresh in 1h42m`, and a later reset with `fresh Thu 09:00`. When a 5-hour reading falls from 40% or more to 20% or less, the next line starts with `✨`. That mark is stored next to the reset time and is not shown again for the same window.
+
+## Value meter
+
+`value = "on"` reads a local cost file and prints `≈ $412 of value this week`. The default file is `~/.claude/stats-cache.json`. `LIMITLINE_VALUE_FILE` points somewhere else. A `week_usd` (or `total_cost`) field is used as the number. Token counts are priced with the estimate table below, which is not an invoice. Amounts of $10 or more are rounded to the dollar.
+
+| Family | Input / million | Output / million |
+| --- | --- | --- |
+| opus | $5 | $25 |
+| sonnet | $3 | $15 |
+| haiku | $1 | $5 |
+| anything else | $3 | $15 |
+
+## Session vitals
+
+`vitals = "on"` replaces the cost segment with one session summary: `session 3m · compact ×2 · +10 -2 · $1.25↑`. Duration and line counts come from the cost object. The compaction count is `context_window.auto_compact_count` or `cost.auto_compactions`. The arrow compares this cost with the previous local sample: `↑` higher, `↓` lower, `·` flat.
+
+## Alerts
+
+`alerts` is `off`, `bell`, or `notify`. `bell` rings the terminal. `notify` asks macOS Notification Center through `osascript`. A crossing of 80% and of 95% on the 5-hour window alerts once for that reset time. Jumping straight past 95% marks 80% as already sent. `quiet = "22-7"` is quiet from 22:00 inclusive until 07:00, including overnight. A quiet hour does not count as the one alert, so it can still fire later in the same window. `LIMITLINE_ALERTS` overrides the file.
+
+## Report
+
+`limitline report` prints usage bars for each tool, the last week of local 5-hour samples by day, the busiest hours, the project folder names that showed up most, and the resets that are still ahead. Names are the last path segment only. A full path is dropped. `limitline report --md` prints the same facts as Markdown.
+
+## Watch
+
+`limitline watch` redraws every tool side by side every 5 seconds. In a terminal it clears the screen first. If stdout is not a terminal, or `LIMITLINE_WATCH_ONCE=1`, it prints one frame and exits.
+
+## More than one Mac
+
+Set `sync_dir` or `LIMITLINE_SYNC_DIR` to a folder you already sync, such as an iCloud or Dropbox directory. Each machine writes its own snapshot there. `limitline status`, `report`, and `watch` keep the higher percent for a shared window and mark it `×2` when two machines reported it. Nothing is uploaded by limitline. `LIMITLINE_HOST` sets the folder name; otherwise the short hostname is used, with characters outside letters, digits, and `-` removed.
 
 | Variable | Meaning |
 | --- | --- |
-| `LIMITLINE_THEME` | `minimal`, `powerline`, or `ascii` |
+| `LIMITLINE_THEME` | `minimal`, `powerline`, `ascii`, `pill`, `emoji`, or `mono` |
 | `LIMITLINE_ASCII` | `1` forces `ascii` |
 | `LIMITLINE_LINES` | `1` or `2` |
-| `LIMITLINE_SEGMENTS` | Comma-separated segment names |
+| `LIMITLINE_SEGMENTS` | Comma-separated segment names. Include `pace`, `spark`, `fresh`, `nudge`, `value`, or `vitals` to turn that segment on |
 | `LIMITLINE_BAR_WIDTH` | Bar length, 1–40, default 5 |
 | `LIMITLINE_GIT` | `1` or `0`. Default on, but only when the payload has a directory |
 | `LIMITLINE_SESSION` | `1` shows the short session id |
-| `LIMITLINE_BURN` | `0` hides the pace projection |
+| `LIMITLINE_BURN` | `0` hides the `pace ~1h35m` projection from recent 5-hour samples |
+| `LIMITLINE_PACE` | `1` shows ahead/under pace. `0` hides it |
+| `LIMITLINE_SPARK` | `1` draws sparklines |
+| `LIMITLINE_FRESH` | `1` uses fresh wording and the sparkle |
+| `LIMITLINE_NUDGES` | `1` adds the short hints |
+| `LIMITLINE_VALUE` | `1` shows the weekly estimate |
+| `LIMITLINE_VALUE_FILE` | Cost or token JSON for the estimate |
+| `LIMITLINE_VITALS` | `1` shows session vitals |
+| `LIMITLINE_ALERTS` | `off`, `bell`, or `notify` |
+| `LIMITLINE_QUIET` | Quiet hours, such as `22-7` |
+| `LIMITLINE_SYNC_DIR` | Folder of per-machine snapshots |
+| `LIMITLINE_HOST` | This machine's name inside that folder |
 | `LIMITLINE_LINKS` | `1` adds OSC 8 links for a `owner/name` repo |
 | `LIMITLINE_CODEX` | `auto` (default), `1`, or `0` |
 | `LIMITLINE_COLUMNS` | Width cap. `COLUMNS` is used when this is unset |
@@ -154,7 +262,7 @@ segments = ["model", "style", "context", "limits", "burn", "cost", "git", "pr", 
 
 ## Privacy
 
-limitline reads the status JSON a host already pipes in, an optional local config file, a cache directory it writes itself, and the local files named above. It does not send them anywhere. It does not read API keys or OAuth tokens. Debug output stays in the cache file you opted into. Session id display is off unless `LIMITLINE_SESSION=1`.
+limitline reads the status JSON a host already pipes in, an optional local config file, a cache directory it writes itself, and the local files named above. It does not send them anywhere. It does not read API keys or OAuth tokens. Debug output stays in the cache file you opted into. Session id display is off unless `LIMITLINE_SESSION=1`. The value file is read only when the value meter is on, and only for cost and token counts. The report keeps project folder names, not full paths. A sync folder is written only when you set one.
 
 ## Tests
 
@@ -162,4 +270,4 @@ limitline reads the status JSON a host already pipes in, an optional local confi
 tests/run.sh
 ```
 
-Fixtures cover a full payload, no rate limits, spend only, a near reset, usage over 80%, a context window near auto-compact, a cold prompt cache, a 60-column row, and the three themes. ANSI colour codes are stripped before the comparison. The same fixtures are rendered once with `jq` and once with the python3 fallback. Provider fixtures are synthetic.
+Fixtures cover a full payload, no rate limits, spend only, a near reset, usage over 80%, a context window near auto-compact, a cold prompt cache, a 60-column row, and every theme. The same script covers pace, sparklines, fresh wording, nudges, the value estimate, session vitals, alerts, the report, watch, and a two-machine merge. ANSI colour codes are stripped before the comparison. The same fixtures are rendered once with `jq` and once with the python3 fallback. Provider fixtures are synthetic.

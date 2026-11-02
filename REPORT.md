@@ -110,3 +110,9 @@ Checked again for 0.2.0 against the local session logs. No session text and no p
 ### Plugin manifests
 
 `claude plugin validate` passed again for the plugin directory and for `.claude-plugin/marketplace.json` at version 0.2.0. The same non-blocking `ICON_MISSING` warning remains. `~/.claude/settings.json`, Codex config, Cursor config, and Grok config were not modified. Installers were run only in print mode, plus Codex `--write`, which refuses.
+
+## Phase 3
+
+`tests/run.sh`: 97 passed, 0 failed. A warm run of the full fixture averaged 44 ms. New segments stay off unless the config or an environment variable turns them on, so the 0.2.0 fixture lines are unchanged.
+
+Pace on the full fixture adds `~15%/day left for 4d`. The over-80 fixture is ahead on both windows. The near-reset weekly window is under pace. A seeded history draws `5h ▁▃▅▆▅ 62%` and a seven-day `7d ▁▃▃▅▅▇▄ 38%`. Fresh wording and a single `✨` after a drop are covered. Nudges suggest `cursor ok` or `codex 12%`, and they name `/compact` near auto-compact. The value line is `≈ $412 of value this week` from a local cost field, or `≈ $10 of value this week` from token counts. Session vitals replace the cost segment. Alerts record 80 and 95 once per reset, stay quiet from 22:00 to 07:00, and a bell writes the terminal bell. `report` and `report --md` include project basenames and omit a full path planted in the activity file. `watch` prints one side-by-side frame. Two snapshot folders merge to `5h 80% ×2`. Themes pill, emoji, and mono match the README heroes.
