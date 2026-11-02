@@ -31,7 +31,15 @@ unset NO_COLOR LIMITLINE_DEBUG LIMITLINE_DEBUG_FILE LIMITLINE_CODEX_DIR LIMITLIN
   LIMITLINE_CLAUDE_SNAPSHOT LIMITLINE_GROK_DIR LIMITLINE_GEMINI_LOG LIMITLINE_STALE_MINUTES \
   LIMITLINE_PACE LIMITLINE_SPARK LIMITLINE_NUDGES LIMITLINE_FRESH LIMITLINE_VALUE LIMITLINE_VITALS \
   LIMITLINE_ALERTS LIMITLINE_QUIET LIMITLINE_SYNC_DIR LIMITLINE_HOST LIMITLINE_VALUE_FILE \
-  LIMITLINE_ALERT_LOG LIMITLINE_WATCH_ONCE
+  LIMITLINE_ALERT_LOG LIMITLINE_WATCH_ONCE \
+  LIMITLINE_FLEET LIMITLINE_MACHINES LIMITLINE_FLEET_LINE LIMITLINE_MACHINES_LINE \
+  LIMITLINE_FLEET_TTL LIMITLINE_MACHINES_TTL LIMITLINE_PHAROS_RUNS LIMITLINE_PHAROS_HOME \
+  LIMITLINE_HOSTS LIMITLINE_MACHINE_DIR LIMITLINE_MACHINES_JSON LIMITLINE_LEDGER \
+  LIMITLINE_CURSOR_LOG LIMITLINE_CURSOR_DIR LIMITLINE_CURSOR_WEEK_TOKENS LIMITLINE_PS_FILE \
+  LIMITLINE_SSH_TIMEOUT LIMITLINE_MEM_WARN
+: > "$TEST_HOME/empty-ps"
+export LIMITLINE_PS_FILE="$TEST_HOME/empty-ps"
+export LIMITLINE_REFRESH=0
 
 fail=0
 pass=0
@@ -302,10 +310,10 @@ export LIMITLINE_CODEX_DIR="$codex_prov"
 export LIMITLINE_GROK_DIR="$TEST_HOME/grok"
 export LIMITLINE_GEMINI_LOG="$FIX/providers/gemini-cli.txt"
 status_got=$("$BIN" status)
-check "status-table" "$status_got" "$(printf '%s\n' 'tool     limits' 'claude   5h 62% · 7d 38%' 'codex    5h 12% · 7d 55%' 'cursor   no local quota' 'grok     session tokens only' 'gemini   quota 100%')"
+check "status-table" "$status_got" "$(printf '%s\n' 'tool     limits' 'gemini   quota 100%' 'claude   5h 62% · 7d 38%' 'codex    5h 12% · 7d 55%' 'cursor   no local quota' 'grok     session tokens only')"
 
 host_got=$("$BIN" --host prompt)
-check "host-prompt" "$host_got" 'claude 5h 62% · 7d 38% | codex 5h 12% · 7d 55% | gemini quota 100%'
+check "host-prompt" "$host_got" 'gemini quota 100% | claude 5h 62% · 7d 38% | codex 5h 12% · 7d 55%'
 
 swift_got=$("$BIN" --host swiftbar)
 printf '%s' "$swift_got" | grep -q -F '5h 62%' && printf '%s' "$swift_got" | grep -q -F -- '---' \
@@ -523,6 +531,104 @@ printf '%s' "$sync_got" | grep -q -F '5h 80% ×2' && printf '%s' "$sync_got" | g
   && check "sync-merge" "yes" "yes" || check "sync-merge" "$sync_got" "merged"
 test -f "$sync_dir/mini/claude.json" && check "sync-publish" "yes" "yes" || check "sync-publish" "no" "yes"
 
+# Fleet from Pharos state files, otherwise a process list. Paths stay as basenames.
+fleet_line=$(LIMITLINE_PHAROS_RUNS="$FIX/fleet/runs" "$ROOT/lib/fleet.py")
+fleet_line=${fleet_line%$'\n'}
+check "fleet-segment" "$fleet_line" '⚙ 3 run · 1 ✗'
+stalled_line=$(LIMITLINE_PHAROS_RUNS="$FIX/fleet/stalled" "$ROOT/lib/fleet.py")
+stalled_line=${stalled_line%$'\n'}
+check "fleet-stalled" "$stalled_line" '⚙ 1 run ⚠'
+paused_line=$(LIMITLINE_PHAROS_RUNS="$FIX/fleet/paused" "$ROOT/lib/fleet.py")
+paused_line=${paused_line%$'\n'}
+check "fleet-paused" "$paused_line" '⚙ ⚠'
+verify_line=$(LIMITLINE_PHAROS_RUNS="$FIX/fleet/verify" "$ROOT/lib/fleet.py")
+verify_line=${verify_line%$'\n'}
+check "fleet-verify" "$verify_line" '⚙ 1 verify'
+ps_line=$(LIMITLINE_PHAROS_RUNS="$TEST_HOME/no-such-runs" LIMITLINE_PS_FILE="$FIX/fleet/ps.txt" "$ROOT/lib/fleet.py")
+ps_line=${ps_line%$'\n'}
+check "fleet-process-scan" "$ps_line" '⚙ 5 run'
+
+fleet_status=$(LIMITLINE_PHAROS_RUNS="$FIX/fleet/runs" "$BIN" status)
+printf '%s' "$fleet_status" | grep -q -F '⚙ 3 run · 1 ✗' \
+  && printf '%s' "$fleet_status" | grep -q -F 'run-a  cursor  demo  running  12m' \
+  && printf '%s' "$fleet_status" | grep -q -F 'run-d  grok  widget  failed  30m' \
+  && ! printf '%s' "$fleet_status" | grep -q -F '/var' \
+  && check "fleet-status" "yes" "yes" || check "fleet-status" "$fleet_status" "runs section"
+
+# Machines come from a cache. Refresh reads fixtures and does not open ssh.
+ssh_dir="$TEST_HOME/sshbin"
+mkdir -p "$ssh_dir"
+printf '%s\n' '#!/bin/sh' 'echo called > "$HOME/ssh.flag"' 'exit 1' > "$ssh_dir/ssh"
+chmod +x "$ssh_dir/ssh"
+rm -f "$TEST_HOME/ssh.flag"
+PATH="$ssh_dir:$PATH" LIMITLINE_HOSTS=mini,worker-1 LIMITLINE_MACHINE_DIR="$FIX/machines" "$BIN" refresh
+if [[ -f "$TEST_HOME/ssh.flag" ]]; then
+  check "machines-no-ssh" "called" "quiet"
+else
+  check "machines-no-ssh" "quiet" "quiet"
+fi
+machines_line=$(cat "$XDG_CACHE_HOME/limitline/machines.line")
+machines_line=${machines_line%$'\n'}
+check "machines-segment" "$machines_line" 'mini 27% qwen3:14b · worker-1 ∅'
+LIMITLINE_HOSTS=laptop LIMITLINE_MACHINE_DIR="$FIX/machines" "$BIN" refresh
+laptop_line=$(cat "$XDG_CACHE_HOME/limitline/machines.line")
+laptop_line=${laptop_line%$'\n'}
+check "machines-mem-warn" "$laptop_line" 'laptop 10% qwen3:14b ⚠'
+machine_status=$(LIMITLINE_HOSTS=mini LIMITLINE_MACHINE_DIR="$FIX/machines" "$BIN" refresh >/dev/null; "$BIN" status)
+printf '%s' "$machine_status" | grep -q -F 'mini 27% qwen3:14b · 2 installed' \
+  && check "machines-installed" "yes" "yes" || check "machines-installed" "$machine_status" "installed"
+mkdir -p "$TEST_HOME/.pharos"
+cp "$FIX/fleet/pharos-machines.json" "$TEST_HOME/.pharos/machines.json"
+env -u LIMITLINE_HOSTS LIMITLINE_MACHINE_DIR="$FIX/machines" "$BIN" refresh
+pharos_hosts=$(cat "$XDG_CACHE_HOME/limitline/machines.line")
+pharos_hosts=${pharos_hosts%$'\n'}
+check "machines-pharos-list" "$pharos_hosts" 'mini 27% qwen3:14b · worker-1 ∅'
+
+# Warm caches stay on the hot path: one line each, no python and no ssh.
+LIMITLINE_PHAROS_RUNS="$FIX/fleet/runs" LIMITLINE_HOSTS=mini LIMITLINE_MACHINE_DIR="$FIX/machines" "$BIN" refresh
+hot_payload='{"model":{"display_name":"Opus"}}'
+hot_got=$(printf '%s' "$hot_payload" | NO_COLOR=1 LIMITLINE_SEGMENTS=machines,fleet,model "$BIN" | strip_ansi)
+hot_got=${hot_got%$'\n'}
+check "hot-fleet-machines" "$hot_got" 'mini 27% qwen3:14b │ ⚙ 3 run · 1 ✗ │ Opus'
+touch -t 202001010000 "$XDG_CACHE_HOME/limitline/fleet.line" "$XDG_CACHE_HOME/limitline/machines.line"
+stale_got=$(printf '%s' "$hot_payload" | NO_COLOR=1 LIMITLINE_SEGMENTS=machines,fleet,model "$BIN" | strip_ansi)
+printf '%s' "$stale_got" | grep -q -F '⚙' && check "hot-cache-stale" "shown" "hidden" || check "hot-cache-stale" "hidden" "hidden"
+LIMITLINE_PHAROS_RUNS="$FIX/fleet/runs" LIMITLINE_HOSTS=mini LIMITLINE_MACHINE_DIR="$FIX/machines" "$BIN" refresh
+
+sb_root="$TEST_HOME/sb-runs"
+mkdir -p "$sb_root/run-a"
+cp "$FIX/fleet/runs/run-a/state.json" "$sb_root/run-a/state.json"
+printf '%s\n' 'ok' > "$sb_root/run-a/stdout.log"
+swift_runs=$(LIMITLINE_PHAROS_RUNS="$sb_root" "$BIN" --host swiftbar)
+printf '%s' "$swift_runs" | grep -q -F 'Fleet' && printf '%s' "$swift_runs" | grep -q -F 'bash=/usr/bin/open' \
+  && printf '%s' "$swift_runs" | grep -q -F 'stdout.log' \
+  && check "swiftbar-run-log" "yes" "yes" || check "swiftbar-run-log" "$swift_runs" "open log"
+
+cursor_got=$(LIMITLINE_CURSOR_LOG="$FIX/providers/cursor-usage.jsonl" "$ROOT/providers/cursor")
+cursor_got=${cursor_got%$'\n'}
+check "provider-cursor-estimate" "$cursor_got" '{"observed_at":1762056000,"provider":"cursor","source":"estimate","stale":false,"windows":[{"name":"7d","used_pct":11}]}'
+agy_root="$TEST_HOME/agy-runs"
+mkdir -p "$agy_root/run-agy"
+cp "$FIX/providers/agy-state.json" "$agy_root/run-agy/state.json"
+agy_got=$(LIMITLINE_GEMINI_LOG="$TEST_HOME/missing-gemini-log" LIMITLINE_PHAROS_RUNS="$agy_root" "$ROOT/providers/gemini")
+agy_got=${agy_got%$'\n'}
+check "provider-agy" "$agy_got" '{"observed_at":1762052400,"provider":"gemini","source":"pharos","stale":false,"windows":[{"name":"quota","resets_at":1762066800,"used_pct":100}]}'
+spend_got=$(LIMITLINE_LEDGER="$FIX/providers/ledger.jsonl" "$ROOT/providers/spend")
+spend_got=${spend_got%$'\n'}
+check "provider-spend" "$spend_got" '{"observed_at":1762056000,"provider":"api","source":"ledger","stale":false,"windows":[{"name":"spend","usd":0.25}]}'
+spend_status=$(LIMITLINE_LEDGER="$FIX/providers/ledger.jsonl" LIMITLINE_CLAUDE_SNAPSHOT="$TEST_HOME/claude-snapshot.json" LIMITLINE_CODEX_DIR="$codex_prov" LIMITLINE_GROK_DIR="$TEST_HOME/grok" LIMITLINE_GEMINI_LOG="$FIX/providers/gemini-cli.txt" "$BIN" status)
+printf '%s' "$spend_status" | head -n 2 | grep -q -F 'gemini' \
+  && printf '%s' "$spend_status" | grep -q -F 'api      spend $0.25' \
+  && check "provider-order" "yes" "yes" || check "provider-order" "$spend_status" "constrained first"
+
+nudge_v2=$(NO_COLOR=1 LIMITLINE_NUDGES=1 LIMITLINE_CODEX_DIR="$fresh_dir" LIMITLINE_MACHINES_JSON="$FIX/machines/idle.json" "$BIN" < "$FIX/over_80.json" | strip_ansi)
+printf '%s' "$nudge_v2" | grep -q -F '→ codex 12% · mini idle' \
+  && check "nudge-v2" "yes" "yes" || check "nudge-v2" "$nudge_v2" "codex and idle machine"
+cfg_out=$("$BIN" config)
+printf '%s' "$cfg_out" | grep -q -F 'hosts = ["mini", "worker-1"]' \
+  && printf '%s' "$cfg_out" | grep -q -F 'mem_free_warn = 15' \
+  && check "config-fleet" "yes" "yes" || check "config-fleet" "no" "yes"
+
 # Typical speed without the Codex scan: average of 8 runs after one warmup.
 "$BIN" < "$FIX/full.json" >/dev/null
 speed_ms=$(BIN="$BIN" FIX="$FIX" python3 -c '
@@ -542,6 +648,31 @@ if [[ "$speed_ms" -le 50 ]]; then
   check "speed-${speed_ms}ms" "fast" "fast"
 else
   check "speed-${speed_ms}ms" "slow" "fast"
+fi
+
+# Warm fleet and machine caches, still with no ssh and no provider scan.
+LIMITLINE_PHAROS_RUNS="$FIX/fleet/runs" LIMITLINE_HOSTS=mini LIMITLINE_MACHINE_DIR="$FIX/machines" "$BIN" refresh
+warm_ms=$(BIN="$BIN" python3 -c '
+import subprocess, time, os
+bin = os.environ["BIN"]
+payload = b"{\"model\":{\"display_name\":\"Opus\"}}"
+env = os.environ.copy()
+env["NO_COLOR"] = "1"
+env["LIMITLINE_SEGMENTS"] = "model,fleet,machines"
+env["LIMITLINE_REFRESH"] = "0"
+total = 0.0
+runs = 8
+subprocess.run([bin], input=payload, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, env=env, check=False)
+for _ in range(runs):
+    start = time.perf_counter()
+    subprocess.run([bin], input=payload, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, env=env, check=False)
+    total += time.perf_counter() - start
+print(int(total / runs * 1000))
+')
+if [[ "$warm_ms" -le 50 ]]; then
+  check "warm-cache-${warm_ms}ms" "fast" "fast"
+else
+  check "warm-cache-${warm_ms}ms" "slow" "fast"
 fi
 
 printf '\n%d passed, %d failed\n' "$pass" "$fail"

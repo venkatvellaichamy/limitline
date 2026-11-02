@@ -1,0 +1,89 @@
+#!/usr/bin/env python3
+"""Sum a local API ledger when one exists. No network and no key files."""
+import json, os, sys, time
+
+
+def emit(obj):
+    json.dump(obj, sys.stdout, sort_keys=True, separators=(",", ":"))
+    sys.stdout.write("\n")
+
+
+def ledger_path():
+    override = os.environ.get("LIMITLINE_LEDGER")
+    if override:
+        return override
+    home = os.environ.get("LIMITLINE_PHAROS_HOME") or os.path.join(os.path.expanduser("~"), ".pharos")
+    for name in ("ledger.jsonl", "research-spend.jsonl"):
+        path = os.path.join(home, name)
+        if os.path.isfile(path):
+            return path
+    return ""
+
+
+def amount(row):
+    if not isinstance(row, dict):
+        return None
+    for key in ("usd", "cost_usd", "spend_usd", "amount_usd"):
+        value = row.get(key)
+        if isinstance(value, bool) or value is None:
+            continue
+        try:
+            return float(value)
+        except (TypeError, ValueError):
+            continue
+    return None
+
+
+def main():
+    now = int(os.environ.get("LIMITLINE_NOW") or time.time())
+    empty = {"observed_at": None, "provider": "api", "source": "none", "stale": False, "windows": []}
+    path = ledger_path()
+    if not path or not os.path.isfile(path):
+        emit(empty)
+        return
+    total = 0.0
+    found = False
+    try:
+        blob = open(path).read()
+    except OSError:
+        emit(empty)
+        return
+    stripped = blob.strip()
+    rows = []
+    if stripped.startswith("{") and "\n" not in stripped:
+        try:
+            rows = [json.loads(stripped)]
+        except ValueError:
+            rows = []
+    else:
+        for line in blob.splitlines():
+            raw = line.strip()
+            if not raw:
+                continue
+            try:
+                rows.append(json.loads(raw))
+            except ValueError:
+                continue
+    for row in rows:
+        value = amount(row)
+        if value is None:
+            continue
+        found = True
+        total += value
+    if not found:
+        emit(empty)
+        return
+    emit({
+        "observed_at": now,
+        "provider": "api",
+        "source": "ledger",
+        "stale": False,
+        "windows": [{"name": "spend", "usd": round(total, 2)}],
+    })
+
+
+if __name__ == "__main__":
+    try:
+        main()
+    except Exception:
+        sys.exit(0)

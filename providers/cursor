@@ -1,11 +1,207 @@
 #!/usr/bin/env python3
-"""Cursor has a status-line command, but no local quota file."""
-import json, sys
+"""Estimate a Cursor weekly percent from local usage objects. No network."""
+import json, os, sys, time
 
-json.dump(
-    {"observed_at": None, "provider": "cursor", "source": "none", "stale": False, "windows": []},
-    sys.stdout,
-    sort_keys=True,
-    separators=(",", ":"),
-)
-sys.stdout.write("\n")
+WEEK = 7 * 86400
+DEFAULT_BUDGET = 1000000
+
+
+def emit(obj):
+    json.dump(obj, sys.stdout, sort_keys=True, separators=(",", ":"))
+    sys.stdout.write("\n")
+
+
+def number(value):
+    if isinstance(value, bool) or value is None:
+        return None
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def usage_tokens(obj):
+    found = []
+
+    def walk(node):
+        if isinstance(node, dict):
+            usage = node.get("usage")
+            if isinstance(usage, dict):
+                incoming = number(usage.get("input_tokens", usage.get("inputTokens", usage.get("prompt_tokens"))))
+                outgoing = number(usage.get("output_tokens", usage.get("outputTokens", usage.get("completion_tokens"))))
+                if incoming is not None or outgoing is not None:
+                    found.append(int(incoming or 0) + int(outgoing or 0))
+            for value in node.values():
+                walk(value)
+        elif isinstance(node, list):
+            for value in node:
+                walk(value)
+
+    walk(obj)
+    if not found:
+        return 0
+    if len(found) >= 2 and all(found[i] <= found[i + 1] for i in range(len(found) - 1)):
+        return found[-1]
+    return sum(found)
+
+
+def file_tokens(path):
+    try:
+        size = os.path.getsize(path)
+        with open(path, "rb") as handle:
+            if size > 2000000:
+                handle.seek(size - 2000000)
+                handle.readline()
+            blob = handle.read().decode("utf-8", "replace")
+    except OSError:
+        return 0
+    stripped = blob.strip()
+    if stripped.startswith("{") and "\n" not in stripped:
+        try:
+            return usage_tokens(json.loads(stripped))
+        except ValueError:
+            return 0
+    totals = []
+    for line in blob.splitlines():
+        raw = line.strip()
+        if not raw or not raw.startswith("{"):
+            continue
+        try:
+            obj = json.loads(raw)
+        except ValueError:
+            continue
+        tokens = usage_tokens(obj)
+        if tokens:
+            totals.append(tokens)
+    if not totals:
+        return 0
+    if len(totals) >= 2 and all(totals[i] <= totals[i + 1] for i in range(len(totals) - 1)):
+        return totals[-1]
+    return sum(totals)
+
+
+def epoch_of(value):
+    if isinstance(value, (int, float)) and not isinstance(value, bool):
+        return int(value)
+    if not isinstance(value, str) or not value:
+        return None
+    iso = value[:-1] + "+00:00" if value.endswith(("Z", "z")) else value
+    try:
+        from datetime import datetime, timezone
+        stamp = datetime.fromisoformat(iso)
+        if stamp.tzinfo is None:
+            stamp = stamp.replace(tzinfo=timezone.utc)
+        return int(stamp.timestamp())
+    except ValueError:
+        return None
+
+
+def recent(path, now):
+    try:
+        mtime = os.path.getmtime(path)
+    except OSError:
+        return False
+    return mtime >= now - WEEK
+
+
+def runs_tokens(root, now):
+    total = 0
+    if not root or not os.path.isdir(root):
+        return total
+    try:
+        names = os.listdir(root)
+    except OSError:
+        return total
+    for name in names:
+        folder = os.path.join(root, name)
+        state_path = os.path.join(folder, "state.json")
+        log = os.path.join(folder, "stdout.log")
+        if not os.path.isfile(log):
+            continue
+        tool = ""
+        started = None
+        if os.path.isfile(state_path):
+            try:
+                state = json.load(open(state_path))
+            except (OSError, ValueError):
+                state = {}
+            if isinstance(state, dict):
+                tool = str(state.get("tool") or "")
+                started = epoch_of(state.get("started_at"))
+        if tool and tool != "cursor":
+            continue
+        if started is not None and started < now - WEEK and not recent(log, now):
+            continue
+        if started is None and not recent(log, now):
+            continue
+        total += file_tokens(log)
+    return total
+
+
+def shallow_usage(root):
+    if not root or not os.path.isdir(root):
+        return 0
+    total = 0
+    try:
+        names = os.listdir(root)
+    except OSError:
+        return 0
+    for name in names:
+        if name not in ("usage.json", "ai-usage.json"):
+            continue
+        total += file_tokens(os.path.join(root, name))
+    return total
+
+
+def budget():
+    raw = os.environ.get("LIMITLINE_CURSOR_WEEK_TOKENS")
+    if not raw:
+        sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "lib"))
+        try:
+            from config import setting
+            raw = setting("cursor_week_tokens", "LIMITLINE_CURSOR_WEEK_TOKENS", str(DEFAULT_BUDGET))
+        except Exception:
+            raw = str(DEFAULT_BUDGET)
+    try:
+        value = int(float(raw))
+    except (TypeError, ValueError):
+        value = DEFAULT_BUDGET
+    return value if value > 0 else DEFAULT_BUDGET
+
+
+def main():
+    now = int(os.environ.get("LIMITLINE_NOW") or time.time())
+    empty = {"observed_at": None, "provider": "cursor", "source": "none", "stale": False, "windows": []}
+    tokens = 0
+    one = os.environ.get("LIMITLINE_CURSOR_LOG")
+    if one and os.path.isfile(one):
+        tokens += file_tokens(one)
+    root = os.environ.get("LIMITLINE_PHAROS_RUNS")
+    if not root:
+        home = os.environ.get("LIMITLINE_PHAROS_HOME") or os.path.join(os.path.expanduser("~"), ".pharos")
+        candidate = os.path.join(home, "runs")
+        if os.path.isdir(candidate):
+            root = candidate
+    tokens += runs_tokens(root, now)
+    cursor_dir = os.environ.get("LIMITLINE_CURSOR_DIR") or os.path.join(os.path.expanduser("~"), ".cursor")
+    tokens += shallow_usage(cursor_dir)
+    if tokens <= 0:
+        emit(empty)
+        return
+    pct = int(tokens * 100 / budget() + 0.5)
+    if pct > 100:
+        pct = 100
+    emit({
+        "observed_at": now,
+        "provider": "cursor",
+        "source": "estimate",
+        "stale": False,
+        "windows": [{"name": "7d", "used_pct": pct}],
+    })
+
+
+if __name__ == "__main__":
+    try:
+        main()
+    except Exception:
+        sys.exit(0)

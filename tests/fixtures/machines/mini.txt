@@ -1,0 +1,15 @@
+## load
+{ 2.16 1.10 0.80 }
+## ncpu
+8
+## mem
+17179869184
+## pressure
+System-wide memory free percentage: 41%
+## ps
+NAME        ID              SIZE     PROCESSOR
+qwen3:14b   abcdef          9.1 GB   22%/78% CPU/GPU
+## list
+NAME                ID              SIZE
+qwen3:14b           abcdef          9.1 GB
+nomic-embed-text    1234            274 MB

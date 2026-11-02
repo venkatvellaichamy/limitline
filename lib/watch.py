@@ -31,7 +31,7 @@ def brief(data):
     return text or "no window"
 
 
-def frame(rows):
+def frame(rows, extra=None):
     try:
         now = int(os.environ.get("LIMITLINE_NOW") or "0")
     except ValueError:
@@ -51,4 +51,7 @@ def frame(rows):
         "".join(names).rstrip(),
         "".join(values).rstrip(),
     ]
+    for line in extra or []:
+        if line:
+            lines.append(line)
     return "\n".join(lines) + "\n"

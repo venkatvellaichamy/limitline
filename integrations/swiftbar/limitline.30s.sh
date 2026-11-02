@@ -7,4 +7,6 @@ if [[ -x "$(dirname "$0")/../../bin/limitline" ]]; then
 else
   BIN="limitline"
 fi
+# Refresh writes the fleet and machine caches. It can ssh, so it stays off the status line.
+nohup "$BIN" refresh >/dev/null 2>&1 &
 "$BIN" --host swiftbar

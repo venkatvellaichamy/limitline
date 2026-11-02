@@ -1,0 +1,12 @@
+{
+  "hosts": [
+    {
+      "name": "mini",
+      "reachable": true,
+      "load_pct": 8,
+      "loaded": "",
+      "installed_count": 1,
+      "mem_warn": false
+    }
+  ]
+}

@@ -28,10 +28,37 @@ def window_text(window):
     text = name
     if isinstance(used, (int, float)) and not isinstance(used, bool):
         text += " %d%%" % int(used + 0.5)
+    elif window.get("usd") is not None:
+        try:
+            text += " $%.2f" % float(window["usd"])
+        except (TypeError, ValueError):
+            pass
     machines = window.get("machines")
     if isinstance(machines, int) and machines > 1:
         text += " ×%d" % machines
     return text
+
+
+def constraint(row):
+    best = None
+    for window in row.get("windows") or []:
+        if not isinstance(window, dict):
+            continue
+        used = window.get("used_pct")
+        if isinstance(used, bool) or not isinstance(used, (int, float)):
+            continue
+        best = used if best is None else max(best, used)
+    return best
+
+
+def sort_rows(rows):
+    def key(row):
+        used = constraint(row)
+        name = row.get("provider") or ""
+        if used is None:
+            return (1, 0, name)
+        return (0, -used, name)
+    return sorted(rows, key=key)
 
 
 def load_lib(name):
@@ -72,7 +99,34 @@ def provider_brief(data):
 
 
 def load_all():
-    return [run_provider(name) for name in PROVIDERS]
+    rows = [run_provider(name) for name in PROVIDERS]
+    extra = run_provider("spend")
+    if extra.get("source") not in (None, "none") and extra.get("windows"):
+        rows.append(extra)
+    return sort_rows(rows)
+
+
+def cockpit_blocks(swiftbar=False):
+    blocks = []
+    try:
+        fleet = load_lib("fleet")
+        summary = fleet.segment_text()
+        runs = fleet.run_lines(now=fleet.now_epoch(), swiftbar=swiftbar)
+    except Exception:
+        summary = ""
+        runs = []
+    try:
+        machines = load_lib("machines")
+        host_line = machines.status_text(ttl=int(os.environ.get("LIMITLINE_MACHINES_TTL") or "60"))
+    except Exception:
+        host_line = ""
+    if summary:
+        blocks.append(("Fleet", [summary]))
+    if host_line:
+        blocks.append(("Machines", [host_line]))
+    if runs:
+        blocks.append(("Runs", runs))
+    return blocks
 
 
 def cmd_status():
@@ -80,6 +134,11 @@ def cmd_status():
     print("%-8s %s" % ("tool", "limits"))
     for row in rows:
         print("%-8s %s" % (row.get("provider"), provider_brief(row)))
+    for title, lines in cockpit_blocks():
+        print("")
+        print(title)
+        for line in lines:
+            print(line)
 
 
 def cmd_host(kind):
@@ -91,13 +150,18 @@ def cmd_host(kind):
     if kind == "swiftbar":
         title = "limits"
         for row in rows:
-            if row.get("provider") == "claude" and row.get("windows"):
+            if row.get("windows"):
                 title = window_text(row["windows"][0])
                 break
         print(title)
         print("---")
         for row in rows:
             print("%s  %s" % (row.get("provider"), provider_brief(row)))
+        for title_name, lines in cockpit_blocks(swiftbar=True):
+            print("---")
+            print(title_name)
+            for line in lines:
+                print(line)
         return
     parts = []
     for row in rows:
@@ -201,6 +265,15 @@ def cmd_config():
     print('# alerts = "off"')
     print('# quiet = "22-7"')
     print('# sync_dir = ""')
+    print("# fleet and machines stay off on the Claude Code line until named")
+    print('# fleet = "on"')
+    print('# machines = "on"')
+    print('# hosts = ["mini", "worker-1"]')
+    print("# ssh_timeout = 2")
+    print("# mem_free_warn = 15")
+    print("# fleet_ttl = 60")
+    print("# machines_ttl = 60")
+    print("# cursor_week_tokens = 1000000")
     print("# themes: minimal, powerline, ascii, pill, emoji, mono")
     print("# LIMITLINE_ASCII=1 forces the ascii theme. NO_COLOR disables ANSI.")
 
@@ -223,7 +296,11 @@ def cmd_watch():
     while True:
         try:
             rows = prepare(load_all())
-            text = watch.frame(rows)
+            extra = []
+            for title, lines in cockpit_blocks():
+                extra.append(title)
+                extra.extend(lines)
+            text = watch.frame(rows, extra)
         except Exception:
             text = "limitline watch\n"
         if sys.stdout.isatty() and not once:
@@ -242,7 +319,7 @@ def cmd_theme():
 
 def main(argv):
     if not argv or argv[0] in ("-h", "--help"):
-        print("usage: limitline status | --host NAME | preview | doctor | config | report | watch | theme")
+        print("usage: limitline status | --host NAME | preview | doctor | config | report | watch | theme | refresh")
         return
     cmd = argv[0]
     if cmd == "status":
@@ -262,8 +339,13 @@ def main(argv):
         cmd_watch()
     elif cmd == "theme":
         cmd_theme()
+    elif cmd == "refresh":
+        try:
+            load_lib("refresh").main()
+        except Exception:
+            return
     else:
-        print("usage: limitline status | --host NAME | preview | doctor | config | report | watch | theme")
+        print("usage: limitline status | --host NAME | preview | doctor | config | report | watch | theme | refresh")
 
 
 if __name__ == "__main__":

@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # limitline — local usage-limit status line for Claude Code.
 # Reads one JSON object on stdin. No network. Always exits 0.
-# Version: 0.3.0
+# Version: 0.4.0
 
 _here=${0%/*}
 [[ "$_here" == "$0" ]] && _here="."
@@ -14,7 +14,7 @@ limitline — local usage limits for Claude Code and nearby CLIs
   bin/limitline < status.json
   bin/limitline status
   bin/limitline --host tmux|starship|prompt|json|swiftbar|cursor|codex
-  bin/limitline preview|doctor|config|report|watch|theme
+  bin/limitline preview|doctor|config|report|watch|theme|refresh
 
 Config: ~/.config/limitline/config or config.toml
 EOF
@@ -22,7 +22,7 @@ EOF
 fi
 
 case "${1:-}" in
-  status|preview|doctor|config|report|watch|theme|--host)
+  status|preview|doctor|config|report|watch|theme|refresh|--host)
     if command -v python3 >/dev/null 2>&1; then
       exec python3 "$LIMITLINE_ROOT/lib/cli.py" "$@"
     fi
@@ -85,6 +85,16 @@ NUDGE_SET=0
 FRESH_SET=0
 VALUE_SET=0
 VITALS_SET=0
+FLEET_MODE=""
+MACHINES_MODE=""
+FLEET_SET=0
+MACHINES_SET=0
+FLEET_TTL=60
+MACHINES_TTL=60
+SSH_TIMEOUT=2
+MEM_WARN=15
+HOSTS_RAW=""
+ORDER_LIST=""
 
 trim() {
   local v="$1"
@@ -139,6 +149,13 @@ load_config() {
       alerts) ALERTS_MODE="$val" ;;
       quiet|quiet_hours) QUIET="$val" ;;
       sync_dir) SYNC_DIR="$val" ;;
+      fleet) FLEET_MODE="$val"; FLEET_SET=1 ;;
+      machines) MACHINES_MODE="$val"; MACHINES_SET=1 ;;
+      hosts) HOSTS_RAW="$val" ;;
+      ssh_timeout) SSH_TIMEOUT="$val" ;;
+      mem_free_warn) MEM_WARN="$val" ;;
+      fleet_ttl) FLEET_TTL="$val" ;;
+      machines_ttl) MACHINES_TTL="$val" ;;
     esac
   done < "$cfg"
 }
@@ -190,6 +207,22 @@ if [[ -n "${LIMITLINE_VITALS:-}" ]]; then VITALS_MODE="$LIMITLINE_VITALS"; VITAL
 if [[ -n "${LIMITLINE_ALERTS:-}" ]]; then ALERTS_MODE="$LIMITLINE_ALERTS"; fi
 if [[ -n "${LIMITLINE_QUIET:-}" ]]; then QUIET="$LIMITLINE_QUIET"; fi
 if [[ -n "${LIMITLINE_SYNC_DIR:-}" ]]; then SYNC_DIR="$LIMITLINE_SYNC_DIR"; fi
+if [[ -n "${LIMITLINE_FLEET:-}" ]]; then FLEET_MODE="$LIMITLINE_FLEET"; FLEET_SET=1; fi
+if [[ -n "${LIMITLINE_MACHINES:-}" ]]; then MACHINES_MODE="$LIMITLINE_MACHINES"; MACHINES_SET=1; fi
+if [[ -n "${LIMITLINE_FLEET_TTL:-}" ]]; then FLEET_TTL="$LIMITLINE_FLEET_TTL"; fi
+if [[ -n "${LIMITLINE_MACHINES_TTL:-}" ]]; then MACHINES_TTL="$LIMITLINE_MACHINES_TTL"; fi
+if [[ -n "${LIMITLINE_SSH_TIMEOUT:-}" ]]; then SSH_TIMEOUT="$LIMITLINE_SSH_TIMEOUT"; fi
+if [[ -n "${LIMITLINE_MEM_WARN:-}" ]]; then MEM_WARN="$LIMITLINE_MEM_WARN"; fi
+if [[ -z "${LIMITLINE_HOSTS+x}" && -n "$HOSTS_RAW" ]]; then
+  HOSTS_RAW=$(printf '%s' "$HOSTS_RAW" | tr -d '[]' | tr -d '"' | tr -d "'")
+  export LIMITLINE_HOSTS="$HOSTS_RAW"
+fi
+if [[ -n "${LIMITLINE_SSH_TIMEOUT:-$SSH_TIMEOUT}" ]]; then
+  export LIMITLINE_SSH_TIMEOUT="${LIMITLINE_SSH_TIMEOUT:-$SSH_TIMEOUT}"
+fi
+if [[ -n "${LIMITLINE_MEM_WARN:-$MEM_WARN}" ]]; then
+  export LIMITLINE_MEM_WARN="${LIMITLINE_MEM_WARN:-$MEM_WARN}"
+fi
 case "$LINES" in ''|*[!0-9]*) LINES=1 ;; esac
 if [[ "$LINES" -lt 1 ]]; then LINES=1; fi
 if [[ "$LINES" -gt 2 ]]; then LINES=2; fi
@@ -207,38 +240,48 @@ ON_MODEL=1; ON_STYLE=1; ON_CTX=1; ON_FIVE=1; ON_SEVEN=1; ON_SPEND=1
 ON_BURN=1; ON_COST=1; ON_GIT=1; ON_PR=1; ON_CACHE=1; ON_VIM=1
 ON_SESSION=0; ON_CODEX=1
 ON_PACE=0; ON_SPARK=0; ON_NUDGE=0; ON_FRESH=0; ON_VALUE=0; ON_VITALS=0
+ON_FLEET=0; ON_MACHINES=0
+add_order() {
+  case ",$ORDER_LIST," in
+    *,"$1",*) ;;
+    *) ORDER_LIST="${ORDER_LIST:+$ORDER_LIST,}$1" ;;
+  esac
+}
 if [[ -n "$SEGMENTS" ]]; then
   ON_MODEL=0; ON_STYLE=0; ON_CTX=0; ON_FIVE=0; ON_SEVEN=0; ON_SPEND=0
   ON_BURN=0; ON_COST=0; ON_GIT=0; ON_PR=0; ON_CACHE=0; ON_VIM=0
   ON_SESSION=0; ON_CODEX=0
   ON_PACE=0; ON_SPARK=0; ON_NUDGE=0; ON_FRESH=0; ON_VALUE=0; ON_VITALS=0
+  ON_FLEET=0; ON_MACHINES=0
   old_ifs=$IFS
   IFS=','
   for raw in $SEGMENTS; do
     name=$(trim "$raw")
     name=${name//[\[\]\"\'[:space:]]/}
     case "$name" in
-      model) ON_MODEL=1 ;;
-      style) ON_STYLE=1 ;;
-      context|ctx) ON_CTX=1 ;;
-      5h) ON_FIVE=1 ;;
-      7d) ON_SEVEN=1 ;;
-      spend) ON_SPEND=1 ;;
-      limits) ON_FIVE=1; ON_SEVEN=1; ON_SPEND=1 ;;
-      burn) ON_BURN=1 ;;
-      cost) ON_COST=1 ;;
-      git) ON_GIT=1 ;;
-      pr) ON_PR=1 ;;
-      cache) ON_CACHE=1 ;;
-      vim) ON_VIM=1 ;;
-      session) ON_SESSION=1 ;;
-      codex|others) ON_CODEX=1 ;;
-      pace) ON_PACE=1 ;;
-      spark|sparklines) ON_SPARK=1 ;;
-      nudge|nudges) ON_NUDGE=1 ;;
+      model) ON_MODEL=1; add_order model ;;
+      style) ON_STYLE=1; add_order style ;;
+      context|ctx) ON_CTX=1; add_order ctx ;;
+      5h) ON_FIVE=1; add_order 5h ;;
+      7d) ON_SEVEN=1; add_order 7d ;;
+      spend) ON_SPEND=1; add_order spend ;;
+      limits) ON_FIVE=1; ON_SEVEN=1; ON_SPEND=1; add_order 5h; add_order 7d; add_order spend ;;
+      burn) ON_BURN=1; add_order burn ;;
+      cost) ON_COST=1; add_order cost ;;
+      git) ON_GIT=1; add_order git ;;
+      pr) ON_PR=1; add_order pr ;;
+      cache) ON_CACHE=1; add_order cache ;;
+      vim) ON_VIM=1; add_order vim ;;
+      session) ON_SESSION=1; add_order session ;;
+      codex|others) ON_CODEX=1; add_order codex ;;
+      pace) ON_PACE=1; add_order pace ;;
+      spark|sparklines) ON_SPARK=1; add_order spark ;;
+      nudge|nudges) ON_NUDGE=1; add_order nudge ;;
       fresh) ON_FRESH=1 ;;
-      value) ON_VALUE=1 ;;
-      vitals) ON_VITALS=1 ;;
+      value) ON_VALUE=1; add_order value ;;
+      vitals) ON_VITALS=1; add_order vitals ;;
+      fleet) ON_FLEET=1; add_order fleet ;;
+      machines) ON_MACHINES=1; add_order machines ;;
     esac
   done
   IFS=$old_ifs
@@ -253,6 +296,10 @@ if [[ "$NUDGE_SET" == "1" ]]; then flag_on "$NUDGE_MODE" && ON_NUDGE=1 || ON_NUD
 if [[ "$FRESH_SET" == "1" ]]; then flag_on "$FRESH_MODE" && ON_FRESH=1 || ON_FRESH=0; fi
 if [[ "$VALUE_SET" == "1" ]]; then flag_on "$VALUE_MODE" && ON_VALUE=1 || ON_VALUE=0; fi
 if [[ "$VITALS_SET" == "1" ]]; then flag_on "$VITALS_MODE" && ON_VITALS=1 || ON_VITALS=0; fi
+if [[ "$FLEET_SET" == "1" ]]; then flag_on "$FLEET_MODE" && ON_FLEET=1 || ON_FLEET=0; fi
+if [[ "$MACHINES_SET" == "1" ]]; then flag_on "$MACHINES_MODE" && ON_MACHINES=1 || ON_MACHINES=0; fi
+case "$FLEET_TTL" in ''|*[!0-9]*) FLEET_TTL=60 ;; esac
+case "$MACHINES_TTL" in ''|*[!0-9]*) MACHINES_TTL=60 ;; esac
 case "$ALERTS_MODE" in
   bell|notify|test|osascript) ;;
   *) ALERTS_MODE=off ;;
@@ -1124,6 +1171,54 @@ fi
 [[ "$ON_CODEX" == "1" ]] || { codex5=""; codex7=""; }
 [[ "$ON_BURN" == "1" ]] || hist_path=""
 
+fresh_line() {
+  local file="$1" ttl="$2" now mtime age line
+  [[ -f "$file" ]] || return 0
+  now=$(date +%s)
+  mtime=$(stat -f %m "$file" 2>/dev/null || stat -c %Y "$file" 2>/dev/null || echo 0)
+  case "$mtime" in ''|*[!0-9]*) return 0 ;; esac
+  age=$((now - mtime))
+  if [[ "$age" -gt "$ttl" ]]; then
+    return 0
+  fi
+  IFS= read -r line < "$file" || true
+  printf '%s' "$line"
+}
+
+kick_refresh() {
+  [[ "${LIMITLINE_REFRESH:-1}" == "0" ]] && return 0
+  local lock now mtime
+  mkdir -p "$cache_dir" 2>/dev/null || return 0
+  lock="$cache_dir/refresh.lock"
+  now=$(date +%s)
+  if [[ -f "$lock" ]]; then
+    mtime=$(stat -f %m "$lock" 2>/dev/null || stat -c %Y "$lock" 2>/dev/null || echo 0)
+    case "$mtime" in ''|*[!0-9]*) mtime=0 ;; esac
+    if [[ $((now - mtime)) -lt 30 ]]; then
+      return 0
+    fi
+  fi
+  : > "$lock" 2>/dev/null || return 0
+  nohup python3 "$LIMITLINE_ROOT/lib/refresh.py" >/dev/null 2>&1 &
+}
+
+fleet_text=""
+machines_text=""
+fleet_file="${LIMITLINE_FLEET_LINE:-$cache_dir/fleet.line}"
+machines_file="${LIMITLINE_MACHINES_LINE:-$cache_dir/machines.line}"
+need_refresh=0
+if [[ "$ON_FLEET" == "1" ]]; then
+  fleet_text=$(fresh_line "$fleet_file" "$FLEET_TTL")
+  [[ -n "$fleet_text" ]] || need_refresh=1
+fi
+if [[ "$ON_MACHINES" == "1" ]]; then
+  machines_text=$(fresh_line "$machines_file" "$MACHINES_TTL")
+  [[ -n "$machines_text" ]] || need_refresh=1
+fi
+if [[ "$need_refresh" == "1" ]]; then
+  kick_refresh
+fi
+
 max_cols="${LIMITLINE_COLUMNS:-${COLUMNS:-}}"
 if [[ -z "$max_cols" && -n "$render_cols" ]]; then max_cols="$render_cols"; fi
 case "$max_cols" in ''|*[!0-9]*) max_cols=0 ;; esac
@@ -1177,6 +1272,9 @@ emit_kv() {
   emit_kv spark7 "$spark7"
   emit_kv nudge "$nudge_text"
   emit_kv value "$value_text"
+  emit_kv fleet "$fleet_text"
+  emit_kv machines "$machines_text"
+  emit_kv order "$ORDER_LIST"
   emit_kv sparkle "$sparkle"
   emit_kv compactions "$compactions"
   emit_kv cost_trend "$cost_trend"
@@ -1495,11 +1593,43 @@ function plain_len(s) {
   gsub(/\033\]8;;[^\007]*\007/, "", s)
   return length(s)
 }
-function push(pri, text,    i) {
+function push(pri, kind, text,    i) {
   if (text == "") return
   nseg++
   seg[nseg] = text
   pri_of[nseg] = pri
+  kind_of[nseg] = kind
+}
+function reorder(    ord, n, i, j, m, key) {
+  ord = val("order")
+  if (ord == "") return
+  n = split(ord, want, ",")
+  m = 0
+  for (i = 1; i <= n; i++) {
+    key = want[i]
+    gsub(/^[ \t]+|[ \t]+$/, "", key)
+    for (j = 1; j <= nseg; j++) {
+      if (taken[j]) continue
+      if (kind_of[j] == key) {
+        taken[j] = 1
+        m++
+        hold_s[m] = seg[j]
+        hold_p[m] = pri_of[j]
+      }
+    }
+  }
+  for (j = 1; j <= nseg; j++) {
+    if (taken[j]) continue
+    m++
+    hold_s[m] = seg[j]
+    hold_p[m] = pri_of[j]
+  }
+  nseg = m
+  for (i = 1; i <= m; i++) {
+    seg[i] = hold_s[i]
+    pri_of[i] = hold_p[i]
+    drop[i] = 0
+  }
 }
 function join_range(lo, hi,    i, out, count, sep) {
   out = ""
@@ -1542,30 +1672,33 @@ END {
     if (model_text != "") model_text = "✨ " model_text
     else model_text = "✨"
   }
-  push(100, themed("model", model_text))
-  push(25, themed("style", val("style")))
-  push(70, themed("ctx", ctx_seg(val("ctx"), ctx_note(val("ctx"), val("ctx_size"), val("ctx_tokens"), val("compact_at"), val("auto_warn")))))
+  push(100, "model", themed("model", model_text))
+  push(25, "style", themed("style", val("style")))
+  push(70, "ctx", themed("ctx", ctx_seg(val("ctx"), ctx_note(val("ctx"), val("ctx_size"), val("ctx_tokens"), val("compact_at"), val("auto_warn")))))
   if (val("show_five") == "1")
-    push(90, themed("5h", window_seg("5h", val("five_pct"), val("five_reset"), val("five_abs"))))
-  push(88, themed("spark", spark_seg("5h", val("spark5"), val("five_pct"))))
+    push(90, "5h", themed("5h", window_seg("5h", val("five_pct"), val("five_reset"), val("five_abs"))))
+  push(88, "spark", themed("spark", spark_seg("5h", val("spark5"), val("five_pct"))))
   if (val("show_seven") == "1")
-    push(80, themed("7d", window_seg("7d", val("seven_pct"), val("seven_reset"), val("seven_abs"))))
-  push(78, themed("spark", spark_seg("7d", val("spark7"), val("seven_pct"))))
-  push(72, themed("pace", pace_seg()))
-  push(60, themed("spend", spend_seg(val("spend_pct"), val("spend_used"), val("spend_limit"))))
-  push(30, burn_pace(val("hist"), val("now") + 0, val("five_pct")))
+    push(80, "7d", themed("7d", window_seg("7d", val("seven_pct"), val("seven_reset"), val("seven_abs"))))
+  push(78, "spark", themed("spark", spark_seg("7d", val("spark7"), val("seven_pct"))))
+  push(72, "pace", themed("pace", pace_seg()))
+  push(60, "spend", themed("spend", spend_seg(val("spend_pct"), val("spend_used"), val("spend_limit"))))
+  push(30, "burn", burn_pace(val("hist"), val("now") + 0, val("five_pct")))
   if (val("vitals") == "1")
-    push(50, themed("vitals", vitals_seg(val("cost_ms"), val("lines_added"), val("lines_removed"), val("cost_usd"), val("compactions"), val("cost_trend"))))
+    push(50, "vitals", themed("vitals", vitals_seg(val("cost_ms"), val("lines_added"), val("lines_removed"), val("cost_usd"), val("compactions"), val("cost_trend"))))
   else
-    push(50, themed("cost", cost_seg(val("cost_usd"), val("cost_ms"), val("lines_added"), val("lines_removed"))))
-  push(40, themed("git", val("git")))
-  push(20, themed("pr", val("pr")))
-  push(15, themed("cache", val("cache")))
-  push(10, themed("vim", val("vim")))
-  push(45, themed("nudge", val("nudge")))
-  push(48, themed("value", val("value")))
-  push(5, themed("codex", codex_seg(val("codex5"), val("codex7"))))
-  push(1, themed("session", val("session")))
+    push(50, "cost", themed("cost", cost_seg(val("cost_usd"), val("cost_ms"), val("lines_added"), val("lines_removed"))))
+  push(40, "git", themed("git", val("git")))
+  push(36, "fleet", themed("fleet", val("fleet")))
+  push(34, "machines", themed("machines", val("machines")))
+  push(20, "pr", themed("pr", val("pr")))
+  push(15, "cache", themed("cache", val("cache")))
+  push(10, "vim", themed("vim", val("vim")))
+  push(45, "nudge", themed("nudge", val("nudge")))
+  push(48, "value", themed("value", val("value")))
+  push(5, "codex", themed("codex", codex_seg(val("codex5"), val("codex7"))))
+  push(1, "session", themed("session", val("session")))
+  reorder()
   fit(val("max_cols") + 0)
   if (val("lines") + 0 >= 2) {
     line1 = ""

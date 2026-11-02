@@ -1,0 +1,14 @@
+## load
+{ 0.40 0.20 0.10 }
+## ncpu
+4
+## mem
+17179869184
+## pressure
+System-wide memory free percentage: 10%
+## ps
+NAME        ID    SIZE    PROCESSOR
+qwen3:14b   abc   14 GB   100% GPU
+## list
+NAME        ID    SIZE
+qwen3:14b   abc   14 GB

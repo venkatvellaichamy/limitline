@@ -32,6 +32,15 @@ def lowest_pct(data):
     return best
 
 
+def idle_machine():
+    sys.path.insert(0, os.path.join(ROOT, "lib"))
+    try:
+        import machines
+        return machines.idle_hint(ttl=int(os.environ.get("LIMITLINE_MACHINES_TTL") or "60"))
+    except Exception:
+        return ""
+
+
 def suggestion():
     measured = None
     empty = []
@@ -43,8 +52,14 @@ def suggestion():
             continue
         if measured is None or used < measured[0]:
             measured = (used, name)
+    hint = idle_machine()
     if measured is not None and measured[0] < 50:
-        return "%s %d%%" % (measured[1], int(measured[0] + 0.5))
+        text = "%s %d%%" % (measured[1], int(measured[0] + 0.5))
+        if hint:
+            text += " · " + hint
+        return text
+    if hint:
+        return hint
     for name in ("cursor", "codex", "grok", "gemini"):
         if name in empty:
             return name + " ok"
