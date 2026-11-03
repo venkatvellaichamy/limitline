@@ -1030,6 +1030,10 @@ once_watch=$(LIMITLINE_WATCH_ONCE=1 "$BIN" watch)
 printf '%s' "$once_watch" | grep -q -F 'Runs and jobs' \
   && check "watch-once-not-interactive" "interactive" "plain" || check "watch-once-not-interactive" "plain" "plain"
 
+printf 'pharos = "%s"\n' "$tui_home/pharos" > "$tui_home/config.toml"
+cfg_pharos=$(LIMITLINE_CONFIG="$tui_home/config.toml" LIMITLINE_PHAROS_RUNS="$FIX/fleet/runs" LIMITLINE_WATCH_KEYS="r q" "$BIN" watch)
+printf '%s' "$cfg_pharos" | grep -q -F '> pharos resume run-a: ok resume run-a' \
+  && check "tui-pharos-config" "yes" "yes" || check "tui-pharos-config" "$cfg_pharos" "pharos from config"
 pty_got=$(LIMITLINE_PHAROS_RUNS="$FIX/fleet/runs" HOME="$TEST_HOME" python3 "$ROOT/tests/pty_watch.py" "$BIN")
 check "tui-pty" "$pty_got" "exited selected-b cursor-restored"
 
