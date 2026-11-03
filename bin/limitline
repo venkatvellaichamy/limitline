@@ -542,49 +542,11 @@ parse_fields() {
   done < <(printf '%s\n' "$blob")
 }
 
-find_newest_jsonl() {
-  local root="$1" f m best="" best_m=-1
-  while IFS= read -r f; do
-    [[ -n "$f" ]] || continue
-    m=$(date -r "$f" +%s 2>/dev/null) || continue
-    if [[ "$m" -gt "$best_m" ]]; then
-      best_m=$m
-      best=$f
-    fi
-  done << EOF
-$(find "$root" -type f -name '*.jsonl' -print 2>/dev/null)
-EOF
-  [[ -n "$best" ]] || return 1
-  printf '%s' "$best"
-}
-
-scan_codex_jq() {
-  local root newest line ts ev age parsed
-  root="${LIMITLINE_CODEX_DIR:-$HOME/.codex/sessions}"
-  [[ -d "$root" ]] || return 1
-  newest=$(find_newest_jsonl "$root") || return 1
-  line=$(grep -a -F 'rate_limits' "$newest" 2>/dev/null | tail -n 1) || true
-  [[ -n "$line" ]] || return 1
-  ts=$(printf '%s' "$line" | jq -r '.timestamp // empty' 2>/dev/null) || true
-  ev=$(to_epoch "$ts")
-  if [[ -z "$ev" ]]; then
-    ev=$(date -r "$newest" +%s 2>/dev/null) || return 1
-  fi
-  age=$((NOW - ev))
-  if [[ "$age" -ge 21600 ]]; then
-    return 1
-  fi
-  parsed=$(printf '%s' "$line" | jq -r '
-    def emit(k; v):
-      if v == null or v == false then k
-      else k + " " + (v | tostring | gsub("[\t\r\n]"; " "))
-      end;
-    (.payload.rate_limits // .rate_limits // {}) as $r |
-    emit("codex5"; $r.primary.used_percent // $r.primary.used_percentage)
-    , emit("codex5_reset"; $r.primary.resets_at)
-    , emit("codex7"; $r.secondary.used_percent // $r.secondary.used_percentage)
-    , emit("codex7_reset"; $r.secondary.resets_at)
-  ' 2>/dev/null) || return 1
+# One scan for every path: the codex provider walks all recent session files.
+scan_codex() {
+  local parsed
+  command -v python3 >/dev/null 2>&1 || return 1
+  parsed=$(LIMITLINE_NOW="$NOW" python3 "$LIMITLINE_ROOT/providers/codex" --fields 2>/dev/null) || return 1
   codex5=""
   codex5_raw=""
   codex7=""
@@ -611,7 +573,7 @@ if command -v jq >/dev/null 2>&1; then
   tsv=$(printf '%s' "$input" | jq -r "$JQ_PROG" 2>/dev/null) || exit 0
   parse_fields "$tsv"
   if [[ "$CODEX_ENABLED" -eq 1 && "$cache_hit" -eq 0 ]]; then
-    if scan_codex_jq; then
+    if scan_codex; then
       write_codex_cache 1
     else
       codex5=""
@@ -632,9 +594,6 @@ else
   fi
   tsv=$(
     LIMITLINE_INPUT="$input" \
-    LIMITLINE_SCAN_CODEX="$scan_flag" \
-    LIMITLINE_CODEX_ROOT="${LIMITLINE_CODEX_DIR:-$HOME/.codex/sessions}" \
-    LIMITLINE_NOW="$NOW" \
     python3 - << 'PY' 2>/dev/null
 import json, os, sys
 
@@ -695,84 +654,6 @@ for path in (
     if isinstance(val, (int, float)) and not isinstance(val, bool):
         ctx = val
         break
-
-codex5 = codex5_reset = codex7 = codex7_reset = ""
-
-def to_epoch(value):
-    if value is None or value == "":
-        return ""
-    if isinstance(value, bool):
-        return ""
-    if isinstance(value, (int, float)):
-        return str(int(value))
-    text = str(value).strip()
-    if text.isdigit():
-        return text
-    iso = text[:-1] + "+00:00" if text.endswith(("Z", "z")) else text
-    try:
-        from datetime import datetime
-        return str(int(datetime.fromisoformat(iso).timestamp()))
-    except Exception:
-        return ""
-
-if os.environ.get("LIMITLINE_SCAN_CODEX") == "1":
-    root = os.environ.get("LIMITLINE_CODEX_ROOT", "")
-    now = int(os.environ.get("LIMITLINE_NOW") or "0")
-    newest = None
-    newest_m = -1.0
-    if root and os.path.isdir(root):
-        for dirpath, _dirs, files in os.walk(root):
-            for name in files:
-                if not name.endswith(".jsonl"):
-                    continue
-                path = os.path.join(dirpath, name)
-                try:
-                    mtime = os.path.getmtime(path)
-                except OSError:
-                    continue
-                if mtime > newest_m:
-                    newest_m = mtime
-                    newest = path
-    line = None
-    if newest:
-        try:
-            size = os.path.getsize(newest)
-            with open(newest, "rb") as fh:
-                if size > 8000000:
-                    fh.seek(size - 8000000)
-                    fh.readline()
-                blob = fh.read().decode("utf-8", "replace")
-            for row in blob.splitlines():
-                if "rate_limits" in row:
-                    line = row
-        except OSError:
-            line = None
-    if line:
-        try:
-            obj = json.loads(line)
-        except Exception:
-            obj = {}
-        if not isinstance(obj, dict):
-            obj = {}
-        payload = obj.get("payload") if isinstance(obj.get("payload"), dict) else {}
-        limits = payload.get("rate_limits") if isinstance(payload.get("rate_limits"), dict) else None
-        if limits is None and isinstance(obj.get("rate_limits"), dict):
-            limits = obj.get("rate_limits")
-        if not isinstance(limits, dict):
-            limits = {}
-        primary = limits.get("primary") if isinstance(limits.get("primary"), dict) else {}
-        secondary = limits.get("secondary") if isinstance(limits.get("secondary"), dict) else {}
-        event = to_epoch(obj.get("timestamp"))
-        if event == "" and newest_m >= 0:
-            event = str(int(newest_m))
-        fresh = True
-        if event != "" and now - int(event) >= 21600:
-            fresh = False
-        if fresh:
-            codex5 = cell(primary.get("used_percent", primary.get("used_percentage")))
-            codex5_reset = cell(primary.get("resets_at"))
-            codex7 = cell(secondary.get("used_percent", secondary.get("used_percentage")))
-            codex7_reset = cell(secondary.get("resets_at"))
 
 style = dig(data, "output_style", "name")
 if isinstance(style, str) and style.lower() == "default":
@@ -841,21 +722,18 @@ lines = [
     emit("cache_cause", cache_cause),
     emit("columns", columns),
 ]
-if os.environ.get("LIMITLINE_SCAN_CODEX") == "1":
-    lines.extend([
-        emit("codex5", codex5),
-        emit("codex5_reset", codex5_reset),
-        emit("codex7", codex7),
-        emit("codex7_reset", codex7_reset),
-    ])
 sys.stdout.write("\n".join(lines) + "\n")
 PY
   ) || exit 0
   parse_fields "$tsv"
   if [[ "$scan_flag" -eq 1 ]]; then
-    if [[ -n "$codex5" || -n "$codex7" ]]; then
+    if scan_codex; then
       write_codex_cache 1
     else
+      codex5=""
+      codex5_raw=""
+      codex7=""
+      codex7_raw=""
       write_codex_cache 0
     fi
     scanned=1

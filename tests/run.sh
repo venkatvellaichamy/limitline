@@ -283,7 +283,7 @@ mkdir -p "$codex_prov"
 cp "$FIX/codex/fresh.jsonl" "$codex_prov/fresh.jsonl"
 codex_got=$(LIMITLINE_CODEX_DIR="$codex_prov" "$ROOT/providers/codex")
 codex_got=${codex_got%$'\n'}
-check "provider-codex" "$codex_got" '{"observed_at":1762054200,"provider":"codex","source":"session","stale":false,"windows":[{"name":"5h","resets_at":1762062120,"used_pct":12},{"name":"7d","resets_at":1762419600,"used_pct":55}]}'
+check "provider-codex" "$codex_got" '{"observed_at":1762054200,"plan":"sample","provider":"codex","source":"session","stale":false,"windows":[{"name":"5h","resets_at":1762062120,"used_pct":12},{"name":"7d","resets_at":1762419600,"used_pct":55}]}'
 
 stale_prov="$TEST_HOME/codex-stale"
 mkdir -p "$stale_prov"
@@ -291,6 +291,46 @@ cp "$FIX/codex/stale.jsonl" "$stale_prov/stale.jsonl"
 stale_got=$(LIMITLINE_CODEX_DIR="$stale_prov" "$ROOT/providers/codex")
 stale_got=${stale_got%$'\n'}
 check "provider-codex-stale" "$stale_got" '{"observed_at":1761955200,"provider":"codex","source":"session","stale":true,"windows":[]}'
+
+# Many session files: the newest file has no event (a short `codex exec`), one has a
+# malformed last line, one ends with a "premium" limit, and an old day folder is pruned.
+many="$TEST_HOME/codex-many"
+mkdir -p "$many/2025/11/02" "$many/2025/10/20"
+rl() { printf '{"timestamp":"%s","type":"event_msg","payload":{"type":"token_count","rate_limits":{"limit_id":"%s","primary":{"used_percent":%s,"window_minutes":300,"resets_at":1762062120},"secondary":{"used_percent":%s,"window_minutes":10080,"resets_at":1762419600},"plan_type":"plus"}}}\n' "$1" "$2" "$3" "$4"; }
+{ rl 2025-11-02T03:10:00Z codex 25 39; rl 2025-11-02T03:20:00Z codex 30 40; rl 2025-11-02T03:25:00Z premium 5 5; } > "$many/2025/11/02/rollout-a.jsonl"
+printf '%s\n' '{"timestamp":"2025-11-02T03:57:00Z","type":"session_meta","payload":{"cwd":"x"}}' > "$many/2025/11/02/rollout-b.jsonl"
+{ rl 2025-11-02T03:00:00Z codex 20 38; printf '%s\n' '{"timestamp":"2025-11-02T03:39:00Z","payload":{"rate_limits":{"primary":{"used_perc'; } > "$many/2025/11/02/rollout-c.jsonl"
+rl 2025-10-20T03:00:00Z codex 99 99 > "$many/2025/10/20/rollout-old.jsonl"
+touch -t 202511020321 "$many/2025/11/02/rollout-a.jsonl"
+touch -t 202511020358 "$many/2025/11/02/rollout-b.jsonl"
+touch -t 202511020340 "$many/2025/11/02/rollout-c.jsonl"
+touch -t 202510200301 "$many/2025/10/20/rollout-old.jsonl"
+many_got=$(LIMITLINE_CODEX_DIR="$many" "$ROOT/providers/codex")
+check "provider-codex-many-files" "$many_got" '{"observed_at":1762053600,"plan":"plus","provider":"codex","source":"session","stale":false,"windows":[{"name":"5h","resets_at":1762062120,"used_pct":30},{"name":"7d","resets_at":1762419600,"used_pct":40}]}'
+many_line=$(LIMITLINE_CODEX=1 LIMITLINE_CODEX_DIR="$many" LIMITLINE_NOCACHE=1 "$BIN" < "$FIX/no_rate_limits.json" | strip_ansi)
+check "codex-many-files-jq" "$many_line" 'Opus 5.5 │ ctx ▓▓░░░ ·41% │ $0.12 │ codex 5h ·30% · 7d ·40%'
+many_py=$(PATH="$nojq" LIMITLINE_CODEX=1 LIMITLINE_CODEX_DIR="$many" LIMITLINE_NOCACHE=1 "$BIN" < "$FIX/no_rate_limits.json" | strip_ansi)
+check "codex-many-files-nojq" "$many_py" "$many_line"
+many_status=$(LIMITLINE_CODEX_DIR="$many" "$BIN" status | grep '^codex')
+check "codex-many-files-status" "$many_status" 'codex    5h 30% · 7d 40%'
+
+# A 28-hour-old event: the 5h window has reset, the 7d window has not, so 7d stays.
+week_dir="$TEST_HOME/codex-week"
+mkdir -p "$week_dir"
+printf '%s\n' '{"timestamp":"2025-11-01T00:00:00Z","payload":{"rate_limits":{"primary":{"used_percent":80,"window_minutes":300,"resets_at":1761966000},"secondary":{"used_percent":41,"window_minutes":10080,"resets_at":1762419600}}}}' > "$week_dir/r.jsonl"
+touch -t 202511010001 "$week_dir/r.jsonl"
+week_got=$(LIMITLINE_CODEX_DIR="$week_dir" "$ROOT/providers/codex")
+check "provider-codex-7d-only" "$week_got" '{"observed_at":1761955200,"provider":"codex","source":"session","stale":false,"windows":[{"name":"7d","resets_at":1762419600,"used_pct":41}]}'
+week_line=$(LIMITLINE_CODEX=1 LIMITLINE_CODEX_DIR="$week_dir" LIMITLINE_NOCACHE=1 "$BIN" < "$FIX/no_rate_limits.json" | strip_ansi)
+check "codex-7d-only-line" "$week_line" 'Opus 5.5 │ ctx ▓▓░░░ ·41% │ $0.12 │ codex 7d ·41%'
+
+# No resets_at: the 5h reading lasts five hours from the event, the 7d reading seven days.
+nores="$TEST_HOME/codex-nores"
+mkdir -p "$nores"
+printf '%s\n' '{"timestamp":"2025-11-01T20:00:00Z","payload":{"rate_limits":{"primary":{"used_percent":10,"window_minutes":300},"secondary":{"used_percent":20,"window_minutes":10080}}}}' > "$nores/r.jsonl"
+touch -t 202511012001 "$nores/r.jsonl"
+nores_got=$(LIMITLINE_CODEX_DIR="$nores" "$ROOT/providers/codex")
+check "provider-codex-no-reset" "$nores_got" '{"observed_at":1762027200,"provider":"codex","source":"session","stale":false,"windows":[{"name":"7d","used_pct":20}]}'
 
 cursor_got=$("$ROOT/providers/cursor")
 cursor_got=${cursor_got%$'\n'}
