@@ -851,8 +851,11 @@ cur_host=$(LIMITLINE_CURSOR_LOG="$FIX/providers/cursor-usage.jsonl" "$BIN" --hos
 printf '%s' "$cur_host" | grep -q -F 'cursor 7d ~11%' \
   && check "cursor-estimate-host" "yes" "yes" || check "cursor-estimate-host" "$cur_host" "cursor 7d ~11%"
 cur_report=$(LIMITLINE_CURSOR_LOG="$FIX/providers/cursor-usage.jsonl" "$BIN" report)
-printf '%s' "$cur_report" | grep -q -F '~11%' \
-  && check "cursor-estimate-report" "yes" "yes" || check "cursor-estimate-report" "$cur_report" "~11%"
+printf '%s' "$cur_report" | grep -q -F '~11% estimate' \
+  && check "cursor-estimate-report" "yes" "yes" || check "cursor-estimate-report" "$cur_report" "~11% estimate"
+cur_nudge=$(NO_COLOR=1 LIMITLINE_NUDGES=1 LIMITLINE_CURSOR_LOG="$FIX/providers/cursor-usage.jsonl" LIMITLINE_CODEX_DIR="$TEST_HOME/no-codex" "$BIN" < "$FIX/over_80.json" | strip_ansi)
+printf '%s' "$cur_nudge" | grep -q -F '→ cursor ~11% estimate' \
+  && check "cursor-estimate-nudge" "yes" "yes" || check "cursor-estimate-nudge" "$cur_nudge" "→ cursor ~11% estimate"
 
 # Shared Cursor + Grok plan (0.5). One subscription, one row, from a cache the user or a
 # browser helper writes. The cache path is an override so nothing touches ~/.cache.
