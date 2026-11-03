@@ -19,12 +19,15 @@ def run_provider(name):
     return data
 
 
-def lowest_pct(data):
-    found = lowest_window(data)
+def constraint_pct(data):
+    found = constraint_window(data)
     return None if found is None else found[0]
 
 
-def lowest_window(data):
+def constraint_window(data):
+    """The most-used window. A provider is only as free as its tightest window:
+    a quiet 5h window cannot make up for an exhausted week. lib/cli.py sorts
+    status rows by the same maximum."""
     best = None
     for window in data.get("windows") or []:
         if not isinstance(window, dict):
@@ -32,7 +35,7 @@ def lowest_window(data):
         used = window.get("used_pct")
         if isinstance(used, bool) or not isinstance(used, (int, float)):
             continue
-        if best is None or used < best[0]:
+        if best is None or used > best[0]:
             best = (used, bool(window.get("estimate")))
     return best
 
@@ -65,7 +68,7 @@ def suggestion():
     empty = []
     for data in rows():
         name = data.get("label") or data.get("provider")
-        found = lowest_window(data)
+        found = constraint_window(data)
         if found is None:
             empty.append(name)
             continue

@@ -94,9 +94,14 @@ def load_lib(name):
 
 
 def prepare(rows):
-    sync_dir = os.environ.get("LIMITLINE_SYNC_DIR")
+    # The same setting the renderer and refresh read: LIMITLINE_SYNC_DIR, else sync_dir.
+    try:
+        sync_dir = load_lib("config").setting("sync_dir", "LIMITLINE_SYNC_DIR", "")
+    except Exception:
+        sync_dir = os.environ.get("LIMITLINE_SYNC_DIR") or ""
     if not sync_dir:
         return rows
+    sync_dir = os.path.expanduser(sync_dir)
     try:
         sync = load_lib("sync")
         for row in rows:

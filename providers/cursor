@@ -20,8 +20,16 @@ def number(value):
         return None
 
 
-def usage_tokens(obj):
+def cumulative(usage):
+    """Only a record that says so is a running total. Rising counts alone prove
+    nothing: independent requests can grow too."""
+    return usage.get("cumulative") is True
+
+
+def usage_counts(obj):
+    """(per-request tokens summed, last running total or None) for one object."""
     found = []
+    totals = []
 
     def walk(node):
         if isinstance(node, dict):
@@ -30,7 +38,8 @@ def usage_tokens(obj):
                 incoming = number(usage.get("input_tokens", usage.get("inputTokens", usage.get("prompt_tokens"))))
                 outgoing = number(usage.get("output_tokens", usage.get("outputTokens", usage.get("completion_tokens"))))
                 if incoming is not None or outgoing is not None:
-                    found.append(int(incoming or 0) + int(outgoing or 0))
+                    count = int(incoming or 0) + int(outgoing or 0)
+                    (totals if cumulative(usage) else found).append(count)
             for value in node.values():
                 walk(value)
         elif isinstance(node, list):
@@ -38,11 +47,12 @@ def usage_tokens(obj):
                 walk(value)
 
     walk(obj)
-    if not found:
-        return 0
-    if len(found) >= 2 and all(found[i] <= found[i + 1] for i in range(len(found) - 1)):
-        return found[-1]
-    return sum(found)
+    return sum(found), (totals[-1] if totals else None)
+
+
+def usage_tokens(obj):
+    events, total = usage_counts(obj)
+    return events + (total or 0)
 
 
 def file_tokens(path):
@@ -61,7 +71,10 @@ def file_tokens(path):
             return usage_tokens(json.loads(stripped))
         except ValueError:
             return 0
-    totals = []
+    # Independent usage events add up. A record marked cumulative replaces the
+    # previous running total instead of adding to it.
+    events = 0
+    total = None
     for line in blob.splitlines():
         raw = line.strip()
         if not raw or not raw.startswith("{"):
@@ -70,14 +83,11 @@ def file_tokens(path):
             obj = json.loads(raw)
         except ValueError:
             continue
-        tokens = usage_tokens(obj)
-        if tokens:
-            totals.append(tokens)
-    if not totals:
-        return 0
-    if len(totals) >= 2 and all(totals[i] <= totals[i + 1] for i in range(len(totals) - 1)):
-        return totals[-1]
-    return sum(totals)
+        found, last = usage_counts(obj)
+        events += found
+        if last is not None:
+            total = last
+    return events + (total or 0)
 
 
 def epoch_of(value):

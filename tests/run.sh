@@ -300,7 +300,7 @@ stale_got=${stale_got%$'\n'}
 check "provider-codex-stale" "$stale_got" '{"observed_at":1761955200,"provider":"codex","source":"session","stale":true,"windows":[]}'
 
 # Many session files: the newest file has no event (a short `codex exec`), one has a
-# malformed last line, one ends with a "premium" limit, and an old day folder is pruned.
+# malformed last line, one ends with a "premium" limit, and an old file is skipped by its mtime.
 many="$TEST_HOME/codex-many"
 mkdir -p "$many/2025/11/02" "$many/2025/10/20"
 rl() { printf '{"timestamp":"%s","type":"event_msg","payload":{"type":"token_count","rate_limits":{"limit_id":"%s","primary":{"used_percent":%s,"window_minutes":300,"resets_at":1762062120},"secondary":{"used_percent":%s,"window_minutes":10080,"resets_at":1762419600},"plan_type":"plus"}}}\n' "$1" "$2" "$3" "$4"; }
@@ -533,7 +533,11 @@ printf '%s' "$third_fresh" | grep -q -F '✨' && check "fresh-once" "no" "yes" |
 nudge_ok=$(NO_COLOR=1 LIMITLINE_NUDGES=1 "$BIN" < "$FIX/over_80.json" | strip_ansi)
 printf '%s' "$nudge_ok" | grep -q -F '→ cursor ok' && check "nudge-cursor" "yes" "yes" || check "nudge-cursor" "$nudge_ok" "cursor ok"
 nudge_codex=$(NO_COLOR=1 LIMITLINE_NUDGES=1 LIMITLINE_CODEX_DIR="$fresh_dir" "$BIN" < "$FIX/over_80.json" | strip_ansi)
-printf '%s' "$nudge_codex" | grep -q -F '→ codex 12%' && check "nudge-codex" "yes" "yes" || check "nudge-codex" "$nudge_codex" "codex 12%"
+# Codex at 5h 12% · 7d 55% is constrained by its week, so it is not offered as "codex 12%".
+printf '%s' "$nudge_codex" | grep -q -F '→ cursor ok' && ! printf '%s' "$nudge_codex" | grep -q -F 'codex 12%' \
+  && check "nudge-codex-week-constrains" "yes" "yes" || check "nudge-codex-week-constrains" "$nudge_codex" "→ cursor ok, no codex 12%"
+nudge_room=$(NO_COLOR=1 LIMITLINE_NUDGES=1 LIMITLINE_CODEX_DIR="$many" "$BIN" < "$FIX/over_80.json" | strip_ansi)
+printf '%s' "$nudge_room" | grep -q -F '→ codex 40%' && check "nudge-codex" "yes" "yes" || check "nudge-codex" "$nudge_room" "codex 40%"
 nudge_ctx=$(NO_COLOR=1 LIMITLINE_NUDGES=1 "$BIN" < "$FIX/near_compact.json" | strip_ansi)
 printf '%s' "$nudge_ctx" | grep -q -F '↯ compact soon: /compact' && check "nudge-compact" "yes" "yes" || check "nudge-compact" "$nudge_ctx" "compact"
 cold_nudge=$(NO_COLOR=1 LIMITLINE_NUDGES=1 "$BIN" < "$FIX/cold_cache.json" | strip_ansi)
@@ -638,6 +642,79 @@ printf '%s' "$sync_got" | grep -q -F '5h 80% ×2' && printf '%s' "$sync_got" | g
   && check "sync-merge" "yes" "yes" || check "sync-merge" "$sync_got" "merged"
 test -f "$sync_dir/mini/claude.json" && check "sync-publish" "yes" "yes" || check "sync-publish" "no" "yes"
 
+# Review F5: sync_dir from the config file works for status, not only the env var.
+sync_cfg_dir="$TEST_HOME/sync-cfg"
+mkdir -p "$sync_cfg_dir/macbook"
+cp "$sync_dir/macbook/claude.json" "$sync_cfg_dir/macbook/claude.json"
+printf 'sync_dir = "%s"\n' "$sync_cfg_dir" > "$TEST_HOME/sync-config.toml"
+sync_cfg_got=$(LIMITLINE_CONFIG="$TEST_HOME/sync-config.toml" LIMITLINE_HOST=mini LIMITLINE_CLAUDE_SNAPSHOT="$TEST_HOME/claude-snapshot.json" LIMITLINE_CODEX_DIR="$codex_prov" "$BIN" status)
+printf '%s' "$sync_cfg_got" | grep -q -F '5h 80% ×2' && test -f "$sync_cfg_dir/mini/claude.json" \
+  && check "sync-config-file" "yes" "yes" || check "sync-config-file" "$sync_cfg_got" "merged and published"
+
+# Review F1: an offline host's stale or expired window never replaces a current reading.
+sync_merge() {
+  python3 -c 'import json, sys
+sys.path.insert(0, sys.argv[1])
+import sync
+rows = json.loads(sys.argv[3])
+out = sync.merge_rows(rows, sys.argv[2])
+print(json.dumps(out[0]["windows"], sort_keys=True))' "$ROOT/lib" "$1" "$2"
+}
+f1_dir="$TEST_HOME/sync-f1"
+mkdir -p "$f1_dir/offline"
+printf '%s\n' '{"observed_at":1700000000,"provider":"codex","source":"session","stale":false,"windows":[{"name":"7d","used_pct":99,"resets_at":100}]}' > "$f1_dir/offline/codex.json"
+f1_local='[{"provider":"codex","observed_at":1762056000,"source":"session","stale":false,"windows":[{"name":"7d","used_pct":10,"resets_at":2000000000}]}]'
+check "sync-expired-remote-ignored" "$(sync_merge "$f1_dir" "$f1_local")" '[{"name": "7d", "resets_at": 2000000000, "used_pct": 10}]'
+# A remote window without a reset counts only while its snapshot is fresh.
+f1b="$TEST_HOME/sync-f1b"
+mkdir -p "$f1b/offline"
+printf '%s\n' '{"observed_at":1762052400,"provider":"codex","source":"session","stale":false,"windows":[{"name":"7d","used_pct":90}]}' > "$f1b/offline/codex.json"
+check "sync-old-noreset-ignored" "$(sync_merge "$f1b" "$f1_local")" '[{"name": "7d", "resets_at": 2000000000, "used_pct": 10}]'
+# Reset cycles: only readings for the same reset (within a few minutes) are compared.
+# The newest cycle wins; a reading from another cycle is not mixed into it.
+f1c="$TEST_HOME/sync-f1c"
+mkdir -p "$f1c/offline" "$f1c/online"
+printf '%s\n' '{"observed_at":1762055000,"provider":"codex","source":"session","stale":false,"windows":[{"name":"7d","used_pct":95,"resets_at":1762060000}]}' > "$f1c/offline/codex.json"
+printf '%s\n' '{"observed_at":1762055900,"provider":"codex","source":"session","stale":false,"windows":[{"name":"7d","used_pct":30,"resets_at":1762664420}]}' > "$f1c/online/codex.json"
+f1c_local='[{"provider":"codex","observed_at":1762056000,"source":"session","stale":false,"windows":[{"name":"7d","used_pct":12,"resets_at":1762664400}]}]'
+check "sync-other-cycle-ignored" "$(sync_merge "$f1c" "$f1c_local")" '[{"machines": 1, "name": "7d", "resets_at": 1762664420, "used_pct": 30}]'
+# A stale-flagged snapshot is ignored even when its reset is still ahead.
+f1d="$TEST_HOME/sync-f1d"
+mkdir -p "$f1d/offline"
+printf '%s\n' '{"observed_at":1762055000,"provider":"codex","source":"session","stale":true,"windows":[{"name":"7d","used_pct":95,"resets_at":1762664400}]}' > "$f1d/offline/codex.json"
+check "sync-stale-remote-ignored" "$(sync_merge "$f1d" "$f1c_local")" '[{"name": "7d", "resets_at": 1762664400, "used_pct": 12}]'
+
+# Review F2: a provider is as constrained as its most-used window.
+f2_got=$(python3 -c 'import sys
+sys.path.insert(0, sys.argv[1])
+import nudge
+nudge.idle_machine = lambda: ""
+nudge.rows = lambda: [
+    {"provider": "codex", "windows": [{"name": "5h", "used_pct": 1}, {"name": "7d", "used_pct": 100}]},
+    {"provider": "cursor", "source": "estimate", "windows": [{"name": "7d", "used_pct": 30, "estimate": True}]},
+]
+print(nudge.suggestion())' "$ROOT/lib")
+check "nudge-exhausted-window" "$f2_got" 'cursor ~30% estimate'
+
+# Review F3: a resumed session in an old date folder still counts when its file is fresh.
+resumed="$TEST_HOME/codex-resumed"
+mkdir -p "$resumed/2025/10/01"
+rl 2025-11-02T03:59:00Z codex 50 20 > "$resumed/2025/10/01/rollout-resumed.jsonl"
+touch -t 202511020359 "$resumed/2025/10/01/rollout-resumed.jsonl"
+check "provider-codex-resumed-old-folder" "$(LIMITLINE_CODEX_DIR="$resumed" "$ROOT/providers/codex")" '{"observed_at":1762055940,"plan":"plus","provider":"codex","source":"session","stale":false,"windows":[{"name":"5h","resets_at":1762062120,"used_pct":50},{"name":"7d","resets_at":1762419600,"used_pct":20}]}'
+
+# Review F4: increasing per-request usage events are summed, not read as a running total.
+printf '%s\n' '{"usage":{"input_tokens":100,"output_tokens":0}}' '{"usage":{"input_tokens":200,"output_tokens":0}}' > "$TEST_HOME/cursor-rising.jsonl"
+f4_got=$(LIMITLINE_CURSOR_LOG="$TEST_HOME/cursor-rising.jsonl" LIMITLINE_CURSOR_WEEK_TOKENS=1000 "$ROOT/providers/cursor" | python3 -c 'import json,sys; w=json.load(sys.stdin)["windows"][0]; print(w["tokens"], w["used_pct"])')
+check "cursor-rising-events-summed" "$f4_got" '300 30'
+printf '%s\n' '{"turn":{"usage":{"input_tokens":50,"output_tokens":0}},"result":{"usage":{"input_tokens":70,"output_tokens":0}}}' > "$TEST_HOME/cursor-nested.jsonl"
+f4_nested=$(LIMITLINE_CURSOR_LOG="$TEST_HOME/cursor-nested.jsonl" LIMITLINE_CURSOR_WEEK_TOKENS=1000 "$ROOT/providers/cursor" | python3 -c 'import json,sys; print(json.load(sys.stdin)["windows"][0]["tokens"])')
+check "cursor-nested-usage-summed" "$f4_nested" '120'
+# Records that say they are running totals keep only the last total.
+printf '%s\n' '{"usage":{"cumulative":true,"input_tokens":100,"output_tokens":0}}' '{"usage":{"cumulative":true,"input_tokens":250,"output_tokens":0}}' > "$TEST_HOME/cursor-cumulative.jsonl"
+f4_cum=$(LIMITLINE_CURSOR_LOG="$TEST_HOME/cursor-cumulative.jsonl" LIMITLINE_CURSOR_WEEK_TOKENS=1000 "$ROOT/providers/cursor" | python3 -c 'import json,sys; print(json.load(sys.stdin)["windows"][0]["tokens"])')
+check "cursor-cumulative-last-total" "$f4_cum" '250'
+
 # Fleet from Pharos state files, otherwise a process list. Paths stay as basenames.
 fleet_line=$(LIMITLINE_PHAROS_RUNS="$FIX/fleet/runs" "$ROOT/lib/fleet.py")
 fleet_line=${fleet_line%$'\n'}
@@ -728,8 +805,8 @@ printf '%s' "$spend_status" | head -n 2 | grep -q -F 'gemini' \
   && printf '%s' "$spend_status" | grep -q -F 'api      spend $0.25' \
   && check "provider-order" "yes" "yes" || check "provider-order" "$spend_status" "constrained first"
 
-nudge_v2=$(NO_COLOR=1 LIMITLINE_NUDGES=1 LIMITLINE_CODEX_DIR="$fresh_dir" LIMITLINE_MACHINES_JSON="$FIX/machines/idle.json" "$BIN" < "$FIX/over_80.json" | strip_ansi)
-printf '%s' "$nudge_v2" | grep -q -F '→ codex 12% · mini idle' \
+nudge_v2=$(NO_COLOR=1 LIMITLINE_NUDGES=1 LIMITLINE_CODEX_DIR="$many" LIMITLINE_MACHINES_JSON="$FIX/machines/idle.json" "$BIN" < "$FIX/over_80.json" | strip_ansi)
+printf '%s' "$nudge_v2" | grep -q -F '→ codex 40% · mini idle' \
   && check "nudge-v2" "yes" "yes" || check "nudge-v2" "$nudge_v2" "codex and idle machine"
 cfg_out=$("$BIN" config)
 printf '%s' "$cfg_out" | grep -q -F 'hosts = ["mini", "worker-1"]' \

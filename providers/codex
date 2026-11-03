@@ -14,7 +14,7 @@ is shown while the event is younger than the window itself.
 `--fields` prints `codex5 12` style lines for bin/limitline instead of JSON.
 """
 import json, os, sys, time
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 
 SCAN_DAYS = 8
 TAIL_BYTES = 8000000
@@ -61,35 +61,13 @@ def to_epoch(value):
     return int(stamp.timestamp())
 
 
-def day_ok(parts, cutoff_day):
-    """Prune YYYY/MM/DD folders older than the scan window by name."""
-    try:
-        if len(parts) == 1:
-            return int(parts[0]) >= cutoff_day.year
-        if len(parts) == 2:
-            return (int(parts[0]), int(parts[1])) >= (cutoff_day.year, cutoff_day.month)
-        if len(parts) == 3:
-            return (int(parts[0]), int(parts[1]), int(parts[2])) >= (cutoff_day.year, cutoff_day.month, cutoff_day.day)
-    except ValueError:
-        return True
-    return True
-
-
 def candidates(root, now):
+    """Every .jsonl file modified in the scan window. Date folders are not pruned
+    by name: a resumed session keeps writing to the rollout file in the folder of
+    the day it started, so only the file's own mtime says whether it is recent."""
     cutoff = now - SCAN_DAYS * 86400
-    cutoff_day = datetime.fromtimestamp(cutoff, timezone.utc).date() - timedelta(days=1)
     found = []
     for dirpath, dirs, files in os.walk(root):
-        rel = os.path.relpath(dirpath, root)
-        prefix = [] if rel == "." else rel.split(os.sep)
-        keep = []
-        for name in dirs:
-            parts = prefix + [name]
-            if len(parts) <= 3 and all(part.isdigit() for part in parts):
-                if not day_ok(parts, cutoff_day):
-                    continue
-            keep.append(name)
-        dirs[:] = keep
         for name in files:
             if not name.endswith(".jsonl"):
                 continue
