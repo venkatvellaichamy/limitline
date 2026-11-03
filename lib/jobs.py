@@ -294,6 +294,11 @@ def detail_lines(found, now=None):
 
 
 def write_line(found=None):
+    try:
+        import history
+        history.record_jobs(load(every=True))
+    except Exception:
+        pass
     text = segment(found)
     path = line_path()
     folder = os.path.dirname(path)

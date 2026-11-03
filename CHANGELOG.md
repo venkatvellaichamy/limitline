@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.8.0
+
+- 30-day local history per plan. `limitline refresh` and `limitline status` record one sample per plan at most every 10 minutes into `~/.cache/limitline/history/`; estimates and stale rows are never recorded.
+- `limitline history [--days N]` prints a daily-peak sparkline per plan and the job history per machine.
+- `limitline report --week [--md]`: per-plan peak, average daily peak, days over 80%, and resets seen, plus the week's jobs by machine.
+- Finished and dead jobs are kept in `~/.cache/limitline/jobs-history.jsonl`, once each, for 30 days.
+
 ## 0.7.0
 
 - `limitline watch` is interactive in a terminal. It lists recent Pharos runs and jobs; `r` resumes, `s` stops (after `y`), and `l` opens logs, through `pharos resume|stop|logs <id>` for runs and signals for jobs on this machine. `p` pauses a job; Pharos has no per-run pause, so `P` and `U` run `pharos pause` and `pharos unpause`. Piped output and `LIMITLINE_WATCH_ONCE=1` still print one plain frame. The status line stays display-only.

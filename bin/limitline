@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # limitline — local usage-limit status line for Claude Code.
 # Reads one JSON object on stdin. No network. Always exits 0.
-# Version: 0.7.0
+# Version: 0.8.0
 
 _here=${0%/*}
 [[ "$_here" == "$0" ]] && _here="."
@@ -18,6 +18,7 @@ limitline — local usage limits for Claude Code and nearby CLIs
   bin/limitline set xai-plan PCT [--resets "YYYY-MM-DD HH:MM"] [--plan NAME]
   bin/limitline job update NAME --done N --total N --failed N --status running
   bin/limitline job list|rm NAME
+  bin/limitline history [--days N] | report --week [--md]
   bin/limitline install-refresher|uninstall-refresher
 
 Config: ~/.config/limitline/config or config.toml
@@ -26,7 +27,7 @@ EOF
 fi
 
 case "${1:-}" in
-  status|preview|doctor|config|report|watch|theme|refresh|install-refresher|uninstall-refresher|--host|set|job)
+  status|preview|doctor|config|report|watch|theme|refresh|install-refresher|uninstall-refresher|--host|set|job|history)
     if command -v python3 >/dev/null 2>&1; then
       exec python3 "$LIMITLINE_ROOT/lib/cli.py" "$@"
     fi
