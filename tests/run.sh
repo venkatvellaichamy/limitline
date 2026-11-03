@@ -652,6 +652,18 @@ printf '%s' "$older_block" | grep -q -F '1 verify · 1 ✗ · 1 stopped, last ac
 LIMITLINE_PHAROS_RUNS="$FIX/fleet/window" LIMITLINE_HOSTS= "$BIN" refresh
 check "fleet-window-refresh" "$(cat "$XDG_CACHE_HOME/limitline/fleet.line")" '⚙ 1 run · 1 verify'
 
+# A sweep can bump last_activity on a finished run; the agent's own stdout.log time wins.
+sweep_root="$TEST_HOME/sweep-runs/run-swept"
+mkdir -p "$sweep_root"
+printf '%s\n' '{"id": "run-swept", "status": "awaiting-verify", "tool": "cursor", "repo": "demo", "started_at": "2025-11-01T09:00:00", "last_activity": 1762052400}' > "$sweep_root/state.json"
+printf '%s\n' 'done' > "$sweep_root/stdout.log"
+TZ=UTC touch -t 202511011000 "$sweep_root/stdout.log"
+sweep_line=$(LIMITLINE_PHAROS_RUNS="$TEST_HOME/sweep-runs" "$ROOT/lib/fleet.py")
+check "fleet-sweep-ignored" "${sweep_line%$'\n'}" ''
+TZ=UTC touch -t 202511020300 "$sweep_root/stdout.log"
+sweep_recent=$(LIMITLINE_PHAROS_RUNS="$TEST_HOME/sweep-runs" "$ROOT/lib/fleet.py")
+check "fleet-log-recent" "${sweep_recent%$'\n'}" '⚙ 1 verify'
+
 # Pharos writes naive local time. Read it as local time, not UTC.
 tz_root="$TEST_HOME/tz-runs/run-tz"
 mkdir -p "$tz_root"

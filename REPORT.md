@@ -127,7 +127,7 @@ Problems found on a real two-Mac setup, each with a test. The installed 0.4.0 li
 
 The machine number without a label was CPU load (1-minute load average over CPU count), not memory. `limitline refresh` and `memory_pressure`, run back to back on both hosts, now agree on the free percentage. A model loaded on an ssh host was invisible because non-interactive ssh has no Homebrew `PATH`.
 
-Pharos stores `started_at` as naive local time, and 0.4.0 read it as UTC. Ages were off by the UTC offset. `state.json` modification times and the last event in `events.jsonl` all move together on every Pharos sweep, so they are not activity signals. The window uses the recorded timestamps instead.
+Pharos stores `started_at` as naive local time, and 0.4.0 read it as UTC. Ages were off by the UTC offset. `state.json` modification times and the last event in `events.jsonl` all move together on every Pharos sweep, so they are not activity signals. Sweeps also bump `last_activity` on runs that finished hours earlier. A finished run is dated by a recorded finish time, else by its `stdout.log` time, which only the agent writes.
 
 The Cursor `7d 100%` came from about 3.1M input and output tokens in a week of cursor run logs, against the 1,000,000 default denominator, capped at 100. It is a ratio to a number the user picks, not a Cursor limit, so it is now shown as `~`.
 

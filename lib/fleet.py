@@ -6,7 +6,8 @@ from datetime import datetime, timezone
 RUN_STATES = {"starting", "running", "stalled"}
 # Counted no matter how old: the run is still live, or waiting to resume.
 ACTIVE_STATES = {"starting", "running", "paused-quota"}
-ACTIVITY_KEYS = ("last_activity", "finished_at", "ended_at", "completed_at", "updated_at", "started_at")
+FINISH_KEYS = ("finished_at", "ended_at", "completed_at")
+FALLBACK_KEYS = ("last_activity", "updated_at", "started_at")
 DEFAULT_WINDOW = 12 * 3600
 VERIFY_STATES = {"awaiting-verify"}
 FAIL_STATES = {"failed", "verify-failed"}
@@ -194,10 +195,32 @@ def window_label(seconds):
 
 
 def activity_epoch(state):
-    """Latest timestamp the run itself recorded. File mtimes are not used: Pharos
-    rewrites every state.json on a sweep, so they all look fresh."""
+    """When the run last did something.
+
+    1. An explicit finish time, when Pharos records one.
+    2. The modification time of the run's stdout.log, which only the agent writes.
+    3. last_activity, updated_at, or started_at.
+
+    last_activity is only a fallback: Pharos sweeps bump it on runs that finished
+    hours earlier. state.json and events.jsonl mtimes are never used, because
+    every sweep rewrites them."""
     best = None
-    for key in ACTIVITY_KEYS:
+    for key in FINISH_KEYS:
+        stamp = epoch_of(state.get(key))
+        if stamp is not None and (best is None or stamp > best):
+            best = stamp
+    if best is not None:
+        return best
+    folder = state.get("_dir")
+    if folder:
+        try:
+            log_mtime = int(os.path.getmtime(os.path.join(folder, "stdout.log")))
+        except OSError:
+            log_mtime = None
+        if log_mtime is not None:
+            started = epoch_of(state.get("started_at"))
+            return max(log_mtime, started) if started is not None else log_mtime
+    for key in FALLBACK_KEYS:
         stamp = epoch_of(state.get(key))
         if stamp is not None and (best is None or stamp > best):
             best = stamp
