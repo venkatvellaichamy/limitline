@@ -332,7 +332,7 @@ jobs by machine
 | `P` / `U` | `pharos pause` / `pharos unpause` (new runs are held or let in) | same |
 | `q` | quit | quit |
 
-`LIMITLINE_PHAROS` points at another `pharos` binary. The pager is `$PAGER`, else `less -R +G`. A job is only signalled when it runs on this machine and its pid is alive; a job reported from another machine says so instead. Stop always asks `y/n`. The status line itself never runs these commands.
+`pharos` is found on `PATH`, or set `pharos = "/path/to/pharos"` in the config (or `LIMITLINE_PHAROS`) when it is not on `PATH`, as when it lives in a project's `bin/`. The pager is `$PAGER`, else `less -R +G`. A job is only signalled when it runs on this machine and its pid is alive; a job reported from another machine says so instead. Stop always asks `y/n`. The status line itself never runs these commands.
 
 If stdout is not a terminal, or `LIMITLINE_WATCH_ONCE=1`, it prints one plain frame and exits. `LIMITLINE_WATCH_KEYS="down s y q"` replays keys without a terminal, which is how the tests drive it.
 

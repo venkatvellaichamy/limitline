@@ -552,6 +552,8 @@ def cmd_config():
     print('# grok = "on"')
     print("# background jobs reported with limitline job update; shown unless jobs = \"off\"")
     print('# jobs = "on"')
+    print("# pharos binary for limitline watch, when it is not on PATH")
+    print('# pharos = "~/projects/pharos/bin/pharos"')
     print("# jobs_ttl = 600")
     print("# themes: minimal, powerline, ascii, pill, emoji, mono")
     print("# LIMITLINE_ASCII=1 forces the ascii theme. NO_COLOR disables ANSI.")

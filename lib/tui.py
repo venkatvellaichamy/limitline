@@ -30,9 +30,14 @@ LIVE_RUN = ("starting", "running", "paused-quota", "stalled")
 
 
 def pharos_bin():
-    override = os.environ.get("LIMITLINE_PHAROS")
+    """LIMITLINE_PHAROS, else `pharos = "/path/to/pharos"` in the config, else PATH."""
+    try:
+        from config import setting
+        override = setting("pharos", "LIMITLINE_PHAROS", "")
+    except Exception:
+        override = os.environ.get("LIMITLINE_PHAROS", "")
     if override:
-        return override
+        return os.path.expanduser(override)
     return shutil.which("pharos") or ""
 
 
