@@ -317,6 +317,17 @@ check "codex-many-files-nojq" "$many_py" "$many_line"
 many_status=$(LIMITLINE_CODEX_DIR="$many" "$BIN" status | grep '^codex')
 check "codex-many-files-status" "$many_status" 'codex    5h 30% · 7d 40%'
 
+# Real-world shape (2026-11): the newest file holds only a "premium" event whose windows
+# are null. It must not hide the older "codex" event that carries the windows.
+prem="$TEST_HOME/codex-premium"
+mkdir -p "$prem/2025/11/02"
+rl 2025-11-02T03:20:00Z codex 30 40 > "$prem/2025/11/02/rollout-a.jsonl"
+printf '%s\n' '{"timestamp":"2025-11-02T03:50:00Z","type":"event_msg","payload":{"type":"token_count","rate_limits":{"limit_id":"premium","limit_name":null,"primary":null,"secondary":null,"credits":{"has_credits":false}}}}' > "$prem/2025/11/02/rollout-z.jsonl"
+touch -t 202511020321 "$prem/2025/11/02/rollout-a.jsonl"
+touch -t 202511020351 "$prem/2025/11/02/rollout-z.jsonl"
+prem_got=$(LIMITLINE_CODEX_DIR="$prem" "$ROOT/providers/codex")
+check "provider-codex-premium-null" "$prem_got" '{"observed_at":1762053600,"plan":"plus","provider":"codex","source":"session","stale":false,"windows":[{"name":"5h","resets_at":1762062120,"used_pct":30},{"name":"7d","resets_at":1762419600,"used_pct":40}]}'
+
 # A 28-hour-old event: the 5h window has reset, the 7d window has not, so 7d stays.
 week_dir="$TEST_HOME/codex-week"
 mkdir -p "$week_dir"

@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.8.1
+
+- Codex: an event that carries a 5h/7d window now always beats one without. Codex also writes `limit_id: "premium"` events with null windows, and when the newest session file held only one of those, the status showed "no current window".
+
 ## 0.8.0
 
 - 30-day local history per plan. `limitline refresh` and `limitline status` record one sample per plan at most every 10 minutes into `~/.cache/limitline/history/`; estimates and stale rows are never recorded.
