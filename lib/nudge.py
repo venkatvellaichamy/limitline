@@ -3,13 +3,14 @@
 import json, os, subprocess, sys
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-ORDER = ("codex", "cursor", "grok", "gemini")
+ORDER = ("codex", "cursor", "grok", "antigravity")
 
 
 def run_provider(name):
     path = os.path.join(ROOT, "providers", name)
+    cmd = [path] if os.access(path, os.X_OK) else [sys.executable, path]
     try:
-        proc = subprocess.run([path], capture_output=True, timeout=2, env=os.environ.copy())
+        proc = subprocess.run(cmd, capture_output=True, timeout=2, env=os.environ.copy())
         data = json.loads(proc.stdout.decode() or "{}")
     except Exception:
         data = {}
@@ -83,7 +84,8 @@ def suggestion():
         return text
     if hint:
         return hint
-    for name in ("cursor", "codex", "grok", "gemini"):
+    # Antigravity without a reading is unknown, not free, so it is never "ok".
+    for name in ("cursor", "codex", "grok"):
         if name in empty:
             return name + " ok"
     if measured is not None:

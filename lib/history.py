@@ -4,7 +4,7 @@
 Plan samples live in ~/.cache/limitline/history/<plan>.tsv as
 `epoch pct resets_at` lines, at most one per 10 minutes per plan, kept for
 30 days. Plans are measured windows only: claude-5h, claude-7d, codex-5h,
-codex-7d, cursor+grok-week, gemini-quota. Estimates and stale rows are not
+codex-7d, cursor+grok-week, antigravity-<bucket>. Estimates and stale rows are not
 recorded, so a history line is never built from a guess.
 
 Finished jobs (ok, failed, stopped, or dead) are appended once each to

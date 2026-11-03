@@ -214,7 +214,19 @@ def fetch_xai(force=False):
     return xai_fetch.fetch(force=force)
 
 
+def fetch_agy(force=False):
+    """Have agy print its usage (`agy -p "/usage"`: no agent turn, no tokens) at
+    most every agy_ttl minutes, with a timeout. Never from the status line."""
+    import antigravity
+    return antigravity.fetch(force=force)
+
+
+# The last Antigravity fetch result, for `limitline refresh` to print.
+AGY_RESULT = ""
+
+
 def main(argv=None):
+    global AGY_RESULT
     argv = list(sys.argv[1:] if argv is None else argv)
     for step in (write_grok, write_jobs, write_fleet, write_machines, write_history):
         try:
@@ -223,6 +235,15 @@ def main(argv=None):
             continue
     result = ""
     if "--no-fetch" not in argv:
+        try:
+            AGY_RESULT = fetch_agy(force="--force" in argv)
+        except Exception:
+            AGY_RESULT = "failed"
+        if AGY_RESULT == "fetched":
+            try:
+                write_history()
+            except Exception:
+                pass
         try:
             result = fetch_xai(force="--force" in argv)
         except Exception:
