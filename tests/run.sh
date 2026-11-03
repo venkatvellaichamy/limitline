@@ -1022,5 +1022,31 @@ else
   check "warm-cache-${warm_ms}ms" "slow" "fast"
 fi
 
+# A warm jobs line costs one stat and one read on the status line.
+jobs_speed_dir="$TEST_HOME/speed-jobs"
+LIMITLINE_JOBS_DIR="$jobs_speed_dir" LIMITLINE_JOBS_LINE="$TEST_HOME/speed-jobs.line" "$BIN" job update mining --done 1 --total 9 >/dev/null
+jobs_ms=$(BIN="$BIN" LIMITLINE_JOBS_DIR="$jobs_speed_dir" LIMITLINE_JOBS_LINE="$TEST_HOME/speed-jobs.line" python3 -c '
+import subprocess, time, os
+bin = os.environ["BIN"]
+payload = b"{\"model\":{\"display_name\":\"Opus\"}}"
+env = os.environ.copy()
+env["NO_COLOR"] = "1"
+env["LIMITLINE_SEGMENTS"] = "model,jobs"
+env["LIMITLINE_REFRESH"] = "0"
+total = 0.0
+runs = 8
+subprocess.run([bin], input=payload, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, env=env, check=False)
+for _ in range(runs):
+    start = time.perf_counter()
+    subprocess.run([bin], input=payload, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, env=env, check=False)
+    total += time.perf_counter() - start
+print(int(total / runs * 1000))
+')
+if [[ "$jobs_ms" -le 50 ]]; then
+  check "jobs-warm-${jobs_ms}ms" "fast" "fast"
+else
+  check "jobs-warm-${jobs_ms}ms" "slow" "fast"
+fi
+
 printf '\n%d passed, %d failed\n' "$pass" "$fail"
 [[ "$fail" -eq 0 ]]
