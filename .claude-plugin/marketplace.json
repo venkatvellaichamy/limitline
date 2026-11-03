@@ -8,7 +8,7 @@
     {
       "name": "limitline",
       "description": "Compact colour-coded local usage limits for Claude Code and nearby CLIs. Reads local session data only and makes no network calls.",
-      "version": "0.8.1",
+      "version": "0.9.0",
       "author": {
         "name": "Venkat Vellaichamy"
       },

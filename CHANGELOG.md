@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.9.0
+
+Live data and safer jobs. (Briefly numbered 0.8.2 and 0.8.3 on two unmerged branches; released together as 0.9.0.)
+
+- The `cursor+grok` plan percent is live. It is the newest `billing: fetched credits config` line in `~/.grok/logs/unified.jsonl`: `creditUsagePercent`, the reset from `currentPeriod.end`, the plan from `subscriptionTier`, observed at `ts`. The log is read backwards from the end in 512 KB chunks, so a multi-megabyte log costs one chunk; malformed lines are skipped.
+- `limitline refresh` makes the Grok CLI write that line: it opens grok in a pseudo-terminal from an empty folder, types `/usage show` (a local command that uses no tokens and calls only xAI's billing API with the CLI's own login), waits for the new line, and always stops grok and its process group. At most every `xai_ttl` minutes (default 30), one at a time (a lock), with a 45-second limit. Never from the status-line render: the status line's own refresh runs with `--no-fetch`. If grok is missing or the fetch fails, the last reading stays and is marked stale. limitline never reads `~/.grok/auth.json` or any token. `limitline refresh --force` ignores the TTL.
+- `limitline set xai-plan` is now a manual override. Its value is always labelled `manual` and dimmed, and the live reading wins whenever it is at least as new. History records live readings only.
+- The plan reset shows as a local day and time: `cursor+grok 74% · Thu 23:22`. `limitline status` adds the source: `· live`.
+- `limitline schedule install|uninstall|status`: a launchd agent, `com.limitline.refresh`, that runs `limitline refresh` every 15 minutes.
+- `limitline doctor` reports the live reading, the last fetch, the manual override, and the schedule agent.
+- Jobs: a reused pid is no longer taken for the job. `job update --pid` records `pid_start`, the process start time (`ps -o lstart=`). A live pid whose process started later is shown as `dead`.
+- `watch` signals a job only after re-reading its file: the `pid`, `started_at`, and process start time must still match what was shown, or nothing is sent. A reused pid is never paused or killed.
+- After a signal, the job's status is written only if the file still names the same pid and run, so a job that restarted in between is not marked `stopped`.
+
 ## 0.8.1
 
 - Codex: an event that carries a 5h/7d window now always beats one without. Codex also writes `limit_id: "premium"` events with null windows, and when the newest session file held only one of those, the status showed "no current window".

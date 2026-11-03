@@ -413,13 +413,22 @@ def fleet_doctor():
         lines.append("machines cache: %ds old, ttl %ds%s; %s" % (mage, mach_ttl, "" if mage <= mach_ttl else " (stale, hidden)", ", ".join(bits) or "no hosts"))
 
     xai = load_lib("xaiplan")
-    plan_age = cache_age(xai.cache_path())
-    if plan_age is None:
-        lines.append("cursor+grok plan cache: missing (limitline set xai-plan PCT); Cursor shows a token estimate")
+    live = xai.read_log()
+    if live is None:
+        lines.append("cursor+grok live: no reading in %s (limitline refresh runs grok /usage show)" % xai.log_path())
     else:
-        row = xai.read()
-        state = "hidden, older than 7 days" if not xai.present(row) else ("stale" if row.get("stale") else "fresh")
-        lines.append("cursor+grok plan cache: %ds old, %s" % (plan_age, state))
+        lines.append("cursor+grok live: %ds old, from the Grok log" % max(0, now_epoch() - int(live["observed_at"])))
+    fetch = xai.fetch_state()
+    if fetch.get("last_attempt"):
+        lines.append("cursor+grok fetch: last try %ds ago, %s" % (max(0, now_epoch() - int(fetch["last_attempt"])), ("failed: " + str(fetch.get("error"))) if fetch.get("error") else "ok"))
+    plan_age = cache_age(xai.cache_path())
+    if plan_age is not None:
+        lines.append("cursor+grok manual override: %ds old (limitline set xai-plan); used only when newer than live" % plan_age)
+    row = xai.read()
+    if xai.present(row):
+        lines.append("cursor+grok shown: source %s, %s" % (row.get("source"), "stale" if row.get("stale") else "fresh"))
+    else:
+        lines.append("cursor+grok shown: none; Cursor shows a token estimate")
     jobs = load_lib("jobs")
     if os.path.isdir(jobs.jobs_dir()):
         every = jobs.load(every=True)
@@ -429,6 +438,8 @@ def fleet_doctor():
 
     state, detail = refresher.status()
     lines.append("refresher: %s (%s)" % (state, detail))
+    state, detail = load_lib("schedule").status()
+    lines.append("schedule: %s (%s)" % (state, detail))
 
     sync_dir = config.setting("sync_dir", "LIMITLINE_SYNC_DIR", "")
     if not sync_dir:
@@ -623,9 +634,9 @@ def cmd_theme():
     print('Set one with theme = "pill" or LIMITLINE_THEME=pill')
 
 
-USAGE = ("usage: limitline status | --host NAME | preview | doctor | config | report | watch | theme | refresh"
+USAGE = ("usage: limitline status | --host NAME | preview | doctor | config | report | watch | theme | refresh [--force]"
          " | history [--days N] | report [--week] [--md] | set xai-plan PCT [--resets \"YYYY-MM-DD HH:MM\"] [--plan NAME] | job update|list|rm"
-         " | install-refresher | uninstall-refresher")
+         " | install-refresher | uninstall-refresher | schedule install|uninstall|status")
 
 
 def parse_local(text):
@@ -719,9 +730,14 @@ def main(argv):
         sys.exit(load_lib("jobs").main(argv[1:]) or 0)
     elif cmd == "refresh":
         try:
-            load_lib("refresh").main()
+            result = load_lib("refresh").main(argv[1:])
         except Exception:
             return
+        # Say what the Grok plan fetch did, unless it is switched off.
+        if result and not result.endswith("LIMITLINE_XAI_FETCH=0"):
+            print("xai plan: %s" % result)
+    elif cmd == "schedule":
+        sys.exit(load_lib("schedule").main(argv[1:]) or 0)
     else:
         print(USAGE)
 

@@ -1,17 +1,27 @@
 #!/usr/bin/env python3
 """The shared xAI plan: one subscription covers Cursor, Grok, Grok Bot, and Grok Build.
 
-No local CLI exposes the plan's percent. The number comes from a small cache at
-~/.cache/limitline/xai-plan.json, written by `limitline set xai-plan` or by a
-browser helper that reads the usage dashboard:
+Live source: the Grok CLI logs one line to ~/.grok/logs/unified.jsonl each time
+its `/usage show` command fetches the plan from xAI:
 
-    {"used_pct": 69, "resets_at": <epoch>, "observed_at": <epoch>,
-     "plan": "Super", "source": "dashboard"}
+    {"ts": "...Z", "msg": "billing: fetched credits config",
+     "ctx": {"config": {"creditUsagePercent": 74.0,
+                        "currentPeriod": {"end": "...+00:00", ...}, ...},
+             "subscriptionTier": "SuperGrok Plus"}}
 
-A reading older than 6 hours is shown dimmed with its age. One older than 7 days
-is hidden. Once resets_at has passed, the percent belongs to an old window and
-is not shown. When the cache is present, Cursor and Grok are one row, and the
-Cursor token estimate is not shown at all.
+The newest such line is the live reading (source "live"). `limitline refresh`
+makes Grok write a fresh one (lib/xai_fetch.py); this module only reads.
+
+Manual override: ~/.cache/limitline/xai-plan.json, written by
+`limitline set xai-plan`. It is always labelled source "manual" and shown
+dimmed, so a typed number never passes for live data. The live reading wins
+whenever it is at least as new as the manual one.
+
+A reading older than 6 hours is shown dimmed with its age, and so is a live
+reading when the last fetch after it failed. One older than 7 days is hidden.
+Once resets_at has passed, the percent belongs to an old window and is not
+shown. With a reading, Cursor and Grok are one row, and the Cursor token
+estimate is not shown at all.
 """
 import json, os, sys, time
 
@@ -22,6 +32,8 @@ PROVIDER = "xai-plan"
 LABEL = "cursor+grok"
 STALE_AFTER = 6 * 3600
 HIDE_AFTER = 7 * 86400
+LOG_MARKER = "fetched credits config"
+TAIL_BYTES = 512 * 1024
 
 
 def cache_dir():
@@ -31,6 +43,118 @@ def cache_dir():
 
 def cache_path():
     return os.environ.get("LIMITLINE_XAI_PLAN") or os.path.join(cache_dir(), "xai-plan.json")
+
+
+def log_path():
+    if os.environ.get("LIMITLINE_GROK_LOG"):
+        return os.environ["LIMITLINE_GROK_LOG"]
+    return os.path.join(os.path.expanduser("~"), ".grok", "logs", "unified.jsonl")
+
+
+def iso_epoch(text):
+    if not isinstance(text, str) or not text:
+        return None
+    from datetime import datetime
+    raw = text.strip()
+    if raw.endswith("Z"):
+        raw = raw[:-1] + "+00:00"
+    try:
+        stamp = datetime.fromisoformat(raw)
+    except ValueError:
+        return None
+    if stamp.tzinfo is None:
+        return None
+    return int(stamp.timestamp())
+
+
+def parse_log_line(raw):
+    """A reading dict from one Grok log line, or None if it is not a usable
+    `fetched credits config` line."""
+    if isinstance(raw, bytes):
+        try:
+            raw = raw.decode("utf-8")
+        except UnicodeDecodeError:
+            return None
+    if LOG_MARKER not in raw:
+        return None
+    try:
+        data = json.loads(raw)
+    except ValueError:
+        return None
+    if not isinstance(data, dict) or LOG_MARKER not in str(data.get("msg") or ""):
+        return None
+    ctx = data.get("ctx") if isinstance(data.get("ctx"), dict) else {}
+    config = ctx.get("config") if isinstance(ctx.get("config"), dict) else {}
+    used = number(config.get("creditUsagePercent"))
+    observed = iso_epoch(data.get("ts"))
+    if used is None or observed is None:
+        return None
+    period = config.get("currentPeriod") if isinstance(config.get("currentPeriod"), dict) else {}
+    reading = {"used_pct": used, "observed_at": observed, "source": "live"}
+    reset = iso_epoch(period.get("end")) or iso_epoch(config.get("billingPeriodEnd"))
+    if reset is not None:
+        reading["resets_at"] = reset
+    plan = clean_text(ctx.get("subscriptionTier"))
+    if plan:
+        reading["plan"] = plan
+    return reading
+
+
+def read_log(path=None):
+    """The newest usable reading in the Grok log. Reads backwards from the end
+    in 512 KB chunks, so a large log costs one chunk when the line is recent and
+    a full scan only when it is not."""
+    path = path or log_path()
+    try:
+        handle = open(path, "rb")
+    except OSError:
+        return None
+    with handle:
+        try:
+            handle.seek(0, os.SEEK_END)
+            end = handle.tell()
+        except OSError:
+            return None
+        carry = b""
+        while end > 0:
+            start = max(0, end - TAIL_BYTES)
+            handle.seek(start)
+            chunk = handle.read(end - start) + carry
+            lines = chunk.split(b"\n")
+            # The first piece may be the tail of a line that starts earlier.
+            carry = lines.pop(0) if start > 0 else b""
+            for raw in reversed(lines):
+                if LOG_MARKER.encode() in raw:
+                    found = parse_log_line(raw)
+                    if found is not None:
+                        return found
+            end = start
+        if carry and LOG_MARKER.encode() in carry:
+            return parse_log_line(carry)
+    return None
+
+
+def fetch_state():
+    """What lib/xai_fetch.py recorded about its last attempt."""
+    try:
+        data = json.load(open(os.path.join(cache_dir(), "xai-fetch.json")))
+    except (OSError, ValueError):
+        return {}
+    return data if isinstance(data, dict) else {}
+
+
+def read_manual():
+    try:
+        data = json.load(open(cache_path()))
+    except (OSError, ValueError):
+        return None
+    if not isinstance(data, dict):
+        return None
+    if number(data.get("used_pct")) is None or number(data.get("observed_at")) is None:
+        return None
+    # Nothing in this file is live: it was typed in or copied by hand.
+    data["source"] = "manual"
+    return data
 
 
 def now_epoch():
@@ -59,14 +183,20 @@ def empty():
     return {"label": LABEL, "observed_at": None, "provider": PROVIDER, "source": "none", "stale": False, "windows": []}
 
 
+def pick(live, manual):
+    """The live reading unless the manual one is strictly newer."""
+    if live is None:
+        return manual
+    if manual is None:
+        return live
+    return manual if int(manual["observed_at"]) > int(live["observed_at"]) else live
+
+
 def read(now=None):
     now = now_epoch() if now is None else now
     out = empty()
-    try:
-        data = json.load(open(cache_path()))
-    except (OSError, ValueError):
-        return out
-    if not isinstance(data, dict):
+    data = pick(read_log(), read_manual())
+    if data is None:
         return out
     used = number(data.get("used_pct"))
     observed = number(data.get("observed_at"))
@@ -80,8 +210,14 @@ def read(now=None):
     reset = number(data.get("resets_at"))
     out["observed_at"] = observed
     out["age"] = max(0, age)
-    out["source"] = clean_text(data.get("source")) or "dashboard"
+    out["source"] = "live" if data.get("source") == "live" else "manual"
     out["stale"] = age > STALE_AFTER
+    if out["source"] == "live":
+        state = fetch_state()
+        attempt = number(state.get("last_attempt"))
+        if state.get("error") and attempt is not None and attempt >= observed:
+            out["stale"] = True
+            out["fetch_error"] = clean_text(state.get("error"), 80)
     plan = clean_text(data.get("plan"))
     if plan:
         out["plan"] = plan
@@ -155,34 +291,43 @@ def parts(row, long=False):
     if windows:
         window = windows[0]
         pct = "%s%%" % window.get("used_pct")
+        if row.get("source") == "manual":
+            bits.append("manual")
         if window.get("resets_at") is not None:
-            label = timefmt.month_day(window["resets_at"])
+            label = timefmt.day_time(window["resets_at"])
             bits.append(("resets " + label) if long else label)
     elif row.get("reset_passed"):
-        bits.append("reset %s, no newer reading" % timefmt.month_day(row["reset_passed"]))
+        bits.append("reset %s, no newer reading" % timefmt.day_time(row["reset_passed"]))
     if long and row.get("plan"):
         bits.append(row["plan"])
+    if long and windows and row.get("source") == "live":
+        bits.append("live")
     tokens = grok_tokens(row)
     if tokens is not None:
         bits.append("grok 7d %s tok" % short_tokens(tokens))
     if row.get("stale") and row.get("age") is not None:
         bits.append("%s old" % timefmt.age(row["age"]))
+    if long and row.get("fetch_error"):
+        bits.append("refresh failed: " + row["fetch_error"])
     return pct, bits
 
 
 def brief(row, long=False):
-    """`69% · Nov 5 · grok 7d 1.2M tok`, with `· 9h old` once the reading is stale."""
+    """`74% · Thu 23:22 · grok 7d 1.2M tok`, with `· 9h old` once the reading is
+    stale and `· manual` for a typed number."""
     pct, bits = parts(row, long=long)
     return " · ".join(([pct] if pct else []) + bits)
 
 
 def line_fields(row):
-    """grok.line for the status line: the text, then `pct stale` on line 2."""
+    """grok.line for the status line: the text, then `pct dim source` on line 2.
+    A stale or manual reading is dimmed."""
     if not present(row):
         return "", ""
     pct, _bits = parts(row)
     text = LABEL + " " + brief(row)
-    flags = "%s %d" % (pct.rstrip("%") or "-", 1 if row.get("stale") else 0)
+    dim = row.get("stale") or row.get("source") != "live"
+    flags = "%s %d %s" % (pct.rstrip("%") or "-", 1 if dim else 0, row.get("source") or "manual")
     return text, flags
 
 

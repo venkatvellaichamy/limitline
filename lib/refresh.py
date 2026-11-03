@@ -170,8 +170,8 @@ def write_machines():
 
 
 def write_grok():
-    """grok.line: with the shared plan cache, `cursor+grok 69% · Nov 5 · grok 7d
-    1.2M tok` and a second line of `pct stale` flags for the renderer. Without
+    """grok.line: with a plan reading, `cursor+grok 74% · Thu 23:22 · grok 7d
+    1.2M tok` and a second line of `pct dim source` flags for the renderer. Without
     it, Grok's plan and 7-day tokens, never a percent. Written even when empty,
     so a stale line does not outlive the files it came from."""
     plan = xaiplan.read()
@@ -206,12 +206,34 @@ def write_history():
     history.record(cli.load_all())
 
 
-def main():
+def fetch_xai(force=False):
+    """Have the Grok CLI fetch the xAI plan into its log, at most every xai_ttl
+    minutes and one at a time. Slow (a pty session), so it runs after the fast
+    steps, and never when the status line launched this refresh."""
+    import xai_fetch
+    return xai_fetch.fetch(force=force)
+
+
+def main(argv=None):
+    argv = list(sys.argv[1:] if argv is None else argv)
     for step in (write_grok, write_jobs, write_fleet, write_machines, write_history):
         try:
             step()
         except Exception:
             continue
+    result = ""
+    if "--no-fetch" not in argv:
+        try:
+            result = fetch_xai(force="--force" in argv)
+        except Exception:
+            result = "failed"
+        if result == "fetched" or result.startswith("failed"):
+            for step in (write_grok, write_history):
+                try:
+                    step()
+                except Exception:
+                    continue
+    return result
 
 
 if __name__ == "__main__":

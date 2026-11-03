@@ -62,7 +62,7 @@ def plan_samples(rows):
     for row in rows or []:
         if not isinstance(row, dict) or row.get("stale"):
             continue
-        if row.get("source") in (None, "none", "estimate"):
+        if row.get("source") in (None, "none", "estimate", "manual"):
             continue
         provider = row.get("label") or row.get("provider") or ""
         if provider in ("api",):
