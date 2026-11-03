@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.8.3
+
+- Jobs: a reused pid is no longer taken for the job. `job update --pid` records `pid_start`, the process start time (`ps -o lstart=`). A live pid whose process started later is shown as `dead`.
+- `watch` signals a job only after re-reading its file: the `pid`, `started_at`, and process start time must still match what was shown, or nothing is sent. A reused pid is never paused or killed.
+- After a signal, the job's status is written only if the file still names the same pid and run, so a job that restarted in between is not marked `stopped`.
+
 ## 0.8.1
 
 - Codex: an event that carries a 5h/7d window now always beats one without. Codex also writes `limit_id: "premium"` events with null windows, and when the newest session file held only one of those, the status showed "no current window".
