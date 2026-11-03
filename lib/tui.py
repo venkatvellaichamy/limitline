@@ -9,7 +9,8 @@ Pharos actions shell out to `pharos resume|stop|logs <id>` and `pharos
 pause|unpause` (`LIMITLINE_PHAROS` names another binary). Pharos has no
 per-run pause: `pharos pause` stops new runs from starting, so it is `P`.
 
-Job actions only touch a job on this machine with a live pid: `p` sends
+Job actions only touch a job on this machine whose pid is still the reported
+process (same pid, run, and process start time): `p` sends
 SIGSTOP, `r` SIGCONT, `s` SIGTERM, and the job file's status follows. `l`
 opens the job's log in `$PAGER` (default `less +G`).
 
@@ -88,30 +89,44 @@ def pharos(args):
 
 
 def local_pid(job):
-    """The job's pid when it runs on this machine and is alive, else None."""
+    """The job's pid when it runs on this machine and is still the process that
+    was reported (same recorded start time), else None."""
     pid = jobs.whole(job.get("pid"))
     machine = jobs.clean(job.get("machine"), 40)
     if machine not in (None, jobs.host_name()):
         return None
-    if jobs.pid_alive(pid) is not True:
+    if jobs.same_process(job) is not True:
         return None
     return pid
 
 
 def job_signal(job, sig, status, verb):
-    pid = local_pid(job)
+    """Signal a job's process only if the job file still names the same pid and
+    run (started_at) that watch showed, and that pid is still the same process.
+    The status is written back only if the file still names that pid and run."""
+    name = job["name"]
+    current = jobs.read_job(jobs.path_for(name))
+    if current is None:
+        return "%s: the job file is gone; not %s" % (name, verb)
+    if current.get("pid") != job.get("pid") or current.get("started_at") != job.get("started_at") \
+            or current.get("pid_start") != job.get("pid_start"):
+        return "%s: the job file changed; not %s" % (name, verb)
+    pid = local_pid(current)
     if pid is None:
-        return "%s: no live pid on this machine" % job["name"]
+        return "%s: no live pid on this machine" % name
     try:
         os.kill(pid, sig)
     except OSError as exc:
-        return "%s: %s failed (%s)" % (job["name"], verb, exc.__class__.__name__)
+        return "%s: %s failed (%s)" % (name, verb, exc.__class__.__name__)
+    message = "%s: %s (pid %d)" % (name, verb, pid)
     try:
-        jobs.update(job["name"], {"status": status})
+        expect = {"pid": current.get("pid"), "started_at": current.get("started_at")}
+        if jobs.update(name, {"status": status}, expect=expect) is None:
+            message += "; the job restarted, its file was left as is"
         jobs.write_line()
     except Exception:
         pass
-    return "%s: %s (pid %d)" % (job["name"], verb, pid)
+    return message
 
 
 def pager_cmd():

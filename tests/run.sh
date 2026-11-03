@@ -873,7 +873,7 @@ cur_nudge=$(NO_COLOR=1 LIMITLINE_NUDGES=1 LIMITLINE_CURSOR_LOG="$FIX/providers/c
 printf '%s' "$cur_nudge" | grep -q -F '→ cursor ~11% estimate' \
   && check "cursor-estimate-nudge" "yes" "yes" || check "cursor-estimate-nudge" "$cur_nudge" "→ cursor ~11% estimate"
 
-# Shared Cursor + Grok plan. Live source (0.8.2): the newest "fetched credits config"
+# Shared Cursor + Grok plan. Live source (0.9.0): the newest "fetched credits config"
 # line in the Grok log. Manual override: the xai-plan.json cache, always labelled manual.
 # Every path is an override, so nothing touches ~/.grok or ~/.cache.
 plan_home="$TEST_HOME/plan"
@@ -1127,6 +1127,22 @@ python3 "$ROOT/lib/refresh.py"
 printf '%s' "$(cat "$LIMITLINE_JOBS_LINE")" | grep -q -F 'zombie dead 5/10' \
   && check "jobs-refresh-dead" "yes" "yes" || check "jobs-refresh-dead" "$(cat "$LIMITLINE_JOBS_LINE")" "zombie dead"
 
+# A recycled pid (0.9.0): the process start time is stored with the pid, and a live
+# process that started later than the recorded one is not the job.
+sleep 30 &
+reuse_pid=$!
+"$BIN" job update reused --done 1 --total 9 --pid "$reuse_pid" >/dev/null
+"$BIN" job update samepid --done 1 --total 9 --pid "$reuse_pid" >/dev/null
+recorded=$(python3 -c 'import json,sys; d=json.load(open(sys.argv[1])); print(isinstance(d.get("pid_start"), int) and d["pid_start"] > 0)' "$LIMITLINE_JOBS_DIR/reused.json")
+check "job-pid-start-recorded" "$recorded" 'True'
+python3 -c 'import json,sys; p=sys.argv[1]; d=json.load(open(p)); d["pid_start"] -= 1000; json.dump(d, open(p, "w"))' "$LIMITLINE_JOBS_DIR/reused.json"
+reuse_list=$("$BIN" job list)
+printf '%s' "$reuse_list" | grep -q -F 'reused  mini  dead  1/9' \
+  && printf '%s' "$reuse_list" | grep -q -F 'samepid  mini  running  1/9' \
+  && check "job-pid-reused-dead" "yes" "yes" || check "job-pid-reused-dead" "$reuse_list" "reused dead, samepid running"
+kill "$reuse_pid" 2>/dev/null; wait "$reuse_pid" 2>/dev/null
+"$BIN" job rm reused >/dev/null; "$BIN" job rm samepid >/dev/null
+
 # Finished jobs leave the line after fleet_window; job list still has them.
 printf '%s\n' '{"name": "old", "machine": "mini", "status": "ok", "started_at": 1762000000, "updated_at": 1762000000}' > "$LIMITLINE_JOBS_DIR/old.json"
 "$BIN" status | grep -q -F 'old  mini' && check "job-old-hidden" "shown" "hidden" || check "job-old-hidden" "hidden" "hidden"
@@ -1182,6 +1198,56 @@ LIMITLINE_JOBS_DIR="$tui_home/jobs" LIMITLINE_JOBS_LINE="$tui_home/jobs.line" "$
 remote_out=$(tui "p q")
 printf '%s' "$remote_out" | grep -q -F '> remote: no live pid on this machine' \
   && check "tui-job-other-machine" "yes" "yes" || check "tui-job-other-machine" "$remote_out" "refused"
+# A recycled pid is never signalled: the pid's process started after the recorded one.
+sleep 30 &
+victim=$!
+LIMITLINE_JOBS_DIR="$tui_home/jobs" LIMITLINE_JOBS_LINE="$tui_home/jobs.line" LIMITLINE_HOST=mini "$BIN" job update recycled --done 1 --total 4 --pid "$victim" >/dev/null
+python3 -c 'import json,sys; p=sys.argv[1]; d=json.load(open(p)); d["pid_start"] -= 1000; json.dump(d, open(p, "w"))' "$tui_home/jobs/recycled.json"
+LIMITLINE_JOBS_DIR="$tui_home/jobs" "$BIN" job rm remote >/dev/null
+recycled_out=$(tui "s y q")
+if kill -0 "$victim" 2>/dev/null; then alive=yes; else alive=no; fi
+printf '%s' "$recycled_out" | grep -q -F '> recycled: no live pid on this machine' && [[ "$alive" == yes ]] \
+  && ! grep -q '"status": "stopped"' "$tui_home/jobs/recycled.json" \
+  && check "tui-job-recycled-pid" "yes" "yes" || check "tui-job-recycled-pid" "$recycled_out alive=$alive" "refused, process untouched"
+# The job file changed after watch loaded it (same pid, new started_at): no signal.
+LIMITLINE_JOBS_DIR="$tui_home/jobs" "$BIN" job rm recycled >/dev/null
+moved=$(LIMITLINE_JOBS_DIR="$tui_home/jobs" LIMITLINE_JOBS_LINE="$tui_home/jobs.line" LIMITLINE_HOST=mini LIMITLINE_NOW=1762056000 python3 -c '
+import os, signal, sys
+sys.path.insert(0, sys.argv[1])
+import jobs, tui
+pid = int(sys.argv[2])
+jobs.update("moved", {"pid": pid, "done": 1})
+job = jobs.read_job(jobs.path_for("moved"))
+os.environ["LIMITLINE_NOW"] = "1762056100"
+jobs.update("moved", {"status": "ok"})
+jobs.update("moved", {"status": "running", "pid": pid})
+print(tui.job_signal(job, signal.SIGSTOP, "paused", "paused"))
+print(jobs.read_job(jobs.path_for("moved"))["status"])
+' "$ROOT/lib" "$victim")
+pstate=$(ps -o stat= -p "$victim" | tr -d ' ')
+check "tui-job-file-changed" "$moved|${pstate:0:1}" "$(printf '%s\n%s' 'moved: the job file changed; not paused' 'running')|S"
+# A restart lands between the signal and the status update: the new file is left alone.
+raced=$(LIMITLINE_JOBS_DIR="$tui_home/jobs" LIMITLINE_JOBS_LINE="$tui_home/jobs.line" LIMITLINE_HOST=mini python3 -c '
+import os, signal, sys
+sys.path.insert(0, sys.argv[1])
+import jobs, tui
+pid = int(sys.argv[2])
+os.environ["LIMITLINE_NOW"] = "1762056200"
+jobs.update("raced", {"pid": pid, "done": 1})
+job = jobs.read_job(jobs.path_for("raced"))
+real_kill = os.kill
+def kill_then_restart(target, sig):
+    real_kill(target, sig)
+    os.environ["LIMITLINE_NOW"] = "1762056300"
+    jobs.update("raced", {"status": "ok"})
+    jobs.update("raced", {"status": "running", "pid": os.getpid()})
+tui.os.kill = kill_then_restart
+print(tui.job_signal(job, signal.SIGCONT, "running", "resumed"))
+after = jobs.read_job(jobs.path_for("raced"))
+print(after["status"], after["pid"] == os.getpid(), after["started_at"])
+' "$ROOT/lib" "$victim")
+check "tui-job-update-after-restart" "$raced" "$(printf '%s\n%s' "raced: resumed (pid $victim); the job restarted, its file was left as is" 'running True 1762056300')"
+kill "$victim" 2>/dev/null; wait "$victim" 2>/dev/null
 unset LIMITLINE_PHAROS_RUNS
 once_watch=$(LIMITLINE_WATCH_ONCE=1 "$BIN" watch)
 printf '%s' "$once_watch" | grep -q -F 'Runs and jobs' \

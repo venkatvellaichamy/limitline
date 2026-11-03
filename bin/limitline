@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # limitline — local usage-limit status line for Claude Code.
 # Reads one JSON object on stdin. No network. Always exits 0.
-# Version: 0.8.2
+# Version: 0.9.0
 
 _here=${0%/*}
 [[ "$_here" == "$0" ]] && _here="."

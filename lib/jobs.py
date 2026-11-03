@@ -2,13 +2,15 @@
 """Background jobs that are not Pharos runs: mining passes, backups, anything a
 script wants to report. One JSON file per job in ~/.cache/limitline/jobs/:
 
-    {"name": "mining", "machine": "mini", "pid": 4242, "started_at": <epoch>,
+    {"name": "mining", "machine": "mini", "pid": 4242, "pid_start": <epoch>,
+     "started_at": <epoch>,
      "done": 62, "total": 1842, "failed": 0, "status": "running",
      "log": "/path/to/log", "updated_at": <epoch>}
 
 Scripts report with `limitline job update <name> --done N --total N ...`.
 A job on this machine whose pid is gone, and whose status is not finished, is
-shown as "dead". Finished jobs stay visible for `fleet_window` (default 12h).
+shown as "dead". So is one whose pid now belongs to a process that started
+after `pid_start`, the process start time recorded with the pid: pids are reused. Finished jobs stay visible for `fleet_window` (default 12h).
 """
 import json, os, re, sys, time
 
@@ -113,17 +115,66 @@ def pid_alive(pid):
     return True
 
 
+def proc_start(pid):
+    """When process `pid` started, as epoch seconds, or None if unknown.
+    `ps -o lstart=` prints local time to the second, e.g. `Tue Nov  3 09:42:01 2026`."""
+    if pid is None or pid <= 0:
+        return None
+    import subprocess
+    env = dict(os.environ, LC_ALL="C", LANG="C")
+    try:
+        proc = subprocess.run(["ps", "-o", "lstart=", "-p", str(pid)], capture_output=True,
+                              text=True, timeout=2, env=env)
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    text = " ".join((proc.stdout or "").split())
+    if proc.returncode != 0 or not text:
+        return None
+    try:
+        return int(time.mktime(time.strptime(text, "%a %b %d %H:%M:%S %Y")))
+    except (ValueError, OverflowError):
+        return None
+
+
+# lstart has one-second resolution; allow for a tick between the two reads.
+START_SLACK = 1
+
+
+def same_process(job):
+    """True when the job's pid is alive here and is the process that was
+    reported, False when it is gone or was reused, None when that cannot be told
+    (no recorded start time, or ps failed)."""
+    pid = whole(job.get("pid"))
+    alive = pid_alive(pid)
+    if alive is not True:
+        return alive
+    recorded = whole(job.get("pid_start"))
+    if recorded is None:
+        return None
+    current = proc_start(pid)
+    if current is None:
+        return None
+    return abs(current - recorded) <= START_SLACK
+
+
 def status_of(job, here=None):
     """The status to show. A finished status is kept; a live-looking job whose
-    pid is gone on this machine is "dead"."""
+    pid is gone on this machine, or now belongs to a newer process, is "dead"."""
     raw = (clean(job.get("status"), 20) or "running").lower()
     if raw in FINISHED:
         return raw
     here = host_name() if here is None else here
     machine = clean(job.get("machine"), 40)
     if machine in (None, here):
-        if pid_alive(whole(job.get("pid"))) is False:
+        pid = whole(job.get("pid"))
+        alive = pid_alive(pid)
+        if alive is False:
             return "dead"
+        recorded = whole(job.get("pid_start"))
+        if alive is True and recorded is not None:
+            current = proc_start(pid)
+            if current is not None and current > recorded + START_SLACK:
+                return "dead"
     return raw
 
 
@@ -139,11 +190,17 @@ def kind(status):
     return "active"
 
 
-def update(name, fields, now=None):
+def update(name, fields, now=None, expect=None):
+    """Create or change a job file. With `expect` ({"pid": .., "started_at": ..}),
+    change nothing and return None unless the file still has those values."""
     if not valid_name(name):
         raise ValueError("job names use letters, digits, dot, dash, and underscore")
     now = now_epoch() if now is None else now
     job = read_job(path_for(name)) or {}
+    if expect is not None:
+        for key, want in expect.items():
+            if job.get(key) != want:
+                return None
     fresh = not job
     status = fields.get("status")
     if status is not None:
@@ -158,6 +215,7 @@ def update(name, fields, now=None):
         if restarted:
             for key in ("done", "failed"):
                 job.pop(key, None)
+    old_pid = whole(job.get("pid"))
     for key in ("done", "total", "failed", "pid"):
         if fields.get(key) is not None:
             job[key] = int(fields[key])
@@ -168,6 +226,15 @@ def update(name, fields, now=None):
         job["log"] = os.path.abspath(os.path.expanduser(fields["log"]))
     machine = clean(fields.get("machine"), 40) if fields.get("machine") else None
     job["machine"] = machine or clean(job.get("machine"), 40) or host_name()
+    pid = whole(job.get("pid"))
+    if fields.get("pid") is not None and (pid != old_pid or job.get("pid_start") is None):
+        # Record when this pid's process started, so a reused pid is not taken
+        # for the job. Only a pid on this machine can be looked up.
+        job.pop("pid_start", None)
+        if job["machine"] == host_name():
+            started = proc_start(pid)
+            if started is not None:
+                job["pid_start"] = started
     job["updated_at"] = now
     write_job(job)
     return job
