@@ -39,7 +39,8 @@ unset NO_COLOR LIMITLINE_DEBUG LIMITLINE_DEBUG_FILE LIMITLINE_CODEX_DIR LIMITLIN
   LIMITLINE_SSH_TIMEOUT LIMITLINE_MEM_WARN LIMITLINE_FLEET_WINDOW LIMITLINE_LAUNCHCTL \
   LIMITLINE_LAUNCH_AGENTS XDG_DATA_HOME CLAUDE_CODE_REMOTE LINES \
   LIMITLINE_GROK LIMITLINE_GROK_SETTINGS LIMITLINE_GROK_LINE LIMITLINE_GROK_TTL \
-  LIMITLINE_XAI_PLAN LIMITLINE_JOBS LIMITLINE_JOBS_TTL LIMITLINE_JOBS_DIR LIMITLINE_JOBS_LINE
+  LIMITLINE_XAI_PLAN LIMITLINE_JOBS LIMITLINE_JOBS_TTL LIMITLINE_JOBS_DIR LIMITLINE_JOBS_LINE \
+  LIMITLINE_PHAROS LIMITLINE_PAGER LIMITLINE_WATCH_KEYS PAGER
 : > "$TEST_HOME/empty-ps"
 export LIMITLINE_PS_FILE="$TEST_HOME/empty-ps"
 export LIMITLINE_REFRESH=0
@@ -978,6 +979,63 @@ if "$BIN" job update ok-name --done many >/dev/null 2>&1; then check "job-number
 "$BIN" job rm old && [[ ! -f "$LIMITLINE_JOBS_DIR/old.json" ]] && check "job-rm" "yes" "yes" || check "job-rm" "no" "yes"
 rm -rf "$LIMITLINE_JOBS_DIR" "$LIMITLINE_JOBS_LINE"
 unset LIMITLINE_JOBS_DIR LIMITLINE_JOBS_LINE LIMITLINE_HOST
+
+# Interactive watch (0.7). Keys are replayed without a terminal; a fake pharos records calls.
+tui_home="$TEST_HOME/tui"
+mkdir -p "$tui_home"
+printf '#!/bin/sh\necho "$@" >> "%s/calls"\nif [ "$1" = logs ]; then echo "log line for $2"; else echo "ok $*"; fi\n' "$tui_home" > "$tui_home/pharos"
+chmod +x "$tui_home/pharos"
+tui() { LIMITLINE_PHAROS="$tui_home/pharos" LIMITLINE_PAGER=cat LIMITLINE_JOBS_DIR="$tui_home/jobs" LIMITLINE_JOBS_LINE="$tui_home/jobs.line" LIMITLINE_HOST=mini LIMITLINE_WATCH_KEYS="$1" "$BIN" watch; }
+tui_out=$(LIMITLINE_PHAROS_RUNS="$FIX/fleet/runs" tui "r down s y s n p P U l q")
+check "tui-calls" "$(cat "$tui_home/calls" | tr '\n' ',')" 'resume run-a,stop run-b,pause,unpause,logs run-b,'
+printf '%s' "$tui_out" | grep -q -F '› run-a  cursor  demo  running' \
+  && printf '%s' "$tui_out" | grep -q -F '> stop run run-b? y/n' \
+  && printf '%s' "$tui_out" | grep -q -F '> cancelled' \
+  && printf '%s' "$tui_out" | grep -q -F '> Pharos has no per-run pause; P pauses new runs, s stops this one' \
+  && printf '%s' "$tui_out" | grep -q -F 'log line for run-b' \
+  && printf '%s' "$tui_out" | grep -q -F 'selected: run-b' \
+  && check "tui-runs" "yes" "yes" || check "tui-runs" "$tui_out" "run actions and messages"
+nopharos=$(PATH="$nojq" LIMITLINE_PHAROS_RUNS="$FIX/fleet/runs" LIMITLINE_WATCH_KEYS="r q" "$BIN" watch)
+printf '%s' "$nopharos" | grep -q -F '> pharos not found on PATH' \
+  && check "tui-no-pharos" "yes" "yes" || check "tui-no-pharos" "$nopharos" "pharos not found"
+
+# Jobs: SIGSTOP, SIGCONT, and SIGTERM to a live local pid, and the job file follows.
+sleep 30 &
+sleeper=$!
+printf 'line one\nline two\n' > "$tui_home/sleeper.log"
+LIMITLINE_JOBS_DIR="$tui_home/jobs" LIMITLINE_JOBS_LINE="$tui_home/jobs.line" LIMITLINE_HOST=mini "$BIN" job update sleeper --done 1 --total 4 --pid "$sleeper" --log "$tui_home/sleeper.log" >/dev/null
+export LIMITLINE_PHAROS_RUNS="$TEST_HOME/no-runs"
+paused_out=$(tui "p q")
+pstate=$(ps -o stat= -p "$sleeper" | tr -d ' ')
+printf '%s' "$paused_out" | grep -q -F "> sleeper: paused (pid $sleeper)" && [[ "$pstate" == T* ]] \
+  && grep -q '"status": "paused"' "$tui_home/jobs/sleeper.json" \
+  && check "tui-job-pause" "yes" "yes" || check "tui-job-pause" "$paused_out $pstate" "stopped process"
+resumed_out=$(tui "r l q")
+pstate=$(ps -o stat= -p "$sleeper" | tr -d ' ')
+printf '%s' "$resumed_out" | grep -q -F "> sleeper: resumed (pid $sleeper)" && [[ "$pstate" != T* ]] \
+  && printf '%s' "$resumed_out" | grep -q -F 'line two' \
+  && check "tui-job-resume-logs" "yes" "yes" || check "tui-job-resume-logs" "$resumed_out $pstate" "running again, log shown"
+stopped_out=$(tui "s y q")
+wait "$sleeper" 2>/dev/null
+if kill -0 "$sleeper" 2>/dev/null; then alive=yes; else alive=no; fi
+printf '%s' "$stopped_out" | grep -q -F "> sleeper: stopped (pid $sleeper)" && [[ "$alive" == no ]] \
+  && grep -q '"status": "stopped"' "$tui_home/jobs/sleeper.json" \
+  && check "tui-job-stop" "yes" "yes" || check "tui-job-stop" "$stopped_out alive=$alive" "terminated"
+LIMITLINE_JOBS_DIR="$tui_home/jobs" LIMITLINE_JOBS_LINE="$tui_home/jobs.line" "$BIN" job update remote --pid "$$" --machine worker >/dev/null
+remote_out=$(tui "p q")
+printf '%s' "$remote_out" | grep -q -F '> remote: no live pid on this machine' \
+  && check "tui-job-other-machine" "yes" "yes" || check "tui-job-other-machine" "$remote_out" "refused"
+unset LIMITLINE_PHAROS_RUNS
+once_watch=$(LIMITLINE_WATCH_ONCE=1 "$BIN" watch)
+printf '%s' "$once_watch" | grep -q -F 'Runs and jobs' \
+  && check "watch-once-not-interactive" "interactive" "plain" || check "watch-once-not-interactive" "plain" "plain"
+
+printf 'pharos = "%s"\n' "$tui_home/pharos" > "$tui_home/config.toml"
+cfg_pharos=$(LIMITLINE_CONFIG="$tui_home/config.toml" LIMITLINE_PHAROS_RUNS="$FIX/fleet/runs" LIMITLINE_WATCH_KEYS="r q" "$BIN" watch)
+printf '%s' "$cfg_pharos" | grep -q -F '> pharos resume run-a: ok resume run-a' \
+  && check "tui-pharos-config" "yes" "yes" || check "tui-pharos-config" "$cfg_pharos" "pharos from config"
+pty_got=$(LIMITLINE_PHAROS_RUNS="$FIX/fleet/runs" HOME="$TEST_HOME" python3 "$ROOT/tests/pty_watch.py" "$BIN")
+check "tui-pty" "$pty_got" "exited selected-b cursor-restored"
 
 # Typical speed without the Codex scan: average of 8 runs after one warmup.
 "$BIN" < "$FIX/full.json" >/dev/null
