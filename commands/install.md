@@ -16,8 +16,10 @@ Set Claude Code's `statusLine` to this plugin's `bin/limitline`. Do the work bel
 Desired value:
 
 ```json
-{"type":"command","command":"<absolute path to bin/limitline>","padding":0}
+{"type":"command","command":"<absolute path to bin/limitline>","padding":0,"refreshInterval":30}
 ```
+
+`refreshInterval` is Claude Code's documented `statusLine` timer: it re-runs the command every N seconds (minimum 1) as well as on session events. Without it an idle terminal keeps the fleet, machine, and plan numbers it last drew, so two idle terminals can show different numbers. 30 seconds keeps every terminal on the shared caches; a warm render takes about 30 ms.
 
 ## Edit settings
 
@@ -40,7 +42,7 @@ with open(path) as fh:
     data = json.load(fh)
 if not isinstance(data, dict):
     raise SystemExit("settings root must be an object")
-data["statusLine"] = {"type": "command", "command": command, "padding": 0}
+data["statusLine"] = {"type": "command", "command": command, "padding": 0, "refreshInterval": 30}
 with open(path, "w") as fh:
     json.dump(data, fh, indent=2)
     fh.write("\n")

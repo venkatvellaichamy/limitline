@@ -47,6 +47,9 @@ unset NO_COLOR LIMITLINE_DEBUG LIMITLINE_DEBUG_FILE LIMITLINE_CODEX_DIR LIMITLIN
 : > "$TEST_HOME/empty-ps"
 export LIMITLINE_PS_FILE="$TEST_HOME/empty-ps"
 export LIMITLINE_REFRESH=0
+# A payload without rate_limits falls back to the cached Claude 7d reading. The fixture
+# renders write that cache in file order, so the fallback is off except where tested.
+export LIMITLINE_CLAUDE_CACHE=0
 # The Grok plan fetch starts a CLI in a pty; only the refresher tests turn it on.
 export LIMITLINE_XAI_FETCH=0
 
@@ -714,6 +717,33 @@ check "cursor-nested-usage-summed" "$f4_nested" '120'
 printf '%s\n' '{"usage":{"cumulative":true,"input_tokens":100,"output_tokens":0}}' '{"usage":{"cumulative":true,"input_tokens":250,"output_tokens":0}}' > "$TEST_HOME/cursor-cumulative.jsonl"
 f4_cum=$(LIMITLINE_CURSOR_LOG="$TEST_HOME/cursor-cumulative.jsonl" LIMITLINE_CURSOR_WEEK_TOKENS=1000 "$ROOT/providers/cursor" | python3 -c 'import json,sys; print(json.load(sys.stdin)["windows"][0]["tokens"])')
 check "cursor-cumulative-last-total" "$f4_cum" '250'
+
+# Idle terminals redraw on a timer: limitline install sets Claude Code's refreshInterval.
+install_refresh=$(grep -c '"refreshInterval": *30' "$ROOT/commands/install.md")
+check "install-refresh-interval" "$install_refresh" '2'
+
+# A new Claude Code session has no rate_limits before its first reply. The 7d segment
+# falls back to the reading another session cached, with its age.
+seven_snap="$TEST_HOME/seven-snapshot.json"
+printf '%s\n' '{"observed_at":1762055760,"provider":"claude","source":"statusline","stale":false,"windows":[{"name":"5h","used_pct":20,"resets_at":1762062120},{"name":"7d","used_pct":67,"resets_at":1762419600}]}' > "$seven_snap"
+seven_new=$(LIMITLINE_CLAUDE_CACHE=1 LIMITLINE_CLAUDE_SNAPSHOT="$seven_snap" NO_COLOR=1 "$BIN" < "$FIX/no_rate_limits.json" | strip_ansi)
+check "claude-7d-cached-new-session" "$seven_new" 'Opus 5.5 │ ctx ▓▓░░░ ·41% │ 7d ▓▓▓░░ +67% ↻Thu 09:00 · 4m ago │ $0.12'
+seven_nojq=$(PATH="$nojq" LIMITLINE_CLAUDE_CACHE=1 LIMITLINE_CLAUDE_SNAPSHOT="$seven_snap" NO_COLOR=1 "$BIN" < "$FIX/no_rate_limits.json" | strip_ansi)
+check "claude-7d-cached-nojq" "$seven_nojq" "$seven_new"
+# A reply that carries only the 5h window keeps the cached week, and its real age.
+seven_five=$(printf '%s' '{"model":{"display_name":"Opus 5.5"},"rate_limits":{"five_hour":{"used_percentage":30,"resets_at":1762062120}}}' | LIMITLINE_CLAUDE_CACHE=1 LIMITLINE_CLAUDE_SNAPSHOT="$seven_snap" NO_COLOR=1 "$BIN" | strip_ansi)
+check "claude-7d-cached-five-only" "$seven_five" 'Opus 5.5 │ 5h ▓▓░░░ ·30% ↻1h42m │ 7d ▓▓▓░░ +67% ↻Thu 09:00 · 4m ago'
+grep -q -F '{"name":"7d","used_pct":67,"resets_at":1762419600,"observed_at":1762055760}' "$seven_snap" \
+  && check "claude-7d-cache-kept" "yes" "yes" || check "claude-7d-cache-kept" "$(cat "$seven_snap")" "7d carried with its observed_at"
+seven_again=$(LIMITLINE_CLAUDE_CACHE=1 LIMITLINE_CLAUDE_SNAPSHOT="$seven_snap" NO_COLOR=1 "$BIN" < "$FIX/no_rate_limits.json" | strip_ansi)
+check "claude-7d-cached-age-kept" "$seven_again" "$seven_new"
+# Once the cached week has reset, its percent is last week's and is not shown.
+printf '%s\n' '{"observed_at":1761400000,"provider":"claude","source":"statusline","stale":false,"windows":[{"name":"7d","used_pct":90,"resets_at":1761900000}]}' > "$seven_snap"
+seven_old=$(LIMITLINE_CLAUDE_CACHE=1 LIMITLINE_CLAUDE_SNAPSHOT="$seven_snap" NO_COLOR=1 "$BIN" < "$FIX/no_rate_limits.json" | strip_ansi)
+check "claude-7d-cached-reset-passed" "$seven_old" 'Opus 5.5 │ ctx ▓▓░░░ ·41% │ $0.12'
+# A live 7d reading never shows an age.
+seven_live=$(LIMITLINE_CLAUDE_CACHE=1 LIMITLINE_CLAUDE_SNAPSHOT="$seven_snap" NO_COLOR=1 "$BIN" < "$FIX/full.json" | strip_ansi)
+check "claude-7d-live-no-age" "$seven_live" "$full_want"
 
 # Fleet from Pharos state files, otherwise a process list. Paths stay as basenames.
 fleet_line=$(LIMITLINE_PHAROS_RUNS="$FIX/fleet/runs" "$ROOT/lib/fleet.py")

@@ -760,6 +760,37 @@ seven_epoch=$(to_epoch "$seven_raw")
 five_abs=$(abs_label "$five_epoch")
 seven_abs=$(abs_label "$seven_epoch")
 
+# Claude Code sends no rate_limits until a session's first reply. The 7-day window
+# belongs to the account, so the last reading any session cached in claude.json
+# stands in, shown with its age (`7d 67% · 4m ago`). A reading whose reset has
+# passed belongs to last week and is not shown as current.
+seven_cached_pct=""
+seven_cached_reset=""
+seven_cached_at=""
+seven_age=""
+claude_snap="${LIMITLINE_CLAUDE_SNAPSHOT:-${XDG_CACHE_HOME:-$HOME/.cache}/limitline/claude.json}"
+if [[ -z "$seven_pct" && ( "$ON_SEVEN" == "1" || -n "$five_pct" ) && "${LIMITLINE_CLAUDE_CACHE:-1}" != "0" && -f "$claude_snap" ]]; then
+  snap_line=""
+  IFS= read -r snap_line < "$claude_snap" || true
+  re_win='\{"name":"7d","used_pct":([0-9.]+)(,"resets_at":([0-9]+))?(,"observed_at":([0-9]+))?\}'
+  re_top='^\{"observed_at":([0-9]+)'
+  if [[ "$snap_line" =~ $re_win ]]; then
+    seven_cached_pct="${BASH_REMATCH[1]}"
+    seven_cached_reset="${BASH_REMATCH[3]}"
+    seven_cached_at="${BASH_REMATCH[5]}"
+    if [[ -z "$seven_cached_at" && "$snap_line" =~ $re_top ]]; then
+      seven_cached_at="${BASH_REMATCH[1]}"
+    fi
+    if [[ -z "$seven_cached_at" ]]; then
+      seven_cached_pct=""
+    elif [[ -n "$seven_cached_reset" ]]; then
+      [[ "$seven_cached_reset" -gt "$NOW" ]] || seven_cached_pct=""
+    elif [[ $((NOW - seven_cached_at)) -ge 604800 ]]; then
+      seven_cached_pct=""
+    fi
+  fi
+fi
+
 case "$model" in
   "Claude "*) model="${model#Claude }" ;;
 esac
@@ -779,11 +810,21 @@ write_snapshot() {
       ''|*[!0-9]*) ;;
       *) item="$item"',"resets_at":'"$reset" ;;
     esac
+    # A carried-over window keeps the time it was really read.
+    case "${4:-}" in
+      ''|*[!0-9]*) ;;
+      *) item="$item"',"observed_at":'"$4" ;;
+    esac
     item="$item}"
     if [[ -z "$windows" ]]; then windows="$item"; else windows="$windows,$item"; fi
   }
   add_win "$five_pct" "$five_epoch" "5h"
-  add_win "$seven_pct" "$seven_epoch" "7d"
+  if [[ -n "$seven_pct" ]]; then
+    add_win "$seven_pct" "$seven_epoch" "7d"
+  elif [[ -n "$seven_cached_pct" ]]; then
+    # A reply with only the 5h window must not erase the cached week.
+    add_win "$seven_cached_pct" "$seven_cached_reset" "7d" "$seven_cached_at"
+  fi
   spend_json=""
   case "$spend_used" in ''|*[!0-9.]*) ;; *)
     case "$spend_limit" in ''|*[!0-9.]*) ;; *)
@@ -1160,6 +1201,19 @@ emit_kv() {
   if [[ -z "$2" ]]; then printf '%s\n' "$1"; else printf '%s %s\n' "$1" "$2"; fi
 }
 
+if [[ "$ON_SEVEN" == "1" && -z "$seven_pct" && -n "$seven_cached_pct" ]]; then
+  seven_pct="$seven_cached_pct"
+  seven_epoch="$seven_cached_reset"
+  seven_abs=$(abs_label "$seven_epoch")
+  snap_age=$((NOW - seven_cached_at))
+  [[ "$snap_age" -ge 0 ]] || snap_age=0
+  if [[ "$snap_age" -lt 60 ]]; then seven_age="<1m ago"
+  elif [[ "$snap_age" -lt 3600 ]]; then seven_age="$((snap_age / 60))m ago"
+  elif [[ "$snap_age" -lt 86400 ]]; then seven_age="$((snap_age / 3600))h ago"
+  else seven_age="$((snap_age / 86400))d ago"
+  fi
+fi
+
 {
   emit_kv theme "$THEME"
   emit_kv lines "$LINES"
@@ -1180,6 +1234,7 @@ emit_kv() {
   emit_kv seven_pct "$seven_pct"
   emit_kv seven_reset "$seven_epoch"
   emit_kv seven_abs "$seven_abs"
+  emit_kv seven_age "$seven_age"
   emit_kv spend_pct "$spend_pct"
   emit_kv spend_used "$spend_used"
   emit_kv spend_limit "$spend_limit"
@@ -1653,7 +1708,7 @@ END {
     push(90, "5h", themed("5h", window_seg("5h", val("five_pct"), val("five_reset"), val("five_abs"))))
   push(88, "spark", themed("spark", spark_seg("5h", val("spark5"), val("five_pct"))))
   if (val("show_seven") == "1")
-    push(80, "7d", themed("7d", window_seg("7d", val("seven_pct"), val("seven_reset"), val("seven_abs"))))
+    push(80, "7d", themed("7d", window_seg("7d", val("seven_pct"), val("seven_reset"), val("seven_abs")) (val("seven_age") != "" && val("seven_pct") != "" ? " · " val("seven_age") : "")))
   push(78, "spark", themed("spark", spark_seg("7d", val("spark7"), val("seven_pct"))))
   push(72, "pace", themed("pace", pace_seg()))
   push(60, "spend", themed("spend", spend_seg(val("spend_pct"), val("spend_used"), val("spend_limit"))))

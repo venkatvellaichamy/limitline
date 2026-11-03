@@ -93,12 +93,15 @@ Add this to `~/.claude/settings.json` (merge it with the keys you already have):
   "statusLine": {
     "type": "command",
     "command": "/absolute/path/to/limitline/bin/limitline",
-    "padding": 0
+    "padding": 0,
+    "refreshInterval": 30
   }
 }
 ```
 
 Restart Claude Code. The status command receives one JSON object on stdin.
+
+`refreshInterval` is a documented Claude Code `statusLine` field: it re-runs the command every N seconds (minimum 1), in addition to the usual redraws. Without it, Claude Code redraws a session's status line only on events in that session (a new message, a model or vim-mode change, a rate-limit reset), so an idle terminal keeps showing the fleet, machine, and plan numbers it last drew, and two idle terminals can disagree. With `refreshInterval: 30`, every terminal re-reads the shared caches at least every 30 seconds. A warm render takes about 30 ms. `limitline install` sets it.
 
 ```bash
 echo '{"model":{"display_name":"Opus 5.5"},"rate_limits":{"five_hour":{"used_percentage":62,"resets_at":1762062120}},"context_window":{"used_percentage":41}}' \
@@ -114,7 +117,7 @@ Each segment can be turned off or reordered with `segments` in the config file.
 | Model | `.model.display_name`, with a leading `Claude ` removed |
 | Style | `.output_style.name` when it is not `default` |
 | Context | used percent, a bar, tokens left when the window size is known, and `↯ auto-compact in ~N%` once usage reaches the warn line (default 80, compact default 95) |
-| `5h` / `7d` | `.rate_limits.five_hour` and `.seven_day`. Claude Code sends each window only when the account reports it, so a line can show `7d` alone |
+| `5h` / `7d` | `.rate_limits.five_hour` and `.seven_day`. Claude Code sends each window only when the account reports it, so a line can show `7d` alone. A new session gets no `rate_limits` until its first reply, so `7d` then shows the last reading any session cached in `~/.cache/limitline/claude.json`, with its age: `7d 67% · 4m ago`. A reply that carries only the 5-hour window keeps that cached week and its age. A cached week whose reset has passed is last week's number and is not shown. `LIMITLINE_CLAUDE_CACHE=0` turns the fallback off |
 | Spend | `.rate_limits.spend_limit` when present |
 | Pace | projection from local 5-hour snapshots, such as `pace ~1h35m` |
 | Cost | `.cost.total_cost_usd`, duration, and lines added or removed. `$0` is omitted |
