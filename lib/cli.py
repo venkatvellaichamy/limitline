@@ -3,13 +3,18 @@
 import json, os, shutil, subprocess, sys
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-PROVIDERS = ("claude", "codex", "cursor", "grok", "gemini", "xai-plan")
+PROVIDERS = ("claude", "codex", "cursor", "grok", "antigravity", "gemini", "xai-plan")
+
+
+def provider_cmd(path):
+    # Providers are python scripts; one that lost its exec bit still runs.
+    return [path] if os.access(path, os.X_OK) else [sys.executable, path]
 
 
 def run_provider(name):
     path = os.path.join(ROOT, "providers", name)
     try:
-        proc = subprocess.run([path], capture_output=True, timeout=2, env=os.environ.copy())
+        proc = subprocess.run(provider_cmd(path), capture_output=True, timeout=2, env=os.environ.copy())
         data = json.loads(proc.stdout.decode() or "{}")
     except Exception:
         data = {}
@@ -43,15 +48,6 @@ def window_text(window):
 
 def label(row):
     return load_lib("xaiplan").label(row)
-
-
-def reset_text(row, window):
-    """Gemini only logs `Resets in 4h0m` once, so its reset is shown as a fixed
-    local moment, `resets Fri 09:35`, rather than a countdown."""
-    if row.get("provider") != "gemini" or window.get("resets_at") is None:
-        return ""
-    when = load_lib("timefmt").day_time(window.get("resets_at"))
-    return (" · resets " + when) if when else ""
 
 
 def constraint(row):
@@ -94,9 +90,14 @@ def load_lib(name):
 
 
 def prepare(rows):
-    sync_dir = os.environ.get("LIMITLINE_SYNC_DIR")
+    # The same setting the renderer and refresh read: LIMITLINE_SYNC_DIR, else sync_dir.
+    try:
+        sync_dir = load_lib("config").setting("sync_dir", "LIMITLINE_SYNC_DIR", "")
+    except Exception:
+        sync_dir = os.environ.get("LIMITLINE_SYNC_DIR") or ""
     if not sync_dir:
         return rows
+    sync_dir = os.path.expanduser(sync_dir)
     try:
         sync = load_lib("sync")
         for row in rows:
@@ -109,6 +110,10 @@ def prepare(rows):
 def provider_brief(data):
     if data.get("provider") == "xai-plan":
         return load_lib("xaiplan").brief(data) or "no reading"
+    if data.get("provider") == "antigravity":
+        return load_lib("antigravity").brief(data)
+    if data.get("note"):
+        return str(data["note"])
     windows = data.get("windows") or []
     if not windows:
         if data.get("provider") == "codex" and data.get("observed_at"):
@@ -123,7 +128,7 @@ def provider_brief(data):
         if data.get("source") == "none":
             return "no local quota"
         return "no window"
-    parts = [window_text(item) + reset_text(data, item) for item in windows if isinstance(item, dict)]
+    parts = [window_text(item) for item in windows if isinstance(item, dict)]
     text = " · ".join(parts)
     if data.get("stale"):
         text += " stale"
@@ -429,6 +434,18 @@ def fleet_doctor():
         lines.append("cursor+grok shown: source %s, %s" % (row.get("source"), "stale" if row.get("stale") else "fresh"))
     else:
         lines.append("cursor+grok shown: none; Cursor shows a token estimate")
+    agy = load_lib("antigravity")
+    found = agy.agy_bin()
+    lines.append("antigravity binary: %s" % (found or "not found (set agy = \"/path/to/agy\")"))
+    live = agy.read_live()
+    if live is None:
+        lines.append("antigravity live: no reading in %s (limitline refresh runs agy -p /usage)" % agy.usage_path())
+    else:
+        lines.append("antigravity live: %ds old, %d buckets" % (max(0, now_epoch() - live[0]), len(live[1])))
+    fetch = agy.fetch_state()
+    if fetch.get("last_attempt"):
+        lines.append("antigravity fetch: last try %ds ago, %s" % (max(0, now_epoch() - int(fetch["last_attempt"])), ("failed: " + str(fetch.get("error"))) if fetch.get("error") else "ok"))
+    lines.append("gemini app: not measured (see gemini.google.com/usage)")
     jobs = load_lib("jobs")
     if os.path.isdir(jobs.jobs_dir()):
         every = jobs.load(every=True)
@@ -566,6 +583,9 @@ def cmd_config():
     print("# pharos binary for limitline watch, when it is not on PATH")
     print('# pharos = "~/projects/pharos/bin/pharos"')
     print("# jobs_ttl = 600")
+    print("# limitline refresh runs agy -p \"/usage\" (no tokens) at most every agy_ttl minutes")
+    print("# agy_ttl = 15")
+    print('# agy_fetch = "on"')
     print("# themes: minimal, powerline, ascii, pill, emoji, mono")
     print("# LIMITLINE_ASCII=1 forces the ascii theme. NO_COLOR disables ANSI.")
 
@@ -730,12 +750,16 @@ def main(argv):
         sys.exit(load_lib("jobs").main(argv[1:]) or 0)
     elif cmd == "refresh":
         try:
-            result = load_lib("refresh").main(argv[1:])
+            refresh = load_lib("refresh")
+            result = refresh.main(argv[1:])
         except Exception:
             return
         # Say what the Grok plan fetch did, unless it is switched off.
         if result and not result.endswith("LIMITLINE_XAI_FETCH=0"):
             print("xai plan: %s" % result)
+        agy = getattr(refresh, "AGY_RESULT", "")
+        if agy and agy != "off":
+            print("antigravity: %s" % agy)
     elif cmd == "schedule":
         sys.exit(load_lib("schedule").main(argv[1:]) or 0)
     else:

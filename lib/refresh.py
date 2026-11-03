@@ -18,10 +18,12 @@ SYNC_FRESH = 900
 # which hides a Homebrew `ollama`. Add the usual install folders first.
 SCRIPT = (
     "PATH=/opt/homebrew/bin:/usr/local/bin:$PATH; export PATH; "
-    "echo '## load'; sysctl -n vm.loadavg; "
-    "echo '## ncpu'; sysctl -n hw.ncpu; "
-    "echo '## mem'; sysctl -n hw.memsize; "
-    "echo '## pressure'; memory_pressure; "
+    # macOS first; Linux (and WSL) fall back to /proc. A field that cannot be read stays empty.
+    "echo '## load'; sysctl -n vm.loadavg 2>/dev/null || cat /proc/loadavg 2>/dev/null; "
+    "echo '## ncpu'; sysctl -n hw.ncpu 2>/dev/null || nproc 2>/dev/null; "
+    "echo '## mem'; sysctl -n hw.memsize 2>/dev/null || awk '/^MemTotal:/{print $2*1024}' /proc/meminfo 2>/dev/null; "
+    "echo '## pressure'; memory_pressure 2>/dev/null || awk '/^MemTotal:/{t=$2} /^MemAvailable:/{a=$2} "
+    "END{if (t) printf \"System-wide memory free percentage: %d%%\\n\", a*100/t}' /proc/meminfo 2>/dev/null; "
     "echo '## ps'; ollama ps; "
     "echo '## list'; ollama list"
 )
@@ -214,7 +216,19 @@ def fetch_xai(force=False):
     return xai_fetch.fetch(force=force)
 
 
+def fetch_agy(force=False):
+    """Have agy print its usage (`agy -p "/usage"`: no agent turn, no tokens) at
+    most every agy_ttl minutes, with a timeout. Never from the status line."""
+    import antigravity
+    return antigravity.fetch(force=force)
+
+
+# The last Antigravity fetch result, for `limitline refresh` to print.
+AGY_RESULT = ""
+
+
 def main(argv=None):
+    global AGY_RESULT
     argv = list(sys.argv[1:] if argv is None else argv)
     for step in (write_grok, write_jobs, write_fleet, write_machines, write_history):
         try:
@@ -223,6 +237,15 @@ def main(argv=None):
             continue
     result = ""
     if "--no-fetch" not in argv:
+        try:
+            AGY_RESULT = fetch_agy(force="--force" in argv)
+        except Exception:
+            AGY_RESULT = "failed"
+        if AGY_RESULT == "fetched":
+            try:
+                write_history()
+            except Exception:
+                pass
         try:
             result = fetch_xai(force="--force" in argv)
         except Exception:

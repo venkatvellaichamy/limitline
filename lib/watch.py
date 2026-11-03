@@ -5,13 +5,17 @@ from datetime import datetime, timezone
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import grokline
-import timefmt
 import xaiplan
 
 
 def brief(data):
     if data.get("provider") == xaiplan.PROVIDER:
         return xaiplan.brief(data) or "no reading"
+    if data.get("provider") == "antigravity":
+        import antigravity
+        return antigravity.brief(data)
+    if data.get("note"):
+        return str(data["note"])
     windows = data.get("windows") or []
     if not windows:
         if data.get("provider") == "grok":
@@ -37,8 +41,6 @@ def brief(data):
             text += " %s%d%%" % ("~" if window.get("estimate") else "", int(used + 0.5))
             if window.get("estimate"):
                 text += " estimate"
-        if data.get("provider") == "gemini" and window.get("resets_at") is not None:
-            text += " · " + timefmt.day_time(window["resets_at"])
         machines = window.get("machines")
         if isinstance(machines, int) and machines > 1:
             text += " ×%d" % machines

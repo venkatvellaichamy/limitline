@@ -64,7 +64,7 @@ The number you care about is already on the machine: the status payload Claude C
 
 ## Doing it by hand
 
-Check Claude's usage screen, note the 5-hour and weekly percents and when they reset, then do the same for Codex, remember that Cursor and Grok do not publish a local quota, and skim the Gemini log for a quota line. Repeat that every time the window moves. limitline reads those local files once per prompt and prints the row. The switches below add pace, a sparkline, a nudge, or a second machine when you want them, and each one can be turned off.
+Check Claude's usage screen, note the 5-hour and weekly percents and when they reset, then do the same for Codex, remember that Cursor and Grok do not publish a local quota, and check Antigravity's usage per model group. Repeat that every time the window moves. limitline reads those local files once per prompt and prints the row. The switches below add pace, a sparkline, a nudge, or a second machine when you want them, and each one can be turned off.
 
 ## Install with the plugin
 
@@ -95,12 +95,15 @@ Add this to `~/.claude/settings.json` (merge it with the keys you already have):
   "statusLine": {
     "type": "command",
     "command": "/absolute/path/to/limitline/bin/limitline",
-    "padding": 0
+    "padding": 0,
+    "refreshInterval": 30
   }
 }
 ```
 
 Restart Claude Code. The status command receives one JSON object on stdin.
+
+`refreshInterval` is a documented Claude Code `statusLine` field: it re-runs the command every N seconds (minimum 1), in addition to the usual redraws. Without it, Claude Code redraws a session's status line only on events in that session (a new message, a model or vim-mode change, a rate-limit reset), so an idle terminal keeps showing the fleet, machine, and plan numbers it last drew, and two idle terminals can disagree. With `refreshInterval: 30`, every terminal re-reads the shared caches at least every 30 seconds. A warm render takes about 30 ms. `limitline install` sets it.
 
 ```bash
 echo '{"model":{"display_name":"Opus 5.5"},"rate_limits":{"five_hour":{"used_percentage":62,"resets_at":1762062120}},"context_window":{"used_percentage":41}}' \
@@ -116,7 +119,7 @@ Each segment can be turned off or reordered with `segments` in the config file.
 | Model | `.model.display_name`, with a leading `Claude ` removed |
 | Style | `.output_style.name` when it is not `default` |
 | Context | used percent, a bar, tokens left when the window size is known, and `↯ auto-compact in ~N%` once usage reaches the warn line (default 80, compact default 95) |
-| `5h` / `7d` | `.rate_limits.five_hour` and `.seven_day`. Claude Code sends each window only when the account reports it, so a line can show `7d` alone |
+| `5h` / `7d` | `.rate_limits.five_hour` and `.seven_day`. Claude Code sends each window only when the account reports it, so a line can show `7d` alone. A new session gets no `rate_limits` until its first reply, so `7d` then shows the last reading any session cached in `~/.cache/limitline/claude.json`, with its age: `7d 67% · 4m ago`. A reply that carries only the 5-hour window keeps that cached week and its age. A cached week whose reset has passed is last week's number, so the segment says `7d reset Fri 08:40 · no newer reading` instead of a percent. `LIMITLINE_CLAUDE_CACHE=0` turns the fallback off |
 | Spend | `.rate_limits.spend_limit` when present |
 | Pace | projection from local 5-hour snapshots, such as `pace ~1h35m` |
 | Cost | `.cost.total_cost_usd`, duration, and lines added or removed. `$0` is omitted |
@@ -137,6 +140,18 @@ Each segment can be turned off or reordered with `segments` in the config file.
 | Value | `≈ $412 of value this week`, an estimate. Off until `value = "on"` |
 | Vitals | session duration, auto-compactions, lines, and the cost trend. Off until `vitals = "on"` |
 
+Five lines are `lines = 5`:
+
+```
+🧠 Opus 5.5 │ 🪟 ctx ▓▓▓░░ +58% 84k left │ ♥ session 2h10m · +312 -40 · $4.20
+left  ✻ claude 7d 30% │ ◎ codex 5h 1% →18:14 · 7d 31% │ ⬡ cursor+grok 19% →Thu 23:22 │ ✦ agy gemini 100% · claude+gpt 93% · argon 0% →Fri 15:35
+today ▶ 0 running │ ✓ 7 done │ ✋ 6 need you │ ✗ 3 failed · ↻ 0 retried │ ⏸ 1 waiting on limit
+older ✋ 5 need you │ ✗ 2 failed │ ⏸ 1 waiting on limit │ oldest 1d (website)
+hosts mini 82% mem free · 25% cpu │ macbook 34% · 52% │ silver 73% · 13%
+```
+
+Every plan number on `left` is the amount left. The reset (`→`) appears at 25% or less. Job counts follow Pharos: done is done, merged, or a run with no changes; need you is a run with commits waiting for a check, or a failed check; retried is a run another run replaced. `older` only counts open jobs from the last 7 days. Hosts use the nicknames in `hosts = ["studio=local", "backup=user@host"]`. When the terminal is narrow, `left` drops reset times first, then the agy claude+gpt bucket; `older` drops the oldest-job note; `hosts` drops CPU load. `marks = "none"` prints plain names.
+
 A second line is `lines = 2` or `LIMITLINE_LINES=2`. When `COLUMNS` or `LIMITLINE_COLUMNS` is set, the lowest-priority segments drop until the row fits.
 
 ## Other tools
@@ -149,7 +164,8 @@ A second line is `lines = 2` or `LIMITLINE_LINES=2`. When `COLUMNS` or `LIMITLIN
 | Codex | Built-in `/statusline` items. No external command. `integrations/codex/install.sh` prints the item list and refuses `--write` | Newest `rate_limits` event across `~/.codex/sessions/YYYY/MM/DD/*.jsonl` from the last 8 days, 5h and 7d, each until its reset |
 | Cursor | `statusLine` command in `~/.cursor/cli-config.json`. `integrations/cursor/install.sh` prints the snippet. `--write` is opt-in and backs up the file | Model and context from stdin. No local quota file. The plan percent is the shared `cursor+grok` reading below; without one, a labelled token estimate |
 | Grok | `[ui.status_line]` command. `integrations/grok/install.sh` prints the snippet and refuses `--write` | Model, context, and cost from stdin. The plan name from `~/.grok/settings_cache.json`, and 7-day tokens and ledger cost summed from `~/.grok/sessions/**/usage.json`. The plan percent is the shared `cursor+grok` reading, live from `~/.grok/logs/unified.jsonl` |
-| Gemini / agy | No status-line command in the build that was checked | Last `quota reached` / `Resets in` line in the CLI log, shown as a fixed local time: `quota 100% · resets Fri 09:35` |
+| Antigravity (agy CLI and IDE) | No status-line command in the build that was checked | Live from `agy -p "/usage" --output-format json`, which `limitline refresh` runs (see [Antigravity and the Gemini app](#antigravity-and-the-gemini-app)) |
+| Gemini app | None | `not measured (see gemini.google.com/usage)`; no CLI or local file exposes it |
 
 Host snippets:
 
@@ -216,7 +232,7 @@ With `spark = "on"`, each status line stores the current percent under `~/.cache
 
 ## Nudges
 
-`nudges = "on"` adds a short hint. When the Claude 5-hour meter is over 80%, limitline looks at the other local tools and suggests the one with the most room: `→ codex 12%` when a measured window is under 50%, or `→ cursor ok` when nothing measured is roomy and Cursor has no local quota. If a cached worker is under 20% load and is not low on memory, the hint adds that machine: `→ codex 12% · mini idle`. An idle machine is the hint on its own when every measured window is at 50% or more. When context is at the auto-compact warning line, the nudge is `↯ compact soon: /compact`. A cold prompt cache still prints its reason (`cache cold: tools`). If the cache segment is off, the nudge carries that reason instead.
+`nudges = "on"` adds a short hint. When the Claude 5-hour meter is over 80%, limitline looks at the other local tools and suggests the one with the most room. Each tool counts by its most-used window, because a quiet 5-hour window cannot make up for an exhausted week. The hint is `→ codex 40%` when a tool's tightest window is under 50%, or `→ cursor ok` when nothing measured is roomy and Cursor has no local quota. If a cached worker is under 20% load and is not low on memory, the hint adds that machine: `→ codex 40% · mini idle`. An idle machine is the hint on its own when every measured window is at 50% or more. When context is at the auto-compact warning line, the nudge is `↯ compact soon: /compact`. A cold prompt cache still prints its reason (`cache cold: tools`). If the cache segment is off, the nudge carries that reason instead.
 
 ## Fleet
 
@@ -301,7 +317,23 @@ The Claude Code line shows `jobs mining 62/1842 ✗3 · backup ok 08:36`: runnin
 
 ## Providers
 
-`limitline status` prints the tightest measured window first, then estimates. Claude still comes from the status-line snapshot. Codex comes from the newest session `rate_limits` event across every session file modified in the last 8 days, not only the newest file: `codex exec` runs from scripts leave many short files, and the newest one often has no event. Files are read newest first, the last line that parses in each is used (a half-written or malformed line is skipped, and a `codex` limit wins over another limit id such as `premium`), and the scan stops once a file is older than the best event found. A window is shown while its `resets_at` is ahead; without `resets_at`, while the event is younger than the window. When every window has reset, the row says `no current window (last reading 28h ago)`. Grok has no account window, so its row is never a percent and never sorts as a quota: `grok     SuperGrok Plus · 7d 1.2M tok · $3.00 at API rates · not a quota`. The plan is `settings.subscription_tier_display` inside the JSON-encoded `payload` of `~/.grok/settings_cache.json` (`LIMITLINE_GROK_SETTINGS`); no other field of that file is printed, and `~/.grok/auth.json` is never opened. Tokens are `session.totalTokens` summed over `~/.grok/sessions/**/usage.json` (`LIMITLINE_GROK_DIR`) whose `updatedAt` is in the last 7 days. A file without `updatedAt` or a numeric `totalTokens` is skipped, not dated by its modification time. Grok's own session docs say a session total includes history inherited by resume or fork, so a resumed or forked session can count that history twice. The dollar figure is `costUsdTicks` divided by 10^10 (Grok documents 1 USD = 10^10 ticks). It is what that usage would cost at API rates, not what a SuperGrok plan charges, and it is left out unless every counted file has `costUsdTicks`. It appears in `limitline status` and `watch` only; the status line shows the plan and tokens. A missing settings file or tier skips the plan, and a missing sessions folder skips the tokens. Cursor has no local quota file. When Pharos captured `usage.input_tokens` and `usage.output_tokens` on a cursor run, or a file passed as `LIMITLINE_CURSOR_LOG` has those fields, limitline estimates a weekly percent against `cursor_week_tokens` (default 1,000,000). That number is an estimate, not a quota reading: Cursor does not publish a token budget, and 1,000,000 is only a default you should replace with your own. It is input plus output tokens (cache reads are left out) from cursor run logs that started or were written in the last 7 days, divided by that budget and capped at 100. It is shown with `~` everywhere (`cursor 7d ~100%`), `limitline status` prints the inputs (`7d ~100% estimate (3.1M of 1.0M tokens)`), the word `estimate` is printed in every host line, and estimated rows are listed after measured ones. A `~100%` means you used more tokens than the budget you set, not that Cursor will stop you. Antigravity (`agy`) still uses the last `quota reached` / `Resets in` line, and also a Pharos run whose status is `paused-quota`. The log's glog stamps are local wall-clock time, so they are read as local time (0.4 read them as UTC). The reset is shown as a fixed local time, `quota 100% · resets Fri 09:35`, in status, watch, host lines, and the report. A local ledger at `~/.pharos/ledger.jsonl` or `research-spend.jsonl` (or `LIMITLINE_LEDGER`) adds an `api` row such as `spend $0.25` when the file exists. Rows with no window stay at the bottom.
+`limitline status` prints the tightest measured window first, then estimates. Claude still comes from the status-line snapshot. Codex comes from the newest session `rate_limits` event across every session file modified in the last 8 days, not only the newest file: `codex exec` runs from scripts leave many short files, and the newest one often has no event. Files are read newest first, the last line that parses in each is used (a half-written or malformed line is skipped, and a `codex` limit wins over another limit id such as `premium`), and the scan stops once a file is older than the best event found. A window is shown while its `resets_at` is ahead; without `resets_at`, while the event is younger than the window. When every window has reset, the row says `no current window (last reading 28h ago)`. Grok has no account window, so its row is never a percent and never sorts as a quota: `grok     SuperGrok Plus · 7d 1.2M tok · $3.00 at API rates · not a quota`. The plan is `settings.subscription_tier_display` inside the JSON-encoded `payload` of `~/.grok/settings_cache.json` (`LIMITLINE_GROK_SETTINGS`); no other field of that file is printed, and `~/.grok/auth.json` is never opened. Tokens are `session.totalTokens` summed over `~/.grok/sessions/**/usage.json` (`LIMITLINE_GROK_DIR`) whose `updatedAt` is in the last 7 days. A file without `updatedAt` or a numeric `totalTokens` is skipped, not dated by its modification time. Grok's own session docs say a session total includes history inherited by resume or fork, so a resumed or forked session can count that history twice. The dollar figure is `costUsdTicks` divided by 10^10 (Grok documents 1 USD = 10^10 ticks). It is what that usage would cost at API rates, not what a SuperGrok plan charges, and it is left out unless every counted file has `costUsdTicks`. It appears in `limitline status` and `watch` only; the status line shows the plan and tokens. A missing settings file or tier skips the plan, and a missing sessions folder skips the tokens. Cursor has no local quota file. When Pharos captured `usage.input_tokens` and `usage.output_tokens` on a cursor run, or a file passed as `LIMITLINE_CURSOR_LOG` has those fields, limitline estimates a weekly percent against `cursor_week_tokens` (default 1,000,000). That number is an estimate, not a quota reading: Cursor does not publish a token budget, and 1,000,000 is only a default you should replace with your own. It is input plus output tokens (cache reads are left out), each `usage` object counted once and added up, from cursor run logs that started or were written in the last 7 days, divided by that budget and capped at 100. It is shown with `~` everywhere (`cursor 7d ~100%`), `limitline status` prints the inputs (`7d ~100% estimate (3.1M of 1.0M tokens)`), the word `estimate` is printed in every host line, and estimated rows are listed after measured ones. A `~100%` means you used more tokens than the budget you set, not that Cursor will stop you. Antigravity and the Gemini app are described in their own section below. A local ledger at `~/.pharos/ledger.jsonl` or `research-spend.jsonl` (or `LIMITLINE_LEDGER`) adds an `api` row such as `spend $0.25` when the file exists. Rows with no window stay at the bottom.
+
+## Antigravity and the Gemini app
+
+Google AI Pro has two separate allowances, and limitline shows them as two rows.
+
+**Antigravity** (the agy CLI and IDE) is live and exact. `limitline refresh` runs `agy -p "/usage" --output-format json`, which is a local command: no agent turn, no tokens, no quota spent. From `command.data.groups[].buckets[]` it keeps each bucket's `id`, group name, `window` (5h or weekly), and `reset_time`, with `used_pct = round((1 - remaining_fraction) * 100)`, in `~/.cache/limitline/antigravity.json` (`LIMITLINE_AGY_USAGE`). Nothing else from the output is stored. The row is plan `antigravity`, with one window per bucket, named by its id:
+
+```
+antigravity gemini-5h 0% · gemini-weekly 0% · 3p-5h 7% · 3p-weekly 5% · argon-weekly 100% resets Thu 21:35
+```
+
+Today the groups are "Gemini Models" (Flash and Pro, 5h and weekly), "Claude and GPT models" (Claude and GPT-OSS inside agy, 5h and weekly), and "Gemini 4 Argon" (weekly only). `limitline --host json` keeps each window's `id`, `group`, and `window`, so Pharos can pick the bucket for the model it runs. The fetch runs at most every `agy_ttl` minutes (default 15), one at a time (a lock), with a 30-second timeout (`LIMITLINE_AGY_TIMEOUT`). It runs only from `limitline refresh` and the background agents that run it, never from the status line. `agy_fetch = "off"` or `LIMITLINE_AGY_FETCH=0` turns it off. The binary is `agy = "/path/to/agy"` in the config (or `LIMITLINE_AGY_BIN`), else `agy` on `PATH`, else `~/.local/bin`, `/opt/homebrew/bin`, `/usr/local/bin`, or `~/bin`, because launchd starts the background refresher with a bare `PATH`. `limitline doctor` prints the binary it found. A reading older than an hour is marked stale, and a bucket whose reset has passed is dropped, because it has refilled. `limitline doctor` prints the reading's age and the last fetch result.
+
+A `quota reached … Resets in 4h0m` line in `~/.gemini/antigravity-cli/cli.log`, or a Pharos agy run paused on quota, is an event, not a measurement. It is never shown as a live 100%. Without a live reading the row says `unknown`, and the event is added with its age and source: `antigravity unknown · last limit hit 2h ago (cli.log)`. The event is stale after 5 hours, or once a live reading or a finished Pharos agy run that started later appears (`… (cli.log, stale)`). No cli.log line that marks a successful agy request has been identified yet (the log's contents were not inspected when this was written), so those two later signals and the 5-hour bound are what clear it. The log's glog stamps are local wall-clock time. Pharos treats `unknown` as no room (fail closed), and nudges never call Antigravity `ok`.
+
+**The Gemini app** (gemini.google.com and the Mac app) has its own "Current usage" and "Weekly limit", shown only at <https://gemini.google.com/usage>. No CLI command or plain local file exposes them, and limitline never opens cookies, keychains, token or credential stores, or LevelDB/IndexedDB blobs. So that row always says `gemini      not measured (see gemini.google.com/usage)`, with no window and never a guessed number.
 
 ## Reset moments
 
@@ -332,7 +364,7 @@ The Claude Code line shows `jobs mining 62/1842 ✗3 · backup ok 08:36`: runnin
 
 ## History
 
-`limitline refresh` (so the background refresher, every minute) and `limitline status` each record one sample per plan, at most every 10 minutes, into `~/.cache/limitline/history/<plan>.tsv` (`LIMITLINE_HISTORY_DIR`) as `epoch percent resets_at`. Samples older than 30 days are dropped. Plans are measured windows only: `claude-5h`, `claude-7d`, `codex-5h`, `codex-7d`, `cursor+grok-week`, and `gemini-quota`. A stale row, a Cursor token estimate, or a window merged from several machines is never recorded.
+`limitline refresh` (so the background refresher, every minute) and `limitline status` each record one sample per plan, at most every 10 minutes, into `~/.cache/limitline/history/<plan>.tsv` (`LIMITLINE_HISTORY_DIR`) as `epoch percent resets_at`. Samples older than 30 days are dropped. Plans are measured windows only: `claude-5h`, `claude-7d`, `codex-5h`, `codex-7d`, `cursor+grok-week`, and one per live Antigravity bucket, such as `antigravity-gemini-weekly`. A limit-hit event is not a measurement and is never recorded. A stale row, a Cursor token estimate, or a window merged from several machines is never recorded.
 
 Finished jobs (ok, failed, stopped) and jobs found dead are appended once each to `~/.cache/limitline/jobs-history.jsonl` (`LIMITLINE_JOBS_HISTORY`), with their machine, counts, and finish time.
 
@@ -369,7 +401,7 @@ If stdout is not a terminal, or `LIMITLINE_WATCH_ONCE=1`, it prints one plain fr
 
 ## More than one Mac
 
-Set `sync_dir` or `LIMITLINE_SYNC_DIR` to a folder you already sync, such as an iCloud or Dropbox directory. Each machine writes its own snapshot there. `limitline status`, `report`, and `watch` keep the higher percent for a shared window and mark it `×2` when two machines reported it. Nothing is uploaded by limitline. `LIMITLINE_HOST` sets the folder name; otherwise the short hostname is used, with characters outside letters, digits, and `-` removed.
+Set `sync_dir` or `LIMITLINE_SYNC_DIR` to a folder you already sync, such as an iCloud or Dropbox directory. Each machine writes its own snapshot there. `limitline status`, `report`, and `watch` keep the higher percent for a shared window and mark it `×2` when two machines reported it. Only readings that can still be current are compared. A snapshot marked stale, a window whose reset has passed, and a window with no reset in a snapshot older than 15 minutes are all ignored, so an offline machine cannot hold an old number in place. Readings are compared only within one reset cycle (resets within 10 minutes of each other), and the newest cycle wins. Nothing is uploaded by limitline. `LIMITLINE_HOST` sets the folder name; otherwise the short hostname is used, with characters outside letters, digits, and `-` removed.
 
 ## Background refresh
 
@@ -434,6 +466,12 @@ A cloud-hosted Claude Code session (for example, one started from claude.ai) run
 | `LIMITLINE_XAI_TTL` | Minutes between plan fetches, default 30 (`xai_ttl`) |
 | `LIMITLINE_XAI_TIMEOUT` | Seconds one plan fetch may take, default 45 |
 | `LIMITLINE_XAI_FETCH` | `0` turns the plan fetch off |
+| `LIMITLINE_AGY_FETCH` | `0` turns the Antigravity usage fetch off |
+| `LIMITLINE_AGY_BIN` | agy binary for the fetch (config `agy`), default `agy` on `PATH` or in the usual install folders |
+| `LIMITLINE_AGY_USAGE` | Antigravity usage cache, default `~/.cache/limitline/antigravity.json` |
+| `LIMITLINE_AGY_TTL` | Minutes between Antigravity fetches, default 15 |
+| `LIMITLINE_AGY_TIMEOUT` | Seconds before the agy command is stopped, default 30 |
+| `LIMITLINE_CLAUDE_CACHE` | `0` turns off the cached Claude 7d fallback |
 | `LIMITLINE_XAI_PLAN` | Manual override file, default `~/.cache/limitline/xai-plan.json` |
 | `LIMITLINE_LEDGER` | JSONL file of `usd` amounts for the api row |
 | `LIMITLINE_LINKS` | `1` adds OSC 8 links for a `owner/name` repo |
@@ -446,7 +484,7 @@ A cloud-hosted Claude Code session (for example, one started from claude.ai) run
 
 ## Privacy
 
-limitline reads the status JSON a host already pipes in, an optional local config file, a cache directory it writes itself, and the local files named above. It does not send them anywhere. It does not read API keys or OAuth tokens. Debug output stays in the cache file you opted into. Session id display is off unless `LIMITLINE_SESSION=1`. The value file is read only when the value meter is on, and only for cost and token counts. The report and the Runs list keep repository folder names, not full paths. A sync folder is written only when you set one. From Grok it reads the plan name in `settings_cache.json` and the token and cost counters in `usage.json`; it never opens `~/.grok/auth.json`, and it does not print the identity or signature in the settings file. For the plan percent it reads the `fetched credits config` lines in `~/.grok/logs/unified.jsonl`. `limitline refresh` (and only refresh) starts the Grok CLI and types `/usage show`; the Grok CLI then calls xAI's billing API with its own login. limitline itself opens no network connection and reads no token. Pharos is detected and used when its run files or machine list are present, and limitline still runs when they are absent. SSH runs only inside `limitline refresh`, with a timeout, and only for hosts you listed. The background refresher exists only if you run `limitline install-refresher` or `limitline schedule install`, and both run the same `limitline refresh`. Fleet and machine snapshots go to `sync_dir` only when you set one; they hold counts, host names, memory, load, and model names, not paths or user names.
+limitline reads the status JSON a host already pipes in, an optional local config file, a cache directory it writes itself, and the local files named above. It does not send them anywhere. It does not read API keys or OAuth tokens. Debug output stays in the cache file you opted into. Session id display is off unless `LIMITLINE_SESSION=1`. The value file is read only when the value meter is on, and only for cost and token counts. The report and the Runs list keep repository folder names, not full paths. A sync folder is written only when you set one. From Grok it reads the plan name in `settings_cache.json` and the token and cost counters in `usage.json`; it never opens `~/.grok/auth.json`, and it does not print the identity or signature in the settings file. For the plan percent it reads the `fetched credits config` lines in `~/.grok/logs/unified.jsonl`. `limitline refresh` (and only refresh) starts the Grok CLI and types `/usage show`; the Grok CLI then calls xAI's billing API with its own login. `limitline refresh` also runs `agy -p "/usage" --output-format json`, a local command that spends no tokens; agy answers with its own login, and limitline keeps only the bucket percents and resets. It never opens agy's or the Gemini app's cookies, keychains, credential stores, or LevelDB/IndexedDB data. limitline itself opens no network connection and reads no token. Pharos is detected and used when its run files or machine list are present, and limitline still runs when they are absent. SSH runs only inside `limitline refresh`, with a timeout, and only for hosts you listed. The background refresher exists only if you run `limitline install-refresher` or `limitline schedule install`, and both run the same `limitline refresh`. Fleet and machine snapshots go to `sync_dir` only when you set one; they hold counts, host names, memory, load, and model names, not paths or user names.
 
 ## Tests
 

@@ -3,13 +3,14 @@
 import json, os, subprocess, sys
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-ORDER = ("codex", "cursor", "grok", "gemini")
+ORDER = ("codex", "cursor", "grok", "antigravity")
 
 
 def run_provider(name):
     path = os.path.join(ROOT, "providers", name)
+    cmd = [path] if os.access(path, os.X_OK) else [sys.executable, path]
     try:
-        proc = subprocess.run([path], capture_output=True, timeout=2, env=os.environ.copy())
+        proc = subprocess.run(cmd, capture_output=True, timeout=2, env=os.environ.copy())
         data = json.loads(proc.stdout.decode() or "{}")
     except Exception:
         data = {}
@@ -19,12 +20,15 @@ def run_provider(name):
     return data
 
 
-def lowest_pct(data):
-    found = lowest_window(data)
+def constraint_pct(data):
+    found = constraint_window(data)
     return None if found is None else found[0]
 
 
-def lowest_window(data):
+def constraint_window(data):
+    """The most-used window. A provider is only as free as its tightest window:
+    a quiet 5h window cannot make up for an exhausted week. lib/cli.py sorts
+    status rows by the same maximum."""
     best = None
     for window in data.get("windows") or []:
         if not isinstance(window, dict):
@@ -32,7 +36,7 @@ def lowest_window(data):
         used = window.get("used_pct")
         if isinstance(used, bool) or not isinstance(used, (int, float)):
             continue
-        if best is None or used < best[0]:
+        if best is None or used > best[0]:
             best = (used, bool(window.get("estimate")))
     return best
 
@@ -65,7 +69,7 @@ def suggestion():
     empty = []
     for data in rows():
         name = data.get("label") or data.get("provider")
-        found = lowest_window(data)
+        found = constraint_window(data)
         if found is None:
             empty.append(name)
             continue
@@ -80,7 +84,8 @@ def suggestion():
         return text
     if hint:
         return hint
-    for name in ("cursor", "codex", "grok", "gemini"):
+    # Antigravity without a reading is unknown, not free, so it is never "ok".
+    for name in ("cursor", "codex", "grok"):
         if name in empty:
             return name + " ok"
     if measured is not None:

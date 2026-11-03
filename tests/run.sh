@@ -43,12 +43,18 @@ unset NO_COLOR LIMITLINE_DEBUG LIMITLINE_DEBUG_FILE LIMITLINE_CODEX_DIR LIMITLIN
   LIMITLINE_PHAROS LIMITLINE_PAGER LIMITLINE_WATCH_KEYS PAGER \
   LIMITLINE_HISTORY_DIR LIMITLINE_JOBS_HISTORY \
   LIMITLINE_GROK_LOG LIMITLINE_GROK_BIN LIMITLINE_XAI_TTL LIMITLINE_XAI_BOOT LIMITLINE_XAI_QUIET \
-  LIMITLINE_XAI_TYPE_PAUSE LIMITLINE_XAI_TIMEOUT FAKE_PCT FAKE_TS FAKE_STUBBORN FAKE_SILENT
+  LIMITLINE_XAI_TYPE_PAUSE LIMITLINE_XAI_TIMEOUT FAKE_PCT FAKE_TS FAKE_STUBBORN FAKE_SILENT \
+  LIMITLINE_AGY_BIN LIMITLINE_AGY_USAGE LIMITLINE_AGY_TTL LIMITLINE_AGY_TIMEOUT LIMITLINE_CLAUDE_CACHE
 : > "$TEST_HOME/empty-ps"
 export LIMITLINE_PS_FILE="$TEST_HOME/empty-ps"
 export LIMITLINE_REFRESH=0
+# A payload without rate_limits falls back to the cached Claude 7d reading. The fixture
+# renders write that cache in file order, so the fallback is off except where tested.
+export LIMITLINE_CLAUDE_CACHE=0
 # The Grok plan fetch starts a CLI in a pty; only the refresher tests turn it on.
 export LIMITLINE_XAI_FETCH=0
+# The Antigravity fetch runs agy; only the agy tests turn it on, with a fake binary.
+export LIMITLINE_AGY_FETCH=0
 
 fail=0
 pass=0
@@ -300,7 +306,7 @@ stale_got=${stale_got%$'\n'}
 check "provider-codex-stale" "$stale_got" '{"observed_at":1761955200,"provider":"codex","source":"session","stale":true,"windows":[]}'
 
 # Many session files: the newest file has no event (a short `codex exec`), one has a
-# malformed last line, one ends with a "premium" limit, and an old day folder is pruned.
+# malformed last line, one ends with a "premium" limit, and an old file is skipped by its mtime.
 many="$TEST_HOME/codex-many"
 mkdir -p "$many/2025/11/02" "$many/2025/10/20"
 rl() { printf '{"timestamp":"%s","type":"event_msg","payload":{"type":"token_count","rate_limits":{"limit_id":"%s","primary":{"used_percent":%s,"window_minutes":300,"resets_at":1762062120},"secondary":{"used_percent":%s,"window_minutes":10080,"resets_at":1762419600},"plan_type":"plus"}}}\n' "$1" "$2" "$3" "$4"; }
@@ -319,7 +325,7 @@ check "codex-many-files-jq" "$many_line" 'Opus 5.5 │ ctx ▓▓░░░ ·41%
 many_py=$(PATH="$nojq" LIMITLINE_CODEX=1 LIMITLINE_CODEX_DIR="$many" LIMITLINE_NOCACHE=1 "$BIN" < "$FIX/no_rate_limits.json" | strip_ansi)
 check "codex-many-files-nojq" "$many_py" "$many_line"
 many_status=$(LIMITLINE_CODEX_DIR="$many" "$BIN" status | grep '^codex')
-check "codex-many-files-status" "$many_status" 'codex    5h 30% · 7d 40%'
+check "codex-many-files-status" "$many_status" 'codex       5h 30% · 7d 40%'
 
 # Real-world shape (2026-11): the newest file holds only a "premium" event whose windows
 # are null. It must not hide the older "codex" event that carries the windows.
@@ -361,19 +367,22 @@ grok_got=$(LIMITLINE_GROK_DIR="$TEST_HOME/grok" "$ROOT/providers/grok")
 grok_got=${grok_got%$'\n'}
 check "provider-grok" "$grok_got" '{"observed_at":1762055400,"provider":"grok","source":"usage.json","stale":false,"week":{"cost_usd":0.0,"sessions":1,"tokens":14},"windows":[]}'
 
-gem_got=$(LIMITLINE_GEMINI_LOG="$FIX/providers/gemini-cli.txt" "$ROOT/providers/gemini")
-gem_got=${gem_got%$'\n'}
-check "provider-gemini" "$gem_got" '{"observed_at":1762052400,"provider":"gemini","source":"cli.log","stale":false,"windows":[{"name":"quota","resets_at":1762066800,"used_pct":100}]}'
+# The Gemini app's allowance has no local source: no window, never a guessed number.
+gem_got=$(LIMITLINE_GEMINI_LOG="$FIX/providers/gemini-cli.txt" python3 "$ROOT/providers/gemini")
+check "provider-gemini-app" "$gem_got" '{"note":"not measured (see gemini.google.com/usage)","observed_at":null,"provider":"gemini","source":"none","stale":false,"windows":[]}'
+# A "quota reached" line in agy's cli.log is an event, not a live 100%.
+agy_event=$(LIMITLINE_GEMINI_LOG="$FIX/providers/gemini-cli.txt" python3 "$ROOT/providers/antigravity")
+check "provider-antigravity-event" "$agy_event" '{"event":{"at":1762052400,"kind":"limit hit","source":"cli.log","stale":false},"label":"antigravity","observed_at":null,"plan":"antigravity","provider":"antigravity","source":"none","stale":false,"windows":[]}'
 
 export LIMITLINE_CLAUDE_SNAPSHOT="$TEST_HOME/claude-snapshot.json"
 export LIMITLINE_CODEX_DIR="$codex_prov"
 export LIMITLINE_GROK_DIR="$TEST_HOME/grok"
 export LIMITLINE_GEMINI_LOG="$FIX/providers/gemini-cli.txt"
 status_got=$("$BIN" status)
-check "status-table" "$status_got" "$(printf '%s\n' 'tool     limits' 'gemini   quota 100% · resets Sun 07:00' 'claude   5h 62% · 7d 38%' 'codex    5h 12% · 7d 55%' 'cursor   no local quota' 'grok     7d 14 tok · $0.00 at API rates · not a quota')"
+check "status-table" "$status_got" "$(printf '%s\n' 'tool        limits' 'claude      5h 62% · 7d 38%' 'codex       5h 12% · 7d 55%' 'antigravity unknown · last limit hit 1h ago (cli.log)' 'cursor      no local quota' 'gemini      not measured (see gemini.google.com/usage)' 'grok        7d 14 tok · $0.00 at API rates · not a quota')"
 
 host_got=$("$BIN" --host prompt)
-check "host-prompt" "$host_got" 'gemini quota 100% · resets Sun 07:00 | claude 5h 62% · 7d 38% | codex 5h 12% · 7d 55%'
+check "host-prompt" "$host_got" 'claude 5h 62% · 7d 38% | codex 5h 12% · 7d 55%'
 
 swift_got=$("$BIN" --host swiftbar)
 printf '%s' "$swift_got" | grep -q -F '5h 62%' && printf '%s' "$swift_got" | grep -q -F -- '---' \
@@ -420,7 +429,7 @@ grok_nocost=$(LIMITLINE_GROK_DIR="$FIX/grok-nocost" "$ROOT/providers/grok")
 grok_nocost=${grok_nocost%$'\n'}
 check "provider-grok-no-cost" "$grok_nocost" '{"observed_at":1762055400,"provider":"grok","source":"usage.json","stale":false,"week":{"sessions":1,"tokens":300000},"windows":[]}'
 grok_status=$(env "${grok_env[@]}" "$BIN" status)
-printf '%s' "$grok_status" | grep -q -F 'grok     SuperGrok Plus · 7d 1.2M tok · $3.00 at API rates · not a quota' \
+printf '%s' "$grok_status" | grep -q -F 'grok        SuperGrok Plus · 7d 1.2M tok · $3.00 at API rates · not a quota' \
   && check "grok-status" "yes" "yes" || check "grok-status" "$grok_status" "plan, tokens, cost, not a quota"
 grok_host=$(env "${grok_env[@]}" "$BIN" --host prompt)
 ! printf '%s' "$grok_host" | grep -q -F 'grok' \
@@ -533,7 +542,11 @@ printf '%s' "$third_fresh" | grep -q -F '✨' && check "fresh-once" "no" "yes" |
 nudge_ok=$(NO_COLOR=1 LIMITLINE_NUDGES=1 "$BIN" < "$FIX/over_80.json" | strip_ansi)
 printf '%s' "$nudge_ok" | grep -q -F '→ cursor ok' && check "nudge-cursor" "yes" "yes" || check "nudge-cursor" "$nudge_ok" "cursor ok"
 nudge_codex=$(NO_COLOR=1 LIMITLINE_NUDGES=1 LIMITLINE_CODEX_DIR="$fresh_dir" "$BIN" < "$FIX/over_80.json" | strip_ansi)
-printf '%s' "$nudge_codex" | grep -q -F '→ codex 12%' && check "nudge-codex" "yes" "yes" || check "nudge-codex" "$nudge_codex" "codex 12%"
+# Codex at 5h 12% · 7d 55% is constrained by its week, so it is not offered as "codex 12%".
+printf '%s' "$nudge_codex" | grep -q -F '→ cursor ok' && ! printf '%s' "$nudge_codex" | grep -q -F 'codex 12%' \
+  && check "nudge-codex-week-constrains" "yes" "yes" || check "nudge-codex-week-constrains" "$nudge_codex" "→ cursor ok, no codex 12%"
+nudge_room=$(NO_COLOR=1 LIMITLINE_NUDGES=1 LIMITLINE_CODEX_DIR="$many" "$BIN" < "$FIX/over_80.json" | strip_ansi)
+printf '%s' "$nudge_room" | grep -q -F '→ codex 40%' && check "nudge-codex" "yes" "yes" || check "nudge-codex" "$nudge_room" "codex 40%"
 nudge_ctx=$(NO_COLOR=1 LIMITLINE_NUDGES=1 "$BIN" < "$FIX/near_compact.json" | strip_ansi)
 printf '%s' "$nudge_ctx" | grep -q -F '↯ compact soon: /compact' && check "nudge-compact" "yes" "yes" || check "nudge-compact" "$nudge_ctx" "compact"
 cold_nudge=$(NO_COLOR=1 LIMITLINE_NUDGES=1 "$BIN" < "$FIX/cold_cache.json" | strip_ansi)
@@ -638,6 +651,108 @@ printf '%s' "$sync_got" | grep -q -F '5h 80% ×2' && printf '%s' "$sync_got" | g
   && check "sync-merge" "yes" "yes" || check "sync-merge" "$sync_got" "merged"
 test -f "$sync_dir/mini/claude.json" && check "sync-publish" "yes" "yes" || check "sync-publish" "no" "yes"
 
+# Review F5: sync_dir from the config file works for status, not only the env var.
+sync_cfg_dir="$TEST_HOME/sync-cfg"
+mkdir -p "$sync_cfg_dir/macbook"
+cp "$sync_dir/macbook/claude.json" "$sync_cfg_dir/macbook/claude.json"
+printf 'sync_dir = "%s"\n' "$sync_cfg_dir" > "$TEST_HOME/sync-config.toml"
+sync_cfg_got=$(LIMITLINE_CONFIG="$TEST_HOME/sync-config.toml" LIMITLINE_HOST=mini LIMITLINE_CLAUDE_SNAPSHOT="$TEST_HOME/claude-snapshot.json" LIMITLINE_CODEX_DIR="$codex_prov" "$BIN" status)
+printf '%s' "$sync_cfg_got" | grep -q -F '5h 80% ×2' && test -f "$sync_cfg_dir/mini/claude.json" \
+  && check "sync-config-file" "yes" "yes" || check "sync-config-file" "$sync_cfg_got" "merged and published"
+
+# Review F1: an offline host's stale or expired window never replaces a current reading.
+sync_merge() {
+  python3 -c 'import json, sys
+sys.path.insert(0, sys.argv[1])
+import sync
+rows = json.loads(sys.argv[3])
+out = sync.merge_rows(rows, sys.argv[2])
+print(json.dumps(out[0]["windows"], sort_keys=True))' "$ROOT/lib" "$1" "$2"
+}
+f1_dir="$TEST_HOME/sync-f1"
+mkdir -p "$f1_dir/offline"
+printf '%s\n' '{"observed_at":1700000000,"provider":"codex","source":"session","stale":false,"windows":[{"name":"7d","used_pct":99,"resets_at":100}]}' > "$f1_dir/offline/codex.json"
+f1_local='[{"provider":"codex","observed_at":1762056000,"source":"session","stale":false,"windows":[{"name":"7d","used_pct":10,"resets_at":2000000000}]}]'
+check "sync-expired-remote-ignored" "$(sync_merge "$f1_dir" "$f1_local")" '[{"name": "7d", "resets_at": 2000000000, "used_pct": 10}]'
+# A remote window without a reset counts only while its snapshot is fresh.
+f1b="$TEST_HOME/sync-f1b"
+mkdir -p "$f1b/offline"
+printf '%s\n' '{"observed_at":1762052400,"provider":"codex","source":"session","stale":false,"windows":[{"name":"7d","used_pct":90}]}' > "$f1b/offline/codex.json"
+check "sync-old-noreset-ignored" "$(sync_merge "$f1b" "$f1_local")" '[{"name": "7d", "resets_at": 2000000000, "used_pct": 10}]'
+# Reset cycles: only readings for the same reset (within a few minutes) are compared.
+# The newest cycle wins; a reading from another cycle is not mixed into it.
+f1c="$TEST_HOME/sync-f1c"
+mkdir -p "$f1c/offline" "$f1c/online"
+printf '%s\n' '{"observed_at":1762055000,"provider":"codex","source":"session","stale":false,"windows":[{"name":"7d","used_pct":95,"resets_at":1762060000}]}' > "$f1c/offline/codex.json"
+printf '%s\n' '{"observed_at":1762055900,"provider":"codex","source":"session","stale":false,"windows":[{"name":"7d","used_pct":30,"resets_at":1762664420}]}' > "$f1c/online/codex.json"
+f1c_local='[{"provider":"codex","observed_at":1762056000,"source":"session","stale":false,"windows":[{"name":"7d","used_pct":12,"resets_at":1762664400}]}]'
+check "sync-other-cycle-ignored" "$(sync_merge "$f1c" "$f1c_local")" '[{"machines": 1, "name": "7d", "resets_at": 1762664420, "used_pct": 30}]'
+# A stale-flagged snapshot is ignored even when its reset is still ahead.
+f1d="$TEST_HOME/sync-f1d"
+mkdir -p "$f1d/offline"
+printf '%s\n' '{"observed_at":1762055000,"provider":"codex","source":"session","stale":true,"windows":[{"name":"7d","used_pct":95,"resets_at":1762664400}]}' > "$f1d/offline/codex.json"
+check "sync-stale-remote-ignored" "$(sync_merge "$f1d" "$f1c_local")" '[{"name": "7d", "resets_at": 1762664400, "used_pct": 12}]'
+
+# Review F2: a provider is as constrained as its most-used window.
+f2_got=$(python3 -c 'import sys
+sys.path.insert(0, sys.argv[1])
+import nudge
+nudge.idle_machine = lambda: ""
+nudge.rows = lambda: [
+    {"provider": "codex", "windows": [{"name": "5h", "used_pct": 1}, {"name": "7d", "used_pct": 100}]},
+    {"provider": "cursor", "source": "estimate", "windows": [{"name": "7d", "used_pct": 30, "estimate": True}]},
+]
+print(nudge.suggestion())' "$ROOT/lib")
+check "nudge-exhausted-window" "$f2_got" 'cursor ~30% estimate'
+
+# Review F3: a resumed session in an old date folder still counts when its file is fresh.
+resumed="$TEST_HOME/codex-resumed"
+mkdir -p "$resumed/2025/10/01"
+rl 2025-11-02T03:59:00Z codex 50 20 > "$resumed/2025/10/01/rollout-resumed.jsonl"
+touch -t 202511020359 "$resumed/2025/10/01/rollout-resumed.jsonl"
+check "provider-codex-resumed-old-folder" "$(LIMITLINE_CODEX_DIR="$resumed" "$ROOT/providers/codex")" '{"observed_at":1762055940,"plan":"plus","provider":"codex","source":"session","stale":false,"windows":[{"name":"5h","resets_at":1762062120,"used_pct":50},{"name":"7d","resets_at":1762419600,"used_pct":20}]}'
+
+# Review F4: increasing per-request usage events are summed, not read as a running total.
+printf '%s\n' '{"usage":{"input_tokens":100,"output_tokens":0}}' '{"usage":{"input_tokens":200,"output_tokens":0}}' > "$TEST_HOME/cursor-rising.jsonl"
+f4_got=$(LIMITLINE_CURSOR_LOG="$TEST_HOME/cursor-rising.jsonl" LIMITLINE_CURSOR_WEEK_TOKENS=1000 "$ROOT/providers/cursor" | python3 -c 'import json,sys; w=json.load(sys.stdin)["windows"][0]; print(w["tokens"], w["used_pct"])')
+check "cursor-rising-events-summed" "$f4_got" '300 30'
+printf '%s\n' '{"turn":{"usage":{"input_tokens":50,"output_tokens":0}},"result":{"usage":{"input_tokens":70,"output_tokens":0}}}' > "$TEST_HOME/cursor-nested.jsonl"
+f4_nested=$(LIMITLINE_CURSOR_LOG="$TEST_HOME/cursor-nested.jsonl" LIMITLINE_CURSOR_WEEK_TOKENS=1000 "$ROOT/providers/cursor" | python3 -c 'import json,sys; print(json.load(sys.stdin)["windows"][0]["tokens"])')
+check "cursor-nested-usage-summed" "$f4_nested" '120'
+# Records that say they are running totals keep only the last total.
+printf '%s\n' '{"usage":{"cumulative":true,"input_tokens":100,"output_tokens":0}}' '{"usage":{"cumulative":true,"input_tokens":250,"output_tokens":0}}' > "$TEST_HOME/cursor-cumulative.jsonl"
+f4_cum=$(LIMITLINE_CURSOR_LOG="$TEST_HOME/cursor-cumulative.jsonl" LIMITLINE_CURSOR_WEEK_TOKENS=1000 "$ROOT/providers/cursor" | python3 -c 'import json,sys; print(json.load(sys.stdin)["windows"][0]["tokens"])')
+check "cursor-cumulative-last-total" "$f4_cum" '250'
+
+# Idle terminals redraw on a timer: limitline install sets Claude Code's refreshInterval.
+install_refresh=$(grep -c '"refreshInterval": *30' "$ROOT/commands/install.md")
+check "install-refresh-interval" "$install_refresh" '2'
+
+# A new Claude Code session has no rate_limits before its first reply. The 7d segment
+# falls back to the reading another session cached, with its age.
+seven_snap="$TEST_HOME/seven-snapshot.json"
+printf '%s\n' '{"observed_at":1762055760,"provider":"claude","source":"statusline","stale":false,"windows":[{"name":"5h","used_pct":20,"resets_at":1762062120},{"name":"7d","used_pct":67,"resets_at":1762419600}]}' > "$seven_snap"
+seven_new=$(LIMITLINE_CLAUDE_CACHE=1 LIMITLINE_CLAUDE_SNAPSHOT="$seven_snap" NO_COLOR=1 "$BIN" < "$FIX/no_rate_limits.json" | strip_ansi)
+check "claude-7d-cached-new-session" "$seven_new" 'Opus 5.5 │ ctx ▓▓░░░ ·41% │ 7d ▓▓▓░░ +67% ↻Thu 09:00 · 4m ago │ $0.12'
+seven_nojq=$(PATH="$nojq" LIMITLINE_CLAUDE_CACHE=1 LIMITLINE_CLAUDE_SNAPSHOT="$seven_snap" NO_COLOR=1 "$BIN" < "$FIX/no_rate_limits.json" | strip_ansi)
+check "claude-7d-cached-nojq" "$seven_nojq" "$seven_new"
+# A reply that carries only the 5h window keeps the cached week, and its real age.
+seven_five=$(printf '%s' '{"model":{"display_name":"Opus 5.5"},"rate_limits":{"five_hour":{"used_percentage":30,"resets_at":1762062120}}}' | LIMITLINE_CLAUDE_CACHE=1 LIMITLINE_CLAUDE_SNAPSHOT="$seven_snap" NO_COLOR=1 "$BIN" | strip_ansi)
+check "claude-7d-cached-five-only" "$seven_five" 'Opus 5.5 │ 5h ▓▓░░░ ·30% ↻1h42m │ 7d ▓▓▓░░ +67% ↻Thu 09:00 · 4m ago'
+grep -q -F '{"name":"7d","used_pct":67,"resets_at":1762419600,"observed_at":1762055760}' "$seven_snap" \
+  && check "claude-7d-cache-kept" "yes" "yes" || check "claude-7d-cache-kept" "$(cat "$seven_snap")" "7d carried with its observed_at"
+seven_again=$(LIMITLINE_CLAUDE_CACHE=1 LIMITLINE_CLAUDE_SNAPSHOT="$seven_snap" NO_COLOR=1 "$BIN" < "$FIX/no_rate_limits.json" | strip_ansi)
+check "claude-7d-cached-age-kept" "$seven_again" "$seven_new"
+# Once the cached week has reset, its percent is last week's: the segment says so instead.
+printf '%s\n' '{"observed_at":1761400000,"provider":"claude","source":"statusline","stale":false,"windows":[{"name":"7d","used_pct":90,"resets_at":1761900000}]}' > "$seven_snap"
+seven_old=$(LIMITLINE_CLAUDE_CACHE=1 LIMITLINE_CLAUDE_SNAPSHOT="$seven_snap" NO_COLOR=1 "$BIN" < "$FIX/no_rate_limits.json" | strip_ansi)
+check "claude-7d-cached-reset-passed" "$seven_old" 'Opus 5.5 │ ctx ▓▓░░░ ·41% │ 7d reset Fri 08:40 · no newer reading │ $0.12'
+seven_old_py=$(PATH="$nojq" LIMITLINE_CLAUDE_CACHE=1 LIMITLINE_CLAUDE_SNAPSHOT="$seven_snap" NO_COLOR=1 "$BIN" < "$FIX/no_rate_limits.json" | strip_ansi)
+check "claude-7d-cached-reset-passed-nojq" "$seven_old_py" "$seven_old"
+# A live 7d reading never shows an age.
+seven_live=$(LIMITLINE_CLAUDE_CACHE=1 LIMITLINE_CLAUDE_SNAPSHOT="$seven_snap" NO_COLOR=1 "$BIN" < "$FIX/full.json" | strip_ansi)
+check "claude-7d-live-no-age" "$seven_live" "$full_want"
+
 # Fleet from Pharos state files, otherwise a process list. Paths stay as basenames.
 fleet_line=$(LIMITLINE_PHAROS_RUNS="$FIX/fleet/runs" "$ROOT/lib/fleet.py")
 fleet_line=${fleet_line%$'\n'}
@@ -717,19 +832,78 @@ check "provider-cursor-estimate" "$cursor_got" '{"observed_at":1762056000,"provi
 agy_root="$TEST_HOME/agy-runs"
 mkdir -p "$agy_root/run-agy"
 cp "$FIX/providers/agy-state.json" "$agy_root/run-agy/state.json"
-agy_got=$(LIMITLINE_GEMINI_LOG="$TEST_HOME/missing-gemini-log" LIMITLINE_PHAROS_RUNS="$agy_root" "$ROOT/providers/gemini")
-agy_got=${agy_got%$'\n'}
-check "provider-agy" "$agy_got" '{"observed_at":1762052400,"provider":"gemini","source":"pharos","stale":false,"windows":[{"name":"quota","resets_at":1762066800,"used_pct":100}]}'
+# A Pharos run paused on quota is the same kind of event: no window, never 100%.
+agy_got=$(LIMITLINE_GEMINI_LOG="$TEST_HOME/missing-gemini-log" LIMITLINE_PHAROS_RUNS="$agy_root" python3 "$ROOT/providers/antigravity")
+check "provider-agy-paused-run" "$agy_got" '{"event":{"at":1762052400,"kind":"limit hit","source":"pharos","stale":false},"label":"antigravity","observed_at":null,"plan":"antigravity","provider":"antigravity","source":"none","stale":false,"windows":[]}'
+# The event goes stale after 5 hours...
+agy_late=$(LIMITLINE_NOW=1762070401 LIMITLINE_GEMINI_LOG="$FIX/providers/gemini-cli.txt" python3 "$ROOT/providers/antigravity" | python3 -c 'import json,sys; d=json.load(sys.stdin); print(d["event"]["stale"], d["windows"])')
+check "agy-event-stale-5h" "$agy_late" 'True []'
+# ...or as soon as a later agy run finished.
+mkdir -p "$agy_root/run-agy-ok"
+printf '%s\n' '{"id":"run-agy-ok","status":"done","tool":"agy","started_at":"2025-11-02T03:30:00Z"}' > "$agy_root/run-agy-ok/state.json"
+agy_after=$(LIMITLINE_GEMINI_LOG="$FIX/providers/gemini-cli.txt" LIMITLINE_PHAROS_RUNS="$agy_root" "$BIN" status | grep '^antigravity')
+check "agy-event-stale-after-success" "$agy_after" 'antigravity unknown · last limit hit 1h ago (cli.log, stale)'
+rm -rf "$agy_root/run-agy-ok"
+
+# Antigravity is live from `agy -p "/usage" --output-format json`, run by limitline refresh.
+agy_home="$TEST_HOME/agy"
+mkdir -p "$agy_home"
+cat > "$agy_home/agy" << EOF
+#!/usr/bin/env bash
+printf '%s\n' "\$*" >> "$agy_home/calls"
+if [[ -n "\${FAKE_AGY_SLEEP:-}" ]]; then sleep "\$FAKE_AGY_SLEEP"; fi
+if [[ -n "\${FAKE_AGY_JUNK:-}" ]]; then echo "not json"; exit 0; fi
+if [[ -n "\${FAKE_AGY_PREAMBLE:-}" ]]; then echo 'Notice: a newer agy is available {see release notes}'; echo '{"type":"init"}'; fi
+cat "$FIX/agy/usage.json"
+EOF
+chmod +x "$agy_home/agy"
+export LIMITLINE_AGY_BIN="$agy_home/agy"
+export LIMITLINE_AGY_USAGE="$agy_home/antigravity.json"
+agy_off=$("$BIN" refresh)
+[[ ! -e "$agy_home/calls" && -z "$agy_off" ]] && check "agy-fetch-off" "yes" "yes" || check "agy-fetch-off" "$agy_off" "agy not run while LIMITLINE_AGY_FETCH=0"
+agy_nofetch=$(LIMITLINE_AGY_FETCH=1 python3 "$ROOT/lib/refresh.py" --no-fetch)
+[[ ! -e "$agy_home/calls" ]] && check "agy-no-fetch-from-status-line" "yes" "yes" || check "agy-no-fetch-from-status-line" "ran" "not run"
+agy_run=$(LIMITLINE_AGY_FETCH=1 "$BIN" refresh)
+check "agy-fetch-runs" "$agy_run" 'antigravity: fetched'
+check "agy-fetch-args" "$(cat "$agy_home/calls")" '-p /usage --output-format json'
+check "agy-fetch-cache" "$(cat "$LIMITLINE_AGY_USAGE")" '{"buckets": [{"group": "Gemini Models", "id": "gemini-5h", "resets_at": 1762068300, "used_pct": 0, "window": "5h"}, {"group": "Gemini Models", "id": "gemini-weekly", "resets_at": 1762464900, "used_pct": 0, "window": "weekly"}, {"group": "Claude and GPT models", "id": "3p-5h", "resets_at": 1762068300, "used_pct": 7, "window": "5h"}, {"group": "Claude and GPT models", "id": "3p-weekly", "resets_at": 1762464900, "used_pct": 5, "window": "weekly"}, {"group": "Gemini 4 Argon", "id": "argon-weekly", "resets_at": 1762464900, "used_pct": 100, "window": "weekly"}], "observed_at": 1762056000}'
+check "agy-fetch-ttl" "$(LIMITLINE_AGY_FETCH=1 "$BIN" refresh)" 'antigravity: fresh'
+check "agy-fetch-once" "$(wc -l < "$agy_home/calls" | tr -d ' ')" '1'
+agy_live=$(python3 "$ROOT/providers/antigravity")
+check "provider-antigravity-live" "$agy_live" '{"age":0,"label":"antigravity","observed_at":1762056000,"plan":"antigravity","provider":"antigravity","source":"live","stale":false,"windows":[{"group":"Gemini Models","id":"gemini-5h","name":"gemini-5h","resets_at":1762068300,"used_pct":0,"window":"5h"},{"group":"Gemini Models","id":"gemini-weekly","name":"gemini-weekly","resets_at":1762464900,"used_pct":0,"window":"weekly"},{"group":"Claude and GPT models","id":"3p-5h","name":"3p-5h","resets_at":1762068300,"used_pct":7,"window":"5h"},{"group":"Claude and GPT models","id":"3p-weekly","name":"3p-weekly","resets_at":1762464900,"used_pct":5,"window":"weekly"},{"group":"Gemini 4 Argon","id":"argon-weekly","name":"argon-weekly","resets_at":1762464900,"used_pct":100,"window":"weekly"}]}'
+agy_status=$("$BIN" status | grep '^antigravity')
+check "agy-status-live" "$agy_status" 'antigravity gemini-5h 0% · gemini-weekly 0% · 3p-5h 7% · 3p-weekly 5% · argon-weekly 100% resets Thu 21:35'
+# A bucket whose reset passed has refilled, so its old percent is dropped.
+check "agy-reset-passed" "$(LIMITLINE_NOW=1762070000 python3 "$ROOT/providers/antigravity" | python3 -c 'import json,sys; print(" ".join(w["id"] for w in json.load(sys.stdin)["windows"]))')" 'gemini-weekly 3p-weekly argon-weekly'
+# A live reading made after a logged limit hit replaces the event.
+check "agy-live-beats-event" "$(python3 "$ROOT/providers/antigravity" | python3 -c 'import json,sys; print("event" in json.load(sys.stdin))')" 'False'
+# Failures and timeouts are recorded and leave the last reading in place.
+check "agy-fetch-junk" "$(FAKE_AGY_JUNK=1 LIMITLINE_AGY_FETCH=1 "$BIN" refresh --force)" 'antigravity: failed: no usage in output'
+check "agy-fetch-timeout" "$(FAKE_AGY_SLEEP=5 LIMITLINE_AGY_TIMEOUT=1 LIMITLINE_AGY_FETCH=1 "$BIN" refresh --force)" 'antigravity: failed: timeout'
+check "agy-cache-kept-after-failure" "$(python3 "$ROOT/providers/antigravity" | python3 -c 'import json,sys; print(json.load(sys.stdin)["source"])')" 'live'
+# A notice line or another JSON object before the usage object does not hide it.
+rm -f "$LIMITLINE_AGY_USAGE"
+check "agy-fetch-preamble" "$(FAKE_AGY_PREAMBLE=1 LIMITLINE_AGY_FETCH=1 "$BIN" refresh --force)" 'antigravity: fetched'
+check "agy-preamble-buckets" "$(python3 -c 'import json,sys; print(len(json.load(open(sys.argv[1]))["buckets"]))' "$LIMITLINE_AGY_USAGE")" '5'
+unset LIMITLINE_AGY_BIN
+# launchd starts the refresher with a bare PATH, so ~/.local/bin and Homebrew are checked too.
+mkdir -p "$HOME/.local/bin"
+cp "$agy_home/agy" "$HOME/.local/bin/agy"
+rm -f "$LIMITLINE_AGY_USAGE"
+check "agy-found-off-path" "$(PATH="$nojq" LIMITLINE_AGY_FETCH=1 "$BIN" refresh --force)" 'antigravity: fetched'
+check "agy-doctor-binary" "$(PATH="$nojq" "$BIN" doctor < /dev/null | grep '^antigravity binary')" "antigravity binary: $HOME/.local/bin/agy"
+rm -f "$HOME/.local/bin/agy"
+unset LIMITLINE_AGY_USAGE
 spend_got=$(LIMITLINE_LEDGER="$FIX/providers/ledger.jsonl" "$ROOT/providers/spend")
 spend_got=${spend_got%$'\n'}
 check "provider-spend" "$spend_got" '{"observed_at":1762056000,"provider":"api","source":"ledger","stale":false,"windows":[{"name":"spend","usd":0.25}]}'
 spend_status=$(LIMITLINE_LEDGER="$FIX/providers/ledger.jsonl" LIMITLINE_CLAUDE_SNAPSHOT="$TEST_HOME/claude-snapshot.json" LIMITLINE_CODEX_DIR="$codex_prov" LIMITLINE_GROK_DIR="$TEST_HOME/grok" LIMITLINE_GEMINI_LOG="$FIX/providers/gemini-cli.txt" "$BIN" status)
-printf '%s' "$spend_status" | head -n 2 | grep -q -F 'gemini' \
-  && printf '%s' "$spend_status" | grep -q -F 'api      spend $0.25' \
+printf '%s' "$spend_status" | sed -n 2p | grep -q -F 'claude' \
+  && printf '%s' "$spend_status" | grep -q -F 'api         spend $0.25' \
   && check "provider-order" "yes" "yes" || check "provider-order" "$spend_status" "constrained first"
 
-nudge_v2=$(NO_COLOR=1 LIMITLINE_NUDGES=1 LIMITLINE_CODEX_DIR="$fresh_dir" LIMITLINE_MACHINES_JSON="$FIX/machines/idle.json" "$BIN" < "$FIX/over_80.json" | strip_ansi)
-printf '%s' "$nudge_v2" | grep -q -F '→ codex 12% · mini idle' \
+nudge_v2=$(NO_COLOR=1 LIMITLINE_NUDGES=1 LIMITLINE_CODEX_DIR="$many" LIMITLINE_MACHINES_JSON="$FIX/machines/idle.json" "$BIN" < "$FIX/over_80.json" | strip_ansi)
+printf '%s' "$nudge_v2" | grep -q -F '→ codex 40% · mini idle' \
   && check "nudge-v2" "yes" "yes" || check "nudge-v2" "$nudge_v2" "codex and idle machine"
 cfg_out=$("$BIN" config)
 printf '%s' "$cfg_out" | grep -q -F 'hosts = ["mini", "worker-1"]' \
@@ -861,7 +1035,7 @@ check "sync-consumer-only" "$(cat "$XDG_CACHE_HOME/limitline/fleet.line") | $(ca
 
 # Cursor is an estimate: "~" everywhere, tokens and budget in status, ranked after measured windows.
 cur_status=$(LIMITLINE_CURSOR_LOG="$FIX/providers/cursor-usage.jsonl" LIMITLINE_CLAUDE_SNAPSHOT="$TEST_HOME/claude-snapshot.json" "$BIN" status)
-printf '%s' "$cur_status" | grep -q -F 'cursor   7d ~11% estimate (110k of 1.0M tokens)' \
+printf '%s' "$cur_status" | grep -q -F 'cursor      7d ~11% estimate (110k of 1.0M tokens)' \
   && check "cursor-estimate-status" "yes" "yes" || check "cursor-estimate-status" "$cur_status" "~ and tokens"
 cur_host=$(LIMITLINE_CURSOR_LOG="$FIX/providers/cursor-usage.jsonl" "$BIN" --host prompt)
 printf '%s' "$cur_host" | grep -q -F 'cursor 7d ~11%' \
@@ -888,8 +1062,8 @@ rm -f "$XDG_CACHE_HOME/limitline/xai-fetch.json"
 # Missing log and no manual cache: no plan row, the Cursor estimate stays.
 check "xai-log-missing" "$("$ROOT/providers/xai-plan")" '{"label":"cursor+grok","observed_at":null,"provider":"xai-plan","source":"none","stale":false,"windows":[]}'
 noplan_status=$("$BIN" status)
-printf '%s' "$noplan_status" | grep -q -F 'cursor   7d ~11% estimate (110k of 1.0M tokens)' \
-  && printf '%s' "$noplan_status" | grep -q -F 'grok     7d 14 tok' \
+printf '%s' "$noplan_status" | grep -q -F 'cursor      7d ~11% estimate (110k of 1.0M tokens)' \
+  && printf '%s' "$noplan_status" | grep -q -F 'grok        7d 14 tok' \
   && ! printf '%s' "$noplan_status" | grep -q -F 'cursor+grok' \
   && check "plan-absent-estimate" "yes" "yes" || check "plan-absent-estimate" "$noplan_status" "cursor estimate and grok rows"
 noplan_host=$("$BIN" --host prompt)
@@ -1002,7 +1176,7 @@ printf '%s' "$reset_status" | grep -q -F 'cursor+grok reset Sat 18:00, no newer 
 # Older than 7 days: hidden, and the labelled estimate comes back.
 printf '%s\n' '{"ts":"2025-10-25T00:00:00.000Z","msg":"billing: fetched credits config","ctx":{"config":{"creditUsagePercent":74.0,"currentPeriod":{"end":"2025-11-07T05:22:35.070+00:00"}}}}' > "$LIMITLINE_GROK_LOG"
 old_status=$("$BIN" status)
-printf '%s' "$old_status" | grep -q -F 'cursor   7d ~11% estimate' && ! printf '%s' "$old_status" | grep -q -F 'cursor+grok' \
+printf '%s' "$old_status" | grep -q -F 'cursor      7d ~11% estimate' && ! printf '%s' "$old_status" | grep -q -F 'cursor+grok' \
   && check "plan-hidden-after-7d" "yes" "yes" || check "plan-hidden-after-7d" "$old_status" "estimate back"
 
 if "$BIN" set xai-plan 150 >/dev/null 2>&1; then check "set-xai-plan-range" "accepted" "refused"; else check "set-xai-plan-range" "refused" "refused"; fi
@@ -1380,6 +1554,24 @@ if [[ "$jobs_ms" -le 50 ]]; then
   check "jobs-warm-${jobs_ms}ms" "fast" "fast"
 else
   check "jobs-warm-${jobs_ms}ms" "slow" "fast"
+fi
+
+# Five lines: line 1 is the session only; lines 2-5 come from lib/fivelines.py.
+five_cache="$TEST_HOME/five-cache"; mkdir -p "$five_cache/limitline" "$TEST_HOME/five-pharos/runs"
+printf 'cursor+grok 81%% · Thu 23:22 · grok 7d 1M tok\n81 0 live\n' > "$five_cache/limitline/grok.line"
+printf '{"hosts":[{"name":"studio","free_pct":82,"load_pct":22,"reachable":true}]}' > "$five_cache/limitline/machines.json"
+five_in='{"model":{"display_name":"Opus"},"context_window":{"used_percentage":40},"rate_limits":{"seven_day":{"used_percentage":70,"resets_at":1762100000}}}'
+five_out=$(printf '%s' "$five_in" | NO_COLOR=1 XDG_CACHE_HOME="$five_cache" LIMITLINE_PHAROS_HOME="$TEST_HOME/five-pharos" LIMITLINE_LINES=5 LIMITLINE_REFRESH=0 "$BIN")
+five_l1=$(printf '%s\n' "$five_out" | sed -n 1p)
+five_l2=$(printf '%s\n' "$five_out" | sed -n 2p)
+check "five-line1-session-only" "$([[ "$five_l1" == *Opus* && "$five_l1" != *7d* ]] && echo yes || echo no)" "yes"
+check "five-line2-left" "$([[ "$five_l2" == "left  ✻ claude 7d 30%"* && "$five_l2" == *"cursor+grok 19%"* ]] && echo yes || echo no)" "yes"
+check "five-hosts-line" "$(printf '%s\n' "$five_out" | tail -1)" "hosts studio 82% mem free · 22% cpu"
+check "two-lines-unchanged" "$(printf '%s' "$five_in" | NO_COLOR=1 XDG_CACHE_HOME="$five_cache" LIMITLINE_LINES=2 LIMITLINE_REFRESH=0 "$BIN" | grep -c 'left ')" "0"
+if python3 -m unittest -q "$ROOT/tests/test_fivelines.py" >/dev/null 2>&1; then
+  check "fivelines-unit" "ok" "ok"
+else
+  check "fivelines-unit" "failed" "ok"
 fi
 
 printf '\n%d passed, %d failed\n' "$pass" "$fail"

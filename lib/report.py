@@ -125,9 +125,6 @@ def window_lines(rows, now):
             if isinstance(machines, int) and machines > 1:
                 extra = " ×%d" % machines
             when = rel(window.get("resets_at"), now)
-            if when and row.get("provider") == "gemini":
-                # Antigravity only logs "Resets in 4h0m" once, so the reset is a fixed moment.
-                when = timefmt.day_time(window.get("resets_at"))
             reset = ("  " + when) if when else ""
             mark = "~" if window.get("estimate") else ""
             if mark:

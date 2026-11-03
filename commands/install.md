@@ -16,8 +16,10 @@ Set Claude Code's `statusLine` to this plugin's `bin/limitline`. Do the work bel
 Desired value:
 
 ```json
-{"type":"command","command":"<absolute path to bin/limitline>","padding":0}
+{"type":"command","command":"<absolute path to bin/limitline>","padding":0,"refreshInterval":30}
 ```
+
+`refreshInterval` is Claude Code's documented `statusLine` timer: it re-runs the command every N seconds (minimum 1) as well as on session events. Without it an idle terminal keeps the fleet, machine, and plan numbers it last drew, so two idle terminals can show different numbers. 30 seconds keeps every terminal on the shared caches; a warm render takes about 30 ms.
 
 ## Edit settings
 
@@ -40,7 +42,7 @@ with open(path) as fh:
     data = json.load(fh)
 if not isinstance(data, dict):
     raise SystemExit("settings root must be an object")
-data["statusLine"] = {"type": "command", "command": command, "padding": 0}
+data["statusLine"] = {"type": "command", "command": command, "padding": 0, "refreshInterval": 30}
 with open(path, "w") as fh:
     json.dump(data, fh, indent=2)
     fh.write("\n")
@@ -48,3 +50,13 @@ PY
 ```
 
 Use that only after the backup and the confirmation step. Read the file back and show the user the resulting `statusLine` plus the backup path.
+
+## Name your computers
+
+The `hosts` line of the status line shows each computer by a nickname you choose, on any system (macOS, Linux, Windows through WSL or Git Bash). After the status line is set:
+
+1. Read `~/.config/limitline/config.toml` if it exists. If it already has a `hosts =` line, show it and ask whether to keep it.
+2. Otherwise ask: "What do you call this computer?" Offer the short hostname (`hostname -s`) as the default.
+3. Ask whether there are other computers to show. For each one, ask for a nickname and its ssh target (`user@host`). Skip this when the user says no.
+4. Write `hosts = ["<nickname>=local", "<nickname>=<user@host>", ...]` and `lines = 5` into the config file, keeping every other line. Back the file up first as `config.toml.bak-limitline-<UTC timestamp>`.
+5. Run `limitline refresh` once so the first render has the readings.
