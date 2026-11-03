@@ -1556,5 +1556,23 @@ else
   check "jobs-warm-${jobs_ms}ms" "slow" "fast"
 fi
 
+# Five lines: line 1 is the session only; lines 2-5 come from lib/fivelines.py.
+five_cache="$TEST_HOME/five-cache"; mkdir -p "$five_cache/limitline" "$TEST_HOME/five-pharos/runs"
+printf 'cursor+grok 81%% · Thu 23:22 · grok 7d 1M tok\n81 0 live\n' > "$five_cache/limitline/grok.line"
+printf '{"hosts":[{"name":"studio","free_pct":82,"load_pct":22,"reachable":true}]}' > "$five_cache/limitline/machines.json"
+five_in='{"model":{"display_name":"Opus"},"context_window":{"used_percentage":40},"rate_limits":{"seven_day":{"used_percentage":70,"resets_at":1762100000}}}'
+five_out=$(printf '%s' "$five_in" | NO_COLOR=1 XDG_CACHE_HOME="$five_cache" LIMITLINE_PHAROS_HOME="$TEST_HOME/five-pharos" LIMITLINE_LINES=5 LIMITLINE_REFRESH=0 "$BIN")
+five_l1=$(printf '%s\n' "$five_out" | sed -n 1p)
+five_l2=$(printf '%s\n' "$five_out" | sed -n 2p)
+check "five-line1-session-only" "$([[ "$five_l1" == *Opus* && "$five_l1" != *7d* ]] && echo yes || echo no)" "yes"
+check "five-line2-left" "$([[ "$five_l2" == "left  ✻ claude 7d 30%"* && "$five_l2" == *"cursor+grok 19%"* ]] && echo yes || echo no)" "yes"
+check "five-hosts-line" "$(printf '%s\n' "$five_out" | tail -1)" "hosts studio 82% mem free · 22% cpu"
+check "two-lines-unchanged" "$(printf '%s' "$five_in" | NO_COLOR=1 XDG_CACHE_HOME="$five_cache" LIMITLINE_LINES=2 LIMITLINE_REFRESH=0 "$BIN" | grep -c 'left ')" "0"
+if python3 -m unittest -q "$ROOT/tests/test_fivelines.py" >/dev/null 2>&1; then
+  check "fivelines-unit" "ok" "ok"
+else
+  check "fivelines-unit" "failed" "ok"
+fi
+
 printf '\n%d passed, %d failed\n' "$pass" "$fail"
 [[ "$fail" -eq 0 ]]

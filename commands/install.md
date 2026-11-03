@@ -50,3 +50,13 @@ PY
 ```
 
 Use that only after the backup and the confirmation step. Read the file back and show the user the resulting `statusLine` plus the backup path.
+
+## Name your computers
+
+The `hosts` line of the status line shows each computer by a nickname you choose, on any system (macOS, Linux, Windows through WSL or Git Bash). After the status line is set:
+
+1. Read `~/.config/limitline/config.toml` if it exists. If it already has a `hosts =` line, show it and ask whether to keep it.
+2. Otherwise ask: "What do you call this computer?" Offer the short hostname (`hostname -s`) as the default.
+3. Ask whether there are other computers to show. For each one, ask for a nickname and its ssh target (`user@host`). Skip this when the user says no.
+4. Write `hosts = ["<nickname>=local", "<nickname>=<user@host>", ...]` and `lines = 5` into the config file, keeping every other line. Back the file up first as `config.toml.bak-limitline-<UTC timestamp>`.
+5. Run `limitline refresh` once so the first render has the readings.

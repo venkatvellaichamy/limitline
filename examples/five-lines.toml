@@ -1,0 +1,7 @@
+# The five-line status line: session, what's left on each plan, today's jobs, older open jobs, hosts.
+lines = 5
+marks = "unicode"   # or "none"
+hosts = ["studio=local", "laptop=me@laptop", "backup=me@backup"]
+fleet = "on"
+machines = "on"
+grok = "on"

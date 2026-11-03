@@ -172,6 +172,7 @@ load_config() {
       grok_ttl) GROK_TTL="$val" ;;
       jobs) JOBS_MODE="$val"; JOBS_SET=1 ;;
       jobs_ttl) JOBS_TTL="$val" ;;
+      marks) MARKS_MODE="$val" ;;
     esac
   done < "$cfg"
 }
@@ -245,7 +246,8 @@ if [[ -n "${LIMITLINE_MEM_WARN:-$MEM_WARN}" ]]; then
 fi
 case "$LINES" in ''|*[!0-9]*) LINES=1 ;; esac
 if [[ "$LINES" -lt 1 ]]; then LINES=1; fi
-if [[ "$LINES" -gt 2 ]]; then LINES=2; fi
+if [[ "$LINES" -gt 2 && "$LINES" -lt 5 ]]; then LINES=2; fi
+if [[ "$LINES" -gt 5 ]]; then LINES=5; fi
 case "$AUTO_AT" in ''|*[!0-9]*) AUTO_AT=95 ;; esac
 case "$AUTO_WARN" in ''|*[!0-9]*) AUTO_WARN=80 ;; esac
 
@@ -1703,6 +1705,8 @@ function fit(maxc, band,    total, i, best, best_i, guard) {
 }
 END {
   nseg = 0
+  split("model style ctx vitals cost git pr cache vim session", sk, " ")
+  for (i in sk) session_kinds[sk[i]] = 1
   model_text = val("model")
   if (val("sparkle") == "1") {
     if (model_text != "") model_text = "✨ " model_text
@@ -1737,7 +1741,14 @@ END {
   push(5, "codex", themed("codex", codex_seg(val("codex5"), val("codex7"))))
   push(1, "session", themed("session", val("session")))
   reorder()
-  if (val("lines") + 0 >= 2) {
+  if (val("lines") + 0 >= 5) {
+    # Five lines: line 1 is this session only. Lines 2-5 come from lib/fivelines.py.
+    for (i = 1; i <= nseg; i++)
+      if (!(kind_of[i] in session_kinds)) drop[i] = 1
+    fit(val("max_cols") + 0, 0)
+    out = join_range(1, nseg)
+    if (out != "") print out
+  } else if (val("lines") + 0 >= 2) {
     fit(val("max_cols") + 0, 1)
     fit(val("max_cols") + 0, 2)
     line1 = join_band(1)
@@ -1751,5 +1762,13 @@ END {
   }
 }
 '
+
+if [[ "$LINES" -ge 5 ]]; then
+  LL_COLOR="$USE_COLOR" LL_THEME="$THEME" LL_MARKS="${MARKS_MODE:-unicode}" LL_COLUMNS="$max_cols" \
+  LL_CLAUDE5="$five_pct" LL_CLAUDE5_RESET="$five_epoch" LL_CLAUDE7="$seven_pct" LL_CLAUDE7_RESET="$seven_epoch" \
+  LL_CODEX5="$codex5" LL_CODEX5_RESET="$codex5_raw" LL_CODEX7="$codex7" LL_CODEX7_RESET="$codex7_raw" \
+  LL_CODEX_CACHE="$(codex_cache_file)" \
+    python3 "$LIMITLINE_ROOT/lib/fivelines.py" 2>/dev/null || true
+fi
 
 exit 0

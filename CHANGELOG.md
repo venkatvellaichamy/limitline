@@ -1,5 +1,13 @@
 # Changelog
 
+## Unreleased
+
+- Five lines (`lines = 5`), the layout approved on 2026-11-03. Line 1 is this session only (model, context, time, cost, lines). Line 2, `left`, shows what is **left** on every plan in a fixed order with a mark per company: ✻ claude, ◎ codex, ⬡ cursor+grok, ✦ agy (gemini, claude+gpt, argon). A reset time is shown only at 25% or less left; red at 10% or less, yellow at 25% or less; a missing reading is `—`, never a guess. Line 3, `today`, counts Pharos jobs started today: running, done, need you, failed, retried, waiting on limit. Line 4, `older`, counts jobs from the last 7 days that are still open, and hides itself when there are none. Line 5, `hosts`, shows each computer by its nickname with free memory and CPU load. `marks = "none"` drops the marks. `lines = 1` and `lines = 2` are unchanged.
+- Job counts come from Pharos's `~/.pharos/summary.json` when it is under 10 minutes old, otherwise from the run states. limitline never writes Pharos files.
+- The Gemini app is no longer shown; no tool can read it.
+- Machine readings fall back to `/proc` on Linux and WSL.
+- `/limitline:install` asks for a nickname for this computer and any others, and turns on five lines.
+
 ## 0.9.0
 
 Live data and safer jobs. (Briefly numbered 0.8.2 and 0.8.3 on two unmerged branches; released together as 0.9.0.)
