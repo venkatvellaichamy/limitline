@@ -10,6 +10,8 @@ Green is under 50% (`·`), yellow is 50–80% (`+`), and red is over 80% (`!`). 
 
 Missing fields are skipped. Empty input still exits 0.
 
+See [ROADMAP.md](ROADMAP.md) for shipped releases, hardening, and planned work.
+
 ## Themes
 
 `minimal` (default):
