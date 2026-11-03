@@ -38,7 +38,8 @@ unset NO_COLOR LIMITLINE_DEBUG LIMITLINE_DEBUG_FILE LIMITLINE_CODEX_DIR LIMITLIN
   LIMITLINE_CURSOR_LOG LIMITLINE_CURSOR_DIR LIMITLINE_CURSOR_WEEK_TOKENS LIMITLINE_PS_FILE \
   LIMITLINE_SSH_TIMEOUT LIMITLINE_MEM_WARN LIMITLINE_FLEET_WINDOW LIMITLINE_LAUNCHCTL \
   LIMITLINE_LAUNCH_AGENTS XDG_DATA_HOME CLAUDE_CODE_REMOTE LINES \
-  LIMITLINE_GROK LIMITLINE_GROK_SETTINGS LIMITLINE_GROK_LINE LIMITLINE_GROK_TTL
+  LIMITLINE_GROK LIMITLINE_GROK_SETTINGS LIMITLINE_GROK_LINE LIMITLINE_GROK_TTL \
+  LIMITLINE_XAI_PLAN LIMITLINE_JOBS LIMITLINE_JOBS_TTL LIMITLINE_JOBS_DIR LIMITLINE_JOBS_LINE
 : > "$TEST_HOME/empty-ps"
 export LIMITLINE_PS_FILE="$TEST_HOME/empty-ps"
 export LIMITLINE_REFRESH=0
@@ -352,10 +353,10 @@ export LIMITLINE_CODEX_DIR="$codex_prov"
 export LIMITLINE_GROK_DIR="$TEST_HOME/grok"
 export LIMITLINE_GEMINI_LOG="$FIX/providers/gemini-cli.txt"
 status_got=$("$BIN" status)
-check "status-table" "$status_got" "$(printf '%s\n' 'tool     limits' 'gemini   quota 100%' 'claude   5h 62% · 7d 38%' 'codex    5h 12% · 7d 55%' 'cursor   no local quota' 'grok     7d 14 tok · $0.00 at API rates · not a quota')"
+check "status-table" "$status_got" "$(printf '%s\n' 'tool     limits' 'gemini   quota 100% · resets Sun 07:00' 'claude   5h 62% · 7d 38%' 'codex    5h 12% · 7d 55%' 'cursor   no local quota' 'grok     7d 14 tok · $0.00 at API rates · not a quota')"
 
 host_got=$("$BIN" --host prompt)
-check "host-prompt" "$host_got" 'gemini quota 100% | claude 5h 62% · 7d 38% | codex 5h 12% · 7d 55%'
+check "host-prompt" "$host_got" 'gemini quota 100% · resets Sun 07:00 | claude 5h 62% · 7d 38% | codex 5h 12% · 7d 55%'
 
 swift_got=$("$BIN" --host swiftbar)
 printf '%s' "$swift_got" | grep -q -F '5h 62%' && printf '%s' "$swift_got" | grep -q -F -- '---' \
@@ -843,7 +844,7 @@ check "sync-consumer-only" "$(cat "$XDG_CACHE_HOME/limitline/fleet.line") | $(ca
 
 # Cursor is an estimate: "~" everywhere, tokens and budget in status, ranked after measured windows.
 cur_status=$(LIMITLINE_CURSOR_LOG="$FIX/providers/cursor-usage.jsonl" LIMITLINE_CLAUDE_SNAPSHOT="$TEST_HOME/claude-snapshot.json" "$BIN" status)
-printf '%s' "$cur_status" | grep -q -F 'cursor   7d ~11% (estimate: 110k of 1.0M tokens)' \
+printf '%s' "$cur_status" | grep -q -F 'cursor   7d ~11% estimate (110k of 1.0M tokens)' \
   && check "cursor-estimate-status" "yes" "yes" || check "cursor-estimate-status" "$cur_status" "~ and tokens"
 cur_host=$(LIMITLINE_CURSOR_LOG="$FIX/providers/cursor-usage.jsonl" "$BIN" --host prompt)
 printf '%s' "$cur_host" | grep -q -F 'cursor 7d ~11%' \
@@ -851,6 +852,129 @@ printf '%s' "$cur_host" | grep -q -F 'cursor 7d ~11%' \
 cur_report=$(LIMITLINE_CURSOR_LOG="$FIX/providers/cursor-usage.jsonl" "$BIN" report)
 printf '%s' "$cur_report" | grep -q -F '~11%' \
   && check "cursor-estimate-report" "yes" "yes" || check "cursor-estimate-report" "$cur_report" "~11%"
+
+# Shared Cursor + Grok plan (0.5). One subscription, one row, from a cache the user or a
+# browser helper writes. The cache path is an override so nothing touches ~/.cache.
+plan_home="$TEST_HOME/plan"
+mkdir -p "$plan_home"
+export LIMITLINE_XAI_PLAN="$plan_home/xai-plan.json"
+export LIMITLINE_GROK_LINE="$plan_home/grok.line"
+export LIMITLINE_CURSOR_LOG="$FIX/providers/cursor-usage.jsonl"
+export LIMITLINE_GROK_DIR="$TEST_HOME/grok"
+noplan_status=$("$BIN" status)
+printf '%s' "$noplan_status" | grep -q -F 'cursor   7d ~11% estimate (110k of 1.0M tokens)' \
+  && printf '%s' "$noplan_status" | grep -q -F 'grok     7d 14 tok' \
+  && ! printf '%s' "$noplan_status" | grep -q -F 'cursor+grok' \
+  && check "plan-absent-estimate" "yes" "yes" || check "plan-absent-estimate" "$noplan_status" "cursor estimate and grok rows"
+noplan_host=$("$BIN" --host prompt)
+printf '%s' "$noplan_host" | grep -q -F 'cursor 7d ~11% estimate' \
+  && check "plan-absent-host-estimate" "yes" "yes" || check "plan-absent-host-estimate" "$noplan_host" "cursor 7d ~11% estimate"
+
+set_out=$("$BIN" set xai-plan 69 --resets "2025-11-05 09:00" --plan Super)
+check "set-xai-plan" "$set_out" 'cursor+grok 69% · resets Nov 5 · Super'
+check "set-xai-plan-cache" "$(python3 -c 'import json,sys; d=json.load(open(sys.argv[1])); print(d["used_pct"], d["resets_at"], d["observed_at"], d["plan"], d["source"])' "$LIMITLINE_XAI_PLAN")" '69 1762333200 1762056000 Super manual'
+check "provider-xai-plan" "$("$ROOT/providers/xai-plan")" '{"age":0,"label":"cursor+grok","observed_at":1762056000,"plan":"Super","provider":"xai-plan","source":"manual","stale":false,"windows":[{"name":"week","resets_at":1762333200,"used_pct":69}]}'
+
+plan_status=$("$BIN" status)
+printf '%s' "$plan_status" | grep -q -F 'cursor+grok 69% · resets Nov 5 · Super · grok 7d 14 tok' \
+  && ! printf '%s' "$plan_status" | grep -q -E '^cursor |^grok |estimate' \
+  && check "plan-status-one-row" "yes" "yes" || check "plan-status-one-row" "$plan_status" "one cursor+grok row, no estimate"
+plan_host=$("$BIN" --host prompt)
+printf '%s' "$plan_host" | grep -q -F 'cursor+grok 69% · Nov 5 · grok 7d 14 tok' \
+  && ! printf '%s' "$plan_host" | grep -q -F 'estimate' \
+  && check "plan-host" "yes" "yes" || check "plan-host" "$plan_host" "cursor+grok 69% · Nov 5"
+plan_watch=$(LIMITLINE_WATCH_ONCE=1 "$BIN" watch)
+printf '%s' "$plan_watch" | grep -q -F 'cursor+grok' && ! printf '%s' "$plan_watch" | grep -q -F 'estimate' \
+  && check "plan-watch" "yes" "yes" || check "plan-watch" "$plan_watch" "cursor+grok column"
+check "plan-grok-line" "$(cat "$LIMITLINE_GROK_LINE")" "$(printf '%s\n%s' 'cursor+grok 69% · Nov 5 · grok 7d 14 tok' '69 0')"
+plan_line=$(LIMITLINE_GROK=1 "$BIN" < "$FIX/no_rate_limits.json")
+check "plan-status-line" "$(printf '%s' "$plan_line" | strip_ansi)" 'Opus 5.5 │ ctx ▓▓░░░ ·41% │ $0.12 │ cursor+grok +69% · Nov 5 · grok 7d 14 tok'
+printf '%s' "$plan_line" | grep -q -F $'\033[33m+69%' \
+  && check "plan-status-line-colour" "yes" "yes" || check "plan-status-line-colour" "no" "yes"
+plan_seg=$(NO_COLOR=1 LIMITLINE_SEGMENTS="model,cursor+grok" "$BIN" < "$FIX/no_rate_limits.json")
+check "plan-segment-alias" "$plan_seg" 'Opus 5.5 │ cursor+grok +69% · Nov 5 · grok 7d 14 tok'
+plan_nudge=$(NO_COLOR=1 LIMITLINE_NUDGES=1 "$BIN" < "$FIX/over_80.json" | strip_ansi)
+printf '%s' "$plan_nudge" | grep -q -F '→ cursor ok' \
+  && check "plan-nudge-no-cursor-ok" "no" "yes" || check "plan-nudge-no-cursor-ok" "yes" "yes"
+
+# Older than 6 hours: dimmed, with its age.
+printf '%s\n' '{"used_pct": 69, "resets_at": 1762333200, "observed_at": 1762023600, "plan": "Super", "source": "dashboard"}' > "$LIMITLINE_XAI_PLAN"
+stale_status=$("$BIN" status)
+printf '%s' "$stale_status" | grep -q -F 'cursor+grok 69% · resets Nov 5 · Super · grok 7d 14 tok · 9h old' \
+  && check "plan-stale-age" "yes" "yes" || check "plan-stale-age" "$stale_status" "9h old"
+python3 "$ROOT/lib/refresh.py"
+check "plan-stale-flags" "$(sed -n 2p "$LIMITLINE_GROK_LINE")" '69 1'
+stale_line=$(LIMITLINE_GROK=1 "$BIN" < "$FIX/no_rate_limits.json")
+printf '%s' "$stale_line" | grep -q -F $'\033[2mcursor+grok 69% · Nov 5 · grok 7d 14 tok · 9h old' \
+  && check "plan-stale-dim" "yes" "yes" || check "plan-stale-dim" "$(printf '%s' "$stale_line" | cat -v)" "dimmed segment"
+
+# The window reset after the reading: no percent.
+printf '%s\n' '{"used_pct": 69, "resets_at": 1762020000, "observed_at": 1762016400, "source": "dashboard"}' > "$LIMITLINE_XAI_PLAN"
+reset_status=$("$BIN" status)
+printf '%s' "$reset_status" | grep -q -F 'cursor+grok reset Nov 1, no newer reading' && ! printf '%s' "$reset_status" | grep -q -F '69%' \
+  && check "plan-reset-passed" "yes" "yes" || check "plan-reset-passed" "$reset_status" "no stale percent"
+
+# Older than 7 days: hidden, and the labelled estimate comes back.
+printf '%s\n' '{"used_pct": 69, "resets_at": 1762333200, "observed_at": 1761360000}' > "$LIMITLINE_XAI_PLAN"
+old_status=$("$BIN" status)
+printf '%s' "$old_status" | grep -q -F 'cursor   7d ~11% estimate' && ! printf '%s' "$old_status" | grep -q -F 'cursor+grok' \
+  && check "plan-hidden-after-7d" "yes" "yes" || check "plan-hidden-after-7d" "$old_status" "estimate back"
+
+if "$BIN" set xai-plan 150 >/dev/null 2>&1; then check "set-xai-plan-range" "accepted" "refused"; else check "set-xai-plan-range" "refused" "refused"; fi
+if "$BIN" set xai-plan 50 --resets "next week" >/dev/null 2>&1; then check "set-xai-plan-date" "accepted" "refused"; else check "set-xai-plan-date" "refused" "refused"; fi
+rm -rf "$plan_home"
+unset LIMITLINE_XAI_PLAN LIMITLINE_GROK_LINE LIMITLINE_CURSOR_LOG LIMITLINE_GROK_DIR
+
+# Background jobs (0.5): one JSON per job, reported by any script.
+export LIMITLINE_JOBS_DIR="$TEST_HOME/jobs"
+export LIMITLINE_JOBS_LINE="$TEST_HOME/jobs.line"
+export LIMITLINE_HOST=mini
+job_out=$("$BIN" job update mining --done 62 --total 1842 --status running)
+check "job-update" "$job_out" 'mining 62/1842'
+check "job-file" "$(python3 -c 'import json,sys; d=json.load(open(sys.argv[1])); print(d["name"], d["machine"], d["done"], d["total"], d["status"], d["started_at"], d["updated_at"])' "$LIMITLINE_JOBS_DIR/mining.json")" 'mining mini 62 1842 running 1762056000 1762056000'
+LIMITLINE_NOW=1762056060 "$BIN" job update mining --done 70 --failed 3 >/dev/null
+check "job-merge" "$(python3 -c 'import json,sys; d=json.load(open(sys.argv[1])); print(d["done"], d["total"], d["failed"], d["started_at"], d["updated_at"])' "$LIMITLINE_JOBS_DIR/mining.json")" '70 1842 3 1762056000 1762056060'
+"$BIN" job update backup --status ok >/dev/null
+check "jobs-line" "$(cat "$LIMITLINE_JOBS_LINE")" 'jobs mining 70/1842 ✗3 · backup ok 04:00'
+jobs_line=$(NO_COLOR=1 "$BIN" < "$FIX/no_rate_limits.json")
+check "jobs-status-line" "$jobs_line" 'Opus 5.5 │ ctx ▓▓░░░ ·41% │ $0.12 │ jobs mining 70/1842 ✗3 · backup ok 04:00'
+jobs_off=$(NO_COLOR=1 LIMITLINE_JOBS=off "$BIN" < "$FIX/no_rate_limits.json")
+check "jobs-off" "$jobs_off" 'Opus 5.5 │ ctx ▓▓░░░ ·41% │ $0.12'
+jobs_two=$(NO_COLOR=1 LIMITLINE_LINES=2 "$BIN" < "$FIX/full.json" | tail -n 1)
+printf '%s' "$jobs_two" | grep -q -F 'jobs mining' && check "jobs-line-two" "yes" "yes" || check "jobs-line-two" "$jobs_two" "jobs on line 2"
+jobs_status=$("$BIN" status)
+printf '%s' "$jobs_status" | grep -q -F 'jobs: mining 70/1842 ✗3 · backup ok 04:00' \
+  && printf '%s' "$jobs_status" | grep -q -F 'mining  mini  running  70/1842  3 failed  updated ' \
+  && check "jobs-status-block" "yes" "yes" || check "jobs-status-block" "$jobs_status" "Jobs block"
+
+# A pid that is gone makes an unfinished job "dead"; a live pid stays running.
+sleep 0 &
+dead_pid=$!
+wait "$dead_pid" 2>/dev/null
+"$BIN" job update zombie --done 5 --total 10 --pid "$dead_pid" >/dev/null
+"$BIN" job update alive --pid "$$" >/dev/null
+"$BIN" job update finished --status ok --pid "$dead_pid" >/dev/null
+dead_list=$("$BIN" job list)
+printf '%s' "$dead_list" | grep -q -F 'zombie  mini  dead  5/10' \
+  && printf '%s' "$dead_list" | grep -q -F 'alive  mini  running' \
+  && printf '%s' "$dead_list" | grep -q -F 'finished  mini  ok' \
+  && check "job-dead-pid" "yes" "yes" || check "job-dead-pid" "$dead_list" "dead, running, ok"
+other=$(LIMITLINE_HOST=worker "$BIN" job list)
+printf '%s' "$other" | grep -q -F 'zombie  mini  running' \
+  && check "job-other-machine-pid" "yes" "yes" || check "job-other-machine-pid" "$other" "no pid check for another machine"
+python3 "$ROOT/lib/refresh.py"
+printf '%s' "$(cat "$LIMITLINE_JOBS_LINE")" | grep -q -F 'zombie dead 5/10' \
+  && check "jobs-refresh-dead" "yes" "yes" || check "jobs-refresh-dead" "$(cat "$LIMITLINE_JOBS_LINE")" "zombie dead"
+
+# Finished jobs leave the line after fleet_window; job list still has them.
+printf '%s\n' '{"name": "old", "machine": "mini", "status": "ok", "started_at": 1762000000, "updated_at": 1762000000}' > "$LIMITLINE_JOBS_DIR/old.json"
+"$BIN" status | grep -q -F 'old  mini' && check "job-old-hidden" "shown" "hidden" || check "job-old-hidden" "hidden" "hidden"
+"$BIN" job list | grep -q -F 'old  mini  ok' && check "job-list-all" "yes" "yes" || check "job-list-all" "no" "yes"
+if "$BIN" job update ../escape --done 1 >/dev/null 2>&1; then check "job-name-check" "accepted" "refused"; else check "job-name-check" "refused" "refused"; fi
+if "$BIN" job update ok-name --done many >/dev/null 2>&1; then check "job-number-check" "accepted" "refused"; else check "job-number-check" "refused" "refused"; fi
+"$BIN" job rm old && [[ ! -f "$LIMITLINE_JOBS_DIR/old.json" ]] && check "job-rm" "yes" "yes" || check "job-rm" "no" "yes"
+rm -rf "$LIMITLINE_JOBS_DIR" "$LIMITLINE_JOBS_LINE"
+unset LIMITLINE_JOBS_DIR LIMITLINE_JOBS_LINE LIMITLINE_HOST
 
 # Typical speed without the Codex scan: average of 8 runs after one warmup.
 "$BIN" < "$FIX/full.json" >/dev/null

@@ -5,7 +5,9 @@ import json, os, subprocess, sys, time
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import fleet
 import grokline
+import jobs
 import machines
+import xaiplan
 import sync
 from config import setting
 
@@ -168,15 +170,33 @@ def write_machines():
 
 
 def write_grok():
-    """Plan and 7-day tokens from ~/.grok. Written even when empty, so a stale
-    line does not outlive the files it came from."""
-    text = grokline.segment()
+    """grok.line: with the shared plan cache, `cursor+grok 69% · Nov 5 · grok 7d
+    1.2M tok` and a second line of `pct stale` flags for the renderer. Without
+    it, Grok's plan and 7-day tokens, never a percent. Written even when empty,
+    so a stale line does not outlive the files it came from."""
+    plan = xaiplan.read()
+    flags = ""
+    if xaiplan.present(plan):
+        grok = grokline.provider_data()
+        if isinstance(grok.get("week"), dict):
+            plan["grok_week"] = grok["week"]
+        text, flags = xaiplan.line_fields(plan)
+    else:
+        text = grokline.segment()
     path = os.environ.get("LIMITLINE_GROK_LINE") or os.path.join(machines.cache_dir(), "grok.line")
-    write_text(path, text)
+    write_text(path, text + ("\n" + flags if flags else ""))
+
+
+def write_jobs():
+    """jobs.line, with dead pids found here rather than on the status-line path.
+    Skipped when no job was ever reported, so nothing appears for users without jobs."""
+    if not os.path.isdir(jobs.jobs_dir()):
+        return
+    jobs.write_line()
 
 
 def main():
-    for step in (write_grok, write_fleet, write_machines):
+    for step in (write_grok, write_jobs, write_fleet, write_machines):
         try:
             step()
         except Exception:

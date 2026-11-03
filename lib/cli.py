@@ -3,7 +3,7 @@
 import json, os, shutil, subprocess, sys
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-PROVIDERS = ("claude", "codex", "cursor", "grok", "gemini")
+PROVIDERS = ("claude", "codex", "cursor", "grok", "gemini", "xai-plan")
 
 
 def run_provider(name):
@@ -28,6 +28,8 @@ def window_text(window):
     text = name
     if isinstance(used, (int, float)) and not isinstance(used, bool):
         text += " %s%d%%" % ("~" if window.get("estimate") else "", int(used + 0.5))
+        if window.get("estimate"):
+            text += " estimate"
     elif window.get("usd") is not None:
         try:
             text += " $%.2f" % float(window["usd"])
@@ -37,6 +39,19 @@ def window_text(window):
     if isinstance(machines, int) and machines > 1:
         text += " ×%d" % machines
     return text
+
+
+def label(row):
+    return load_lib("xaiplan").label(row)
+
+
+def reset_text(row, window):
+    """Gemini only logs `Resets in 4h0m` once, so its reset is shown as a fixed
+    local moment, `resets Fri 09:35`, rather than a countdown."""
+    if row.get("provider") != "gemini" or window.get("resets_at") is None:
+        return ""
+    when = load_lib("timefmt").day_time(window.get("resets_at"))
+    return (" · resets " + when) if when else ""
 
 
 def constraint(row):
@@ -92,8 +107,13 @@ def prepare(rows):
 
 
 def provider_brief(data):
+    if data.get("provider") == "xai-plan":
+        return load_lib("xaiplan").brief(data) or "no reading"
     windows = data.get("windows") or []
     if not windows:
+        if data.get("provider") == "codex" and data.get("observed_at"):
+            age = load_lib("timefmt").age(now_epoch() - int(data["observed_at"]))
+            return "no current window (last reading %s ago)" % age
         if data.get("provider") == "grok":
             text = load_lib("grokline").brief(data)
             if text:
@@ -103,7 +123,7 @@ def provider_brief(data):
         if data.get("source") == "none":
             return "no local quota"
         return "no window"
-    parts = [window_text(item) for item in windows if isinstance(item, dict)]
+    parts = [window_text(item) + reset_text(data, item) for item in windows if isinstance(item, dict)]
     text = " · ".join(parts)
     if data.get("stale"):
         text += " stale"
@@ -122,7 +142,17 @@ def short_tokens(value):
     return "%d" % int(value)
 
 
+def now_epoch():
+    import time
+    try:
+        return int(os.environ.get("LIMITLINE_NOW") or time.time())
+    except ValueError:
+        return int(time.time())
+
+
 def status_brief(data):
+    if data.get("provider") == "xai-plan":
+        return load_lib("xaiplan").brief(data, long=True) or "no reading"
     if data.get("provider") == "grok" and not data.get("windows"):
         text = load_lib("grokline").brief(data, long=True)
         if text:
@@ -130,13 +160,14 @@ def status_brief(data):
     text = provider_brief(data)
     for window in data.get("windows") or []:
         if isinstance(window, dict) and window.get("estimate") and window.get("tokens") is not None:
-            text += " (estimate: %s of %s tokens)" % (short_tokens(window.get("tokens")), short_tokens(window.get("budget")))
+            text += " (%s of %s tokens)" % (short_tokens(window.get("tokens")), short_tokens(window.get("budget")))
             break
     return text
 
 
 def load_all():
     rows = [run_provider(name) for name in PROVIDERS]
+    rows = load_lib("xaiplan").merge(rows)
     extra = run_provider("spend")
     if extra.get("source") not in (None, "none") and extra.get("windows"):
         rows.append(extra)
@@ -171,8 +202,19 @@ def cockpit_blocks(swiftbar=False):
         host_line = machines.status_text()
     except Exception:
         host_line = ""
+    try:
+        jobs = load_lib("jobs")
+        found = jobs.load()
+        job_lines = []
+        if found:
+            job_lines.append("jobs: " + jobs.summary(found))
+            job_lines.extend(jobs.detail_lines(found))
+    except Exception:
+        job_lines = []
     if summary:
         blocks.append(("Fleet", [summary]))
+    if job_lines:
+        blocks.append(("Jobs", job_lines))
     if host_line:
         blocks.append(("Machines", [host_line]))
     if runs:
@@ -184,9 +226,10 @@ def cockpit_blocks(swiftbar=False):
 
 def cmd_status():
     rows = prepare(load_all())
-    print("%-8s %s" % ("tool", "limits"))
+    width = max([8] + [len(label(row)) for row in rows])
+    print("%-*s %s" % (width, "tool", "limits"))
     for row in rows:
-        print("%-8s %s" % (row.get("provider"), status_brief(row)))
+        print("%-*s %s" % (width, label(row), status_brief(row)))
     for title, lines in cockpit_blocks():
         print("")
         print(title)
@@ -209,7 +252,7 @@ def cmd_host(kind):
         print(title)
         print("---")
         for row in rows:
-            print("%s  %s" % (row.get("provider"), provider_brief(row)))
+            print("%s  %s" % (label(row), provider_brief(row)))
         for title_name, lines in cockpit_blocks(swiftbar=True):
             print("---")
             print(title_name)
@@ -220,7 +263,7 @@ def cmd_host(kind):
     for row in rows:
         if not row.get("windows"):
             continue
-        parts.append("%s %s" % (row.get("provider"), provider_brief(row)))
+        parts.append("%s %s" % (label(row), provider_brief(row)))
     print(" | ".join(parts))
 
 
@@ -361,6 +404,21 @@ def fleet_doctor():
             bits.append("%s %s" % (row.get("name"), state))
         lines.append("machines cache: %ds old, ttl %ds%s; %s" % (mage, mach_ttl, "" if mage <= mach_ttl else " (stale, hidden)", ", ".join(bits) or "no hosts"))
 
+    xai = load_lib("xaiplan")
+    plan_age = cache_age(xai.cache_path())
+    if plan_age is None:
+        lines.append("cursor+grok plan cache: missing (limitline set xai-plan PCT); Cursor shows a token estimate")
+    else:
+        row = xai.read()
+        state = "hidden, older than 7 days" if not xai.present(row) else ("stale" if row.get("stale") else "fresh")
+        lines.append("cursor+grok plan cache: %ds old, %s" % (plan_age, state))
+    jobs = load_lib("jobs")
+    if os.path.isdir(jobs.jobs_dir()):
+        every = jobs.load(every=True)
+        lines.append("jobs: %d reported, %d shown" % (len(every), len(jobs.load())))
+    else:
+        lines.append("jobs: none reported (limitline job update NAME ...)")
+
     state, detail = refresher.status()
     lines.append("refresher: %s (%s)" % (state, detail))
 
@@ -479,9 +537,14 @@ def cmd_config():
     print('# fleet_window = "12h"')
     print("# fleet_ttl = 180")
     print("# machines_ttl = 180")
+    print("# Cursor and Grok share one xAI plan. limitline set xai-plan 69 --resets \"2026-11-05 09:00\"")
+    print("# writes its percent; without it Cursor shows a token estimate against this budget")
     print("# cursor_week_tokens = 1000000")
     print("# grok plan and 7-day tokens stay off on the Claude Code line until named")
     print('# grok = "on"')
+    print("# background jobs reported with limitline job update; shown unless jobs = \"off\"")
+    print('# jobs = "on"')
+    print("# jobs_ttl = 600")
     print("# themes: minimal, powerline, ascii, pill, emoji, mono")
     print("# LIMITLINE_ASCII=1 forces the ascii theme. NO_COLOR disables ANSI.")
 
@@ -525,9 +588,72 @@ def cmd_theme():
     print('Set one with theme = "pill" or LIMITLINE_THEME=pill')
 
 
+USAGE = ("usage: limitline status | --host NAME | preview | doctor | config | report | watch | theme | refresh"
+         " | set xai-plan PCT [--resets \"YYYY-MM-DD HH:MM\"] [--plan NAME] | job update|list|rm"
+         " | install-refresher | uninstall-refresher")
+
+
+def parse_local(text):
+    from datetime import datetime
+    for fmt in ("%Y-%m-%d %H:%M", "%Y-%m-%dT%H:%M", "%Y-%m-%d"):
+        try:
+            return int(datetime.strptime(text.strip(), fmt).timestamp())
+        except ValueError:
+            continue
+    raise ValueError("--resets takes \"YYYY-MM-DD HH:MM\" in local time")
+
+
+def refresh_plan_line():
+    """Rewrite grok.line now, so the status line shows a new reading at once."""
+    try:
+        load_lib("refresh").write_grok()
+    except Exception:
+        pass
+
+
+def cmd_set(args):
+    if not args or args[0] != "xai-plan":
+        print("usage: limitline set xai-plan PCT [--resets \"YYYY-MM-DD HH:MM\"] [--plan NAME]", file=sys.stderr)
+        return 2
+    rest = args[1:]
+    pct = None
+    resets = None
+    plan = None
+    i = 0
+    try:
+        while i < len(rest):
+            item = rest[i]
+            if item in ("--resets", "--plan"):
+                if i + 1 >= len(rest):
+                    raise ValueError("%s needs a value" % item)
+                if item == "--resets":
+                    resets = parse_local(rest[i + 1])
+                else:
+                    plan = rest[i + 1]
+                i += 2
+                continue
+            if pct is not None:
+                raise ValueError("unexpected %s" % item)
+            pct = float(item.rstrip("%"))
+            i += 1
+    except ValueError as exc:
+        print("limitline set: %s" % exc, file=sys.stderr)
+        return 2
+    if pct is None or pct != pct or pct < 0 or pct > 100:
+        print("limitline set: PCT must be a number from 0 to 100", file=sys.stderr)
+        return 2
+    xai = load_lib("xaiplan")
+    value = int(pct) if pct.is_integer() else round(pct, 1)
+    xai.write(value, resets_at=resets, plan=plan, source="manual")
+    refresh_plan_line()
+    row = xai.read()
+    print("%s %s" % (xai.LABEL, xai.brief(row, long=True) or "saved"))
+    return 0
+
+
 def main(argv):
     if not argv or argv[0] in ("-h", "--help"):
-        print("usage: limitline status | --host NAME | preview | doctor | config | report | watch | theme | refresh | install-refresher | uninstall-refresher")
+        print(USAGE)
         return
     cmd = argv[0]
     if cmd == "status":
@@ -550,13 +676,17 @@ def main(argv):
     elif cmd in ("install-refresher", "uninstall-refresher"):
         code = load_lib("refresher").main(["install" if cmd.startswith("install") else "uninstall"])
         sys.exit(code or 0)
+    elif cmd == "set":
+        sys.exit(cmd_set(argv[1:]) or 0)
+    elif cmd == "job":
+        sys.exit(load_lib("jobs").main(argv[1:]) or 0)
     elif cmd == "refresh":
         try:
             load_lib("refresh").main()
         except Exception:
             return
     else:
-        print("usage: limitline status | --host NAME | preview | doctor | config | report | watch | theme | refresh | install-refresher | uninstall-refresher")
+        print(USAGE)
 
 
 if __name__ == "__main__":

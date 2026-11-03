@@ -5,9 +5,13 @@ from datetime import datetime, timezone
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import grokline
+import timefmt
+import xaiplan
 
 
 def brief(data):
+    if data.get("provider") == xaiplan.PROVIDER:
+        return xaiplan.brief(data) or "no reading"
     windows = data.get("windows") or []
     if not windows:
         if data.get("provider") == "grok":
@@ -31,6 +35,10 @@ def brief(data):
         text = name
         if isinstance(used, (int, float)) and not isinstance(used, bool):
             text += " %s%d%%" % ("~" if window.get("estimate") else "", int(used + 0.5))
+            if window.get("estimate"):
+                text += " estimate"
+        if data.get("provider") == "gemini" and window.get("resets_at") is not None:
+            text += " · " + timefmt.day_time(window["resets_at"])
         machines = window.get("machines")
         if isinstance(machines, int) and machines > 1:
             text += " ×%d" % machines
@@ -54,7 +62,7 @@ def frame(rows, extra=None):
     names = []
     values = []
     for row in rows:
-        names.append(str(row.get("provider") or "tool")[:width].ljust(width))
+        names.append(xaiplan.label(row)[:width].ljust(width))
         values.append(brief(row)[:width].ljust(width))
     lines = [
         "limitline watch  " + stamp,
@@ -66,6 +74,11 @@ def frame(rows, extra=None):
             text = grokline.brief(row, long=True)
             if text:
                 lines.append("Grok")
+                lines.append(text)
+        if row.get("provider") == xaiplan.PROVIDER:
+            text = xaiplan.brief(row, long=True)
+            if text:
+                lines.append("Cursor + Grok plan")
                 lines.append(text)
     for line in extra or []:
         if line:

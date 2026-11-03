@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # limitline — local usage-limit status line for Claude Code.
 # Reads one JSON object on stdin. No network. Always exits 0.
-# Version: 0.4.2
+# Version: 0.5.0
 
 _here=${0%/*}
 [[ "$_here" == "$0" ]] && _here="."
@@ -15,6 +15,9 @@ limitline — local usage limits for Claude Code and nearby CLIs
   bin/limitline status
   bin/limitline --host tmux|starship|prompt|json|swiftbar|cursor|codex
   bin/limitline preview|doctor|config|report|watch|theme|refresh
+  bin/limitline set xai-plan PCT [--resets "YYYY-MM-DD HH:MM"] [--plan NAME]
+  bin/limitline job update NAME --done N --total N --failed N --status running
+  bin/limitline job list|rm NAME
   bin/limitline install-refresher|uninstall-refresher
 
 Config: ~/.config/limitline/config or config.toml
@@ -23,7 +26,7 @@ EOF
 fi
 
 case "${1:-}" in
-  status|preview|doctor|config|report|watch|theme|refresh|install-refresher|uninstall-refresher|--host)
+  status|preview|doctor|config|report|watch|theme|refresh|install-refresher|uninstall-refresher|--host|set|job)
     if command -v python3 >/dev/null 2>&1; then
       exec python3 "$LIMITLINE_ROOT/lib/cli.py" "$@"
     fi
@@ -95,6 +98,9 @@ MACHINES_TTL=180
 GROK_MODE=""
 GROK_SET=0
 GROK_TTL=180
+JOBS_MODE=""
+JOBS_SET=0
+JOBS_TTL=180
 SSH_TIMEOUT=2
 MEM_WARN=15
 HOSTS_RAW=""
@@ -162,6 +168,8 @@ load_config() {
       machines_ttl) MACHINES_TTL="$val" ;;
       grok) GROK_MODE="$val"; GROK_SET=1 ;;
       grok_ttl) GROK_TTL="$val" ;;
+      jobs) JOBS_MODE="$val"; JOBS_SET=1 ;;
+      jobs_ttl) JOBS_TTL="$val" ;;
     esac
   done < "$cfg"
 }
@@ -219,6 +227,8 @@ if [[ -n "${LIMITLINE_FLEET_TTL:-}" ]]; then FLEET_TTL="$LIMITLINE_FLEET_TTL"; f
 if [[ -n "${LIMITLINE_MACHINES_TTL:-}" ]]; then MACHINES_TTL="$LIMITLINE_MACHINES_TTL"; fi
 if [[ -n "${LIMITLINE_GROK:-}" ]]; then GROK_MODE="$LIMITLINE_GROK"; GROK_SET=1; fi
 if [[ -n "${LIMITLINE_GROK_TTL:-}" ]]; then GROK_TTL="$LIMITLINE_GROK_TTL"; fi
+if [[ -n "${LIMITLINE_JOBS:-}" ]]; then JOBS_MODE="$LIMITLINE_JOBS"; JOBS_SET=1; fi
+if [[ -n "${LIMITLINE_JOBS_TTL:-}" ]]; then JOBS_TTL="$LIMITLINE_JOBS_TTL"; fi
 if [[ -n "${LIMITLINE_SSH_TIMEOUT:-}" ]]; then SSH_TIMEOUT="$LIMITLINE_SSH_TIMEOUT"; fi
 if [[ -n "${LIMITLINE_MEM_WARN:-}" ]]; then MEM_WARN="$LIMITLINE_MEM_WARN"; fi
 if [[ -z "${LIMITLINE_HOSTS+x}" && -n "$HOSTS_RAW" ]]; then
@@ -248,7 +258,7 @@ ON_MODEL=1; ON_STYLE=1; ON_CTX=1; ON_FIVE=1; ON_SEVEN=1; ON_SPEND=1
 ON_BURN=1; ON_COST=1; ON_GIT=1; ON_PR=1; ON_CACHE=1; ON_VIM=1
 ON_SESSION=0; ON_CODEX=1
 ON_PACE=0; ON_SPARK=0; ON_NUDGE=0; ON_FRESH=0; ON_VALUE=0; ON_VITALS=0
-ON_FLEET=0; ON_MACHINES=0; ON_GROK=0
+ON_FLEET=0; ON_MACHINES=0; ON_GROK=0; ON_JOBS=1
 add_order() {
   case ",$ORDER_LIST," in
     *,"$1",*) ;;
@@ -260,7 +270,7 @@ if [[ -n "$SEGMENTS" ]]; then
   ON_BURN=0; ON_COST=0; ON_GIT=0; ON_PR=0; ON_CACHE=0; ON_VIM=0
   ON_SESSION=0; ON_CODEX=0
   ON_PACE=0; ON_SPARK=0; ON_NUDGE=0; ON_FRESH=0; ON_VALUE=0; ON_VITALS=0
-  ON_FLEET=0; ON_MACHINES=0; ON_GROK=0
+  ON_FLEET=0; ON_MACHINES=0; ON_GROK=0; ON_JOBS=0
   old_ifs=$IFS
   IFS=','
   for raw in $SEGMENTS; do
@@ -290,7 +300,8 @@ if [[ -n "$SEGMENTS" ]]; then
       vitals) ON_VITALS=1; add_order vitals ;;
       fleet) ON_FLEET=1; add_order fleet ;;
       machines) ON_MACHINES=1; add_order machines ;;
-      grok) ON_GROK=1; add_order grok ;;
+      grok|xai|xai-plan|cursor+grok|plan) ON_GROK=1; add_order grok ;;
+      jobs) ON_JOBS=1; add_order jobs ;;
     esac
   done
   IFS=$old_ifs
@@ -308,6 +319,8 @@ if [[ "$VITALS_SET" == "1" ]]; then flag_on "$VITALS_MODE" && ON_VITALS=1 || ON_
 if [[ "$FLEET_SET" == "1" ]]; then flag_on "$FLEET_MODE" && ON_FLEET=1 || ON_FLEET=0; fi
 if [[ "$MACHINES_SET" == "1" ]]; then flag_on "$MACHINES_MODE" && ON_MACHINES=1 || ON_MACHINES=0; fi
 if [[ "$GROK_SET" == "1" ]]; then flag_on "$GROK_MODE" && ON_GROK=1 || ON_GROK=0; fi
+if [[ "$JOBS_SET" == "1" ]]; then flag_on "$JOBS_MODE" && ON_JOBS=1 || ON_JOBS=0; fi
+case "$JOBS_TTL" in ''|*[!0-9]*) JOBS_TTL=180 ;; esac
 case "$FLEET_TTL" in ''|*[!0-9]*) FLEET_TTL=60 ;; esac
 case "$GROK_TTL" in ''|*[!0-9]*) GROK_TTL=180 ;; esac
 case "$MACHINES_TTL" in ''|*[!0-9]*) MACHINES_TTL=60 ;; esac
@@ -1108,9 +1121,29 @@ fi
 # limitline refresh read from ~/.grok, never a percent.
 grok_text=""
 grok_file="${LIMITLINE_GROK_LINE:-$cache_dir/grok.line}"
+grok_flags=""
 if [[ "$ON_GROK" == "1" ]]; then
   grok_text=$(fresh_line "$grok_file" "$GROK_TTL")
-  [[ -n "$grok_text" ]] || need_refresh=1
+  if [[ -n "$grok_text" ]]; then
+    # Line 2 is `pct stale` when the shared Cursor + Grok plan cache is present.
+    { IFS= read -r _skip; IFS= read -r grok_flags; } < "$grok_file" 2>/dev/null || true
+  else
+    need_refresh=1
+  fi
+fi
+# Background jobs from limitline job update. Nothing is read until a job was reported.
+jobs_text=""
+jobs_dir="${LIMITLINE_JOBS_DIR:-$cache_dir/jobs}"
+jobs_file="${LIMITLINE_JOBS_LINE:-$cache_dir/jobs.line}"
+if [[ "$ON_JOBS" == "1" && -d "$jobs_dir" ]]; then
+  if [[ -f "$jobs_file" ]]; then
+    jobs_text=$(fresh_line "$jobs_file" "$JOBS_TTL")
+    if [[ -z "$jobs_text" && -s "$jobs_file" ]]; then
+      need_refresh=1
+    fi
+  else
+    need_refresh=1
+  fi
 fi
 if [[ "$need_refresh" == "1" ]]; then
   kick_refresh
@@ -1172,6 +1205,8 @@ emit_kv() {
   emit_kv fleet "$fleet_text"
   emit_kv machines "$machines_text"
   emit_kv grok "$grok_text"
+  emit_kv grok_flags "$grok_flags"
+  emit_kv jobs "$jobs_text"
   emit_kv order "$ORDER_LIST"
   emit_kv sparkle "$sparkle"
   emit_kv compactions "$compactions"
@@ -1303,6 +1338,18 @@ function cost_seg(usd, ms, added, removed,    parts, text) {
 function compact_pct(p) {
   return paint(color_of(p + 0), mark_of(p + 0) pct(p + 0) "%")
 }
+function grok_seg(text,    flags, n, f, head, p) {
+  if (text == "") return ""
+  flags = val("grok_flags")
+  if (flags == "") return text
+  n = split(flags, f, " ")
+  if (f[2] == "1") return paint("2", text)
+  head = "cursor+grok "
+  p = f[1]
+  if (p == "-" || p == "" || substr(text, 1, length(head)) != head) return text
+  if (substr(text, length(head) + 1, length(p) + 1) != p "%") return text
+  return head compact_pct(p) substr(text, length(head) + length(p) + 2)
+}
 function codex_seg(a, b,    left, right, out) {
   left = ""; right = ""
   if (a != "") left = "5h " compact_pct(a)
@@ -1361,6 +1408,7 @@ function themed(kind, text,    prefix) {
     else if (kind == "vim") prefix = "✏ "
     else if (kind == "codex") prefix = "⌘ "
     else if (kind == "grok") prefix = "🤖 "
+    else if (kind == "jobs") prefix = "🛠 "
     else if (kind == "session" || kind == "vitals") prefix = "♥ "
     else if (kind == "spark") prefix = "📈 "
     else if (kind == "pace") prefix = "🏃 "
@@ -1614,7 +1662,8 @@ END {
   push(40, "git", themed("git", val("git")))
   push(58, "fleet", themed("fleet", val("fleet")))
   push(56, "machines", themed("machines", val("machines")))
-  push(54, "grok", themed("grok", val("grok")))
+  push(57, "jobs", themed("jobs", val("jobs")))
+  push(54, "grok", themed("grok", grok_seg(val("grok"))))
   push(20, "pr", themed("pr", val("pr")))
   push(15, "cache", themed("cache", val("cache")))
   push(10, "vim", themed("vim", val("vim")))

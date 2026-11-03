@@ -46,11 +46,25 @@ def idle_machine():
         return ""
 
 
+def rows():
+    """Provider rows, with Cursor and Grok folded into the shared plan when its
+    cache exists, so `→ cursor ok` is not offered for a plan that is 90% used."""
+    found = [dict(run_provider(name), provider=name) for name in ORDER]
+    plan = run_provider("xai-plan")
+    plan.setdefault("provider", "xai-plan")
+    sys.path.insert(0, os.path.join(ROOT, "lib"))
+    try:
+        import xaiplan
+        return xaiplan.merge(found + [plan])
+    except Exception:
+        return found
+
+
 def suggestion():
     measured = None
     empty = []
-    for name in ORDER:
-        data = run_provider(name)
+    for data in rows():
+        name = data.get("label") or data.get("provider")
         found = lowest_window(data)
         if found is None:
             empty.append(name)
