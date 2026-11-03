@@ -768,6 +768,7 @@ seven_cached_pct=""
 seven_cached_reset=""
 seven_cached_at=""
 seven_age=""
+seven_note=""
 claude_snap="${LIMITLINE_CLAUDE_SNAPSHOT:-${XDG_CACHE_HOME:-$HOME/.cache}/limitline/claude.json}"
 if [[ -z "$seven_pct" && ( "$ON_SEVEN" == "1" || -n "$five_pct" ) && "${LIMITLINE_CLAUDE_CACHE:-1}" != "0" && -f "$claude_snap" ]]; then
   snap_line=""
@@ -784,7 +785,12 @@ if [[ -z "$seven_pct" && ( "$ON_SEVEN" == "1" || -n "$five_pct" ) && "${LIMITLIN
     if [[ -z "$seven_cached_at" ]]; then
       seven_cached_pct=""
     elif [[ -n "$seven_cached_reset" ]]; then
-      [[ "$seven_cached_reset" -gt "$NOW" ]] || seven_cached_pct=""
+      if [[ "$seven_cached_reset" -le "$NOW" ]]; then
+        # Not hidden, and not last week's percent either: say the week reset.
+        seven_cached_pct=""
+        seven_note="7d reset $(LC_TIME=C date -r "$seven_cached_reset" "+%a %H:%M" 2>/dev/null \
+          || LC_TIME=C date -d "@$seven_cached_reset" "+%a %H:%M" 2>/dev/null || true) · no newer reading"
+      fi
     elif [[ $((NOW - seven_cached_at)) -ge 604800 ]]; then
       seven_cached_pct=""
     fi
@@ -1235,6 +1241,7 @@ fi
   emit_kv seven_reset "$seven_epoch"
   emit_kv seven_abs "$seven_abs"
   emit_kv seven_age "$seven_age"
+  [[ "$ON_SEVEN" == "1" && -z "$seven_pct" ]] && emit_kv seven_note "$seven_note"
   emit_kv spend_pct "$spend_pct"
   emit_kv spend_used "$spend_used"
   emit_kv spend_limit "$spend_limit"
@@ -1708,7 +1715,7 @@ END {
     push(90, "5h", themed("5h", window_seg("5h", val("five_pct"), val("five_reset"), val("five_abs"))))
   push(88, "spark", themed("spark", spark_seg("5h", val("spark5"), val("five_pct"))))
   if (val("show_seven") == "1")
-    push(80, "7d", themed("7d", window_seg("7d", val("seven_pct"), val("seven_reset"), val("seven_abs")) (val("seven_age") != "" && val("seven_pct") != "" ? " · " val("seven_age") : "")))
+    push(80, "7d", themed("7d", val("seven_pct") == "" ? val("seven_note") : window_seg("7d", val("seven_pct"), val("seven_reset"), val("seven_abs")) (val("seven_age") != "" ? " · " val("seven_age") : "")))
   push(78, "spark", themed("spark", spark_seg("7d", val("spark7"), val("seven_pct"))))
   push(72, "pace", themed("pace", pace_seg()))
   push(60, "spend", themed("spend", spend_seg(val("spend_pct"), val("spend_used"), val("spend_limit"))))

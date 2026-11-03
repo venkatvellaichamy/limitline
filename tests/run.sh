@@ -743,10 +743,12 @@ grep -q -F '{"name":"7d","used_pct":67,"resets_at":1762419600,"observed_at":1762
   && check "claude-7d-cache-kept" "yes" "yes" || check "claude-7d-cache-kept" "$(cat "$seven_snap")" "7d carried with its observed_at"
 seven_again=$(LIMITLINE_CLAUDE_CACHE=1 LIMITLINE_CLAUDE_SNAPSHOT="$seven_snap" NO_COLOR=1 "$BIN" < "$FIX/no_rate_limits.json" | strip_ansi)
 check "claude-7d-cached-age-kept" "$seven_again" "$seven_new"
-# Once the cached week has reset, its percent is last week's and is not shown.
+# Once the cached week has reset, its percent is last week's: the segment says so instead.
 printf '%s\n' '{"observed_at":1761400000,"provider":"claude","source":"statusline","stale":false,"windows":[{"name":"7d","used_pct":90,"resets_at":1761900000}]}' > "$seven_snap"
 seven_old=$(LIMITLINE_CLAUDE_CACHE=1 LIMITLINE_CLAUDE_SNAPSHOT="$seven_snap" NO_COLOR=1 "$BIN" < "$FIX/no_rate_limits.json" | strip_ansi)
-check "claude-7d-cached-reset-passed" "$seven_old" 'Opus 5.5 │ ctx ▓▓░░░ ·41% │ $0.12'
+check "claude-7d-cached-reset-passed" "$seven_old" 'Opus 5.5 │ ctx ▓▓░░░ ·41% │ 7d reset Fri 08:40 · no newer reading │ $0.12'
+seven_old_py=$(PATH="$nojq" LIMITLINE_CLAUDE_CACHE=1 LIMITLINE_CLAUDE_SNAPSHOT="$seven_snap" NO_COLOR=1 "$BIN" < "$FIX/no_rate_limits.json" | strip_ansi)
+check "claude-7d-cached-reset-passed-nojq" "$seven_old_py" "$seven_old"
 # A live 7d reading never shows an age.
 seven_live=$(LIMITLINE_CLAUDE_CACHE=1 LIMITLINE_CLAUDE_SNAPSHOT="$seven_snap" NO_COLOR=1 "$BIN" < "$FIX/full.json" | strip_ansi)
 check "claude-7d-live-no-age" "$seven_live" "$full_want"
@@ -851,6 +853,7 @@ cat > "$agy_home/agy" << EOF
 printf '%s\n' "\$*" >> "$agy_home/calls"
 if [[ -n "\${FAKE_AGY_SLEEP:-}" ]]; then sleep "\$FAKE_AGY_SLEEP"; fi
 if [[ -n "\${FAKE_AGY_JUNK:-}" ]]; then echo "not json"; exit 0; fi
+if [[ -n "\${FAKE_AGY_PREAMBLE:-}" ]]; then echo 'Notice: a newer agy is available {see release notes}'; echo '{"type":"init"}'; fi
 cat "$FIX/agy/usage.json"
 EOF
 chmod +x "$agy_home/agy"
@@ -878,7 +881,19 @@ check "agy-live-beats-event" "$(python3 "$ROOT/providers/antigravity" | python3 
 check "agy-fetch-junk" "$(FAKE_AGY_JUNK=1 LIMITLINE_AGY_FETCH=1 "$BIN" refresh --force)" 'antigravity: failed: no usage in output'
 check "agy-fetch-timeout" "$(FAKE_AGY_SLEEP=5 LIMITLINE_AGY_TIMEOUT=1 LIMITLINE_AGY_FETCH=1 "$BIN" refresh --force)" 'antigravity: failed: timeout'
 check "agy-cache-kept-after-failure" "$(python3 "$ROOT/providers/antigravity" | python3 -c 'import json,sys; print(json.load(sys.stdin)["source"])')" 'live'
-unset LIMITLINE_AGY_BIN LIMITLINE_AGY_USAGE
+# A notice line or another JSON object before the usage object does not hide it.
+rm -f "$LIMITLINE_AGY_USAGE"
+check "agy-fetch-preamble" "$(FAKE_AGY_PREAMBLE=1 LIMITLINE_AGY_FETCH=1 "$BIN" refresh --force)" 'antigravity: fetched'
+check "agy-preamble-buckets" "$(python3 -c 'import json,sys; print(len(json.load(open(sys.argv[1]))["buckets"]))' "$LIMITLINE_AGY_USAGE")" '5'
+unset LIMITLINE_AGY_BIN
+# launchd starts the refresher with a bare PATH, so ~/.local/bin and Homebrew are checked too.
+mkdir -p "$HOME/.local/bin"
+cp "$agy_home/agy" "$HOME/.local/bin/agy"
+rm -f "$LIMITLINE_AGY_USAGE"
+check "agy-found-off-path" "$(PATH="$nojq" LIMITLINE_AGY_FETCH=1 "$BIN" refresh --force)" 'antigravity: fetched'
+check "agy-doctor-binary" "$(PATH="$nojq" "$BIN" doctor < /dev/null | grep '^antigravity binary')" "antigravity binary: $HOME/.local/bin/agy"
+rm -f "$HOME/.local/bin/agy"
+unset LIMITLINE_AGY_USAGE
 spend_got=$(LIMITLINE_LEDGER="$FIX/providers/ledger.jsonl" "$ROOT/providers/spend")
 spend_got=${spend_got%$'\n'}
 check "provider-spend" "$spend_got" '{"observed_at":1762056000,"provider":"api","source":"ledger","stale":false,"windows":[{"name":"spend","usd":0.25}]}'

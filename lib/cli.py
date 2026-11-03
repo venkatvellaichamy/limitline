@@ -435,6 +435,8 @@ def fleet_doctor():
     else:
         lines.append("cursor+grok shown: none; Cursor shows a token estimate")
     agy = load_lib("antigravity")
+    found = agy.agy_bin()
+    lines.append("antigravity binary: %s" % (found or "not found (set agy = \"/path/to/agy\")"))
     live = agy.read_live()
     if live is None:
         lines.append("antigravity live: no reading in %s (limitline refresh runs agy -p /usage)" % agy.usage_path())

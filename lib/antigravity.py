@@ -112,25 +112,45 @@ def window_kind(raw):
     return SAFE_ID.sub("", text) or "limit"
 
 
+def groups_of(data):
+    node = data.get("command") if isinstance(data, dict) else None
+    node = node.get("data") if isinstance(node, dict) else None
+    node = node.get("groups") if isinstance(node, dict) else None
+    return node if isinstance(node, list) else None
+
+
+def find_groups(text):
+    """`command.data.groups` from the whole output, or from the first JSON
+    object in it that has them: the CLI may print a notice line first, or one
+    JSON object per line."""
+    if not text:
+        return None
+    try:
+        found = groups_of(json.loads(text))
+        if found is not None:
+            return found
+    except ValueError:
+        pass
+    decoder = json.JSONDecoder()
+    start = text.find("{")
+    while start >= 0:
+        try:
+            data, end = decoder.raw_decode(text, start)
+        except ValueError:
+            start = text.find("{", start + 1)
+            continue
+        found = groups_of(data)
+        if found is not None:
+            return found
+        start = text.find("{", end)
+    return None
+
+
 def parse_usage(text):
     """Buckets from the CLI's JSON, or None. Only id, group name, window,
     used percent, and reset are kept; nothing else of the output is stored."""
-    if not text:
-        return None
-    start = text.find("{")
-    if start < 0:
-        return None
-    try:
-        data = json.loads(text[start:])
-    except ValueError:
-        try:
-            data, _ = json.JSONDecoder().raw_decode(text[start:])
-        except ValueError:
-            return None
-    groups = data.get("command") if isinstance(data, dict) else None
-    groups = groups.get("data") if isinstance(groups, dict) else None
-    groups = groups.get("groups") if isinstance(groups, dict) else None
-    if not isinstance(groups, list):
+    groups = find_groups(text)
+    if groups is None:
         return None
     buckets = []
     for group in groups:
@@ -374,11 +394,25 @@ def brief(data, now=None):
 
 # ---- the fetch ----
 
+# launchd and non-interactive shells start with PATH=/usr/bin:/bin:/usr/sbin:/sbin,
+# which hides a user or Homebrew install, so these folders are checked too.
+EXTRA_BIN_DIRS = ("~/.local/bin", "/opt/homebrew/bin", "/usr/local/bin", "~/bin")
+
+
 def agy_bin():
-    override = os.environ.get("LIMITLINE_AGY_BIN")
+    """LIMITLINE_AGY_BIN, else `agy = "<path>"` in the config, else agy on PATH or
+    in the usual install folders. "" when none is found."""
+    override = os.environ.get("LIMITLINE_AGY_BIN") or setting("agy", "LIMITLINE_AGY_BIN", "")
     if override:
-        return override
-    return shutil.which("agy") or ""
+        return os.path.expanduser(override)
+    found = shutil.which("agy")
+    if found:
+        return found
+    for folder in EXTRA_BIN_DIRS:
+        path = os.path.join(os.path.expanduser(folder), "agy")
+        if os.path.isfile(path) and os.access(path, os.X_OK):
+            return path
+    return ""
 
 
 def ttl_seconds():
