@@ -35,7 +35,7 @@ def to_epoch(value):
 def whole(value):
     if isinstance(value, bool) or not isinstance(value, (int, float)):
         return None
-    if value != value or value < 0:
+    if value != value or value < 0 or value == float("inf"):
         return None
     return int(value)
 
