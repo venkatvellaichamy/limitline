@@ -1,12 +1,20 @@
 #!/usr/bin/env python3
 """Background cache writer. SSH runs here, never on the status-line hot path."""
-import json, os, subprocess, sys
+import json, os, subprocess, sys, time
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import fleet
 import machines
+import sync
+from config import setting
 
+# Snapshots from other machines older than this are ignored.
+SYNC_FRESH = 900
+
+# Non-interactive ssh and launchd both start with PATH=/usr/bin:/bin:/usr/sbin:/sbin,
+# which hides a Homebrew `ollama`. Add the usual install folders first.
 SCRIPT = (
+    "PATH=/opt/homebrew/bin:/usr/local/bin:$PATH; export PATH; "
     "echo '## load'; sysctl -n vm.loadavg; "
     "echo '## ncpu'; sysctl -n hw.ncpu; "
     "echo '## mem'; sysctl -n hw.memsize; "
@@ -60,8 +68,71 @@ def capture_host(host, timeout):
     return proc.stdout or ""
 
 
+def sync_folder():
+    return setting("sync_dir", "LIMITLINE_SYNC_DIR", "")
+
+
+def now_epoch():
+    return fleet.now_epoch()
+
+
+def publish_cockpit(kind, payload):
+    """Write <sync_dir>/<host>/cockpit/<kind>.json. The subfolder keeps these
+    out of the provider snapshots that sit beside it."""
+    folder = sync_folder()
+    if not folder or not os.path.isdir(folder):
+        return
+    dest = os.path.join(folder, sync.host_name(), "cockpit")
+    try:
+        os.makedirs(dest, exist_ok=True)
+        write_text(os.path.join(dest, kind + ".json"), json.dumps(payload, sort_keys=True))
+    except OSError:
+        return
+
+
+def remote_cockpit(kind):
+    """Fresh snapshots of one kind from every other machine in the sync folder."""
+    folder = sync_folder()
+    found = []
+    if not folder or not os.path.isdir(folder):
+        return found
+    me = sync.host_name()
+    now = now_epoch()
+    try:
+        names = sorted(os.listdir(folder))
+    except OSError:
+        return found
+    for name in names:
+        if sync.clean_host(name) == me:
+            continue
+        path = os.path.join(folder, name, "cockpit", kind + ".json")
+        try:
+            data = json.load(open(path))
+        except (OSError, ValueError):
+            continue
+        if not isinstance(data, dict):
+            continue
+        stamp = data.get("observed_at")
+        if isinstance(stamp, bool) or not isinstance(stamp, (int, float)) or now - stamp > SYNC_FRESH:
+            continue
+        found.append((sync.clean_host(name), data))
+    return found
+
+
 def write_fleet():
-    text = fleet.segment_text()
+    states = fleet.collect()
+    recent, _ = fleet.split_recent(states)
+    counts = fleet.summarize(recent)
+    publish_cockpit("fleet", {"observed_at": now_epoch(), "counts": counts})
+    for _, data in remote_cockpit("fleet"):
+        other = data.get("counts")
+        if not isinstance(other, dict):
+            continue
+        for key in ("run", "verify", "failed", "warn", "stopped"):
+            value = other.get(key)
+            if isinstance(value, int) and not isinstance(value, bool) and value > 0:
+                counts[key] = counts.get(key, 0) + value
+    text = fleet.format_segment(counts)
     path = os.environ.get("LIMITLINE_FLEET_LINE") or os.path.join(machines.cache_dir(), "fleet.line")
     write_text(path, text)
 
@@ -74,7 +145,18 @@ def write_machines():
     for host in hosts:
         text = capture_host(host, timeout)
         rows.append(machines.parse_snapshot(host["name"], text, threshold))
-    payload = {"hosts": rows}
+    if rows:
+        publish_cockpit("machines", {"observed_at": now_epoch(), "hosts": rows})
+    seen = set(row.get("name") for row in rows)
+    for origin, data in remote_cockpit("machines"):
+        for row in data.get("hosts") or []:
+            if not isinstance(row, dict) or row.get("name") in seen:
+                continue
+            item = dict(row)
+            item["via"] = origin
+            rows.append(item)
+            seen.add(item.get("name"))
+    payload = {"hosts": rows, "observed_at": now_epoch()}
     path = os.environ.get("LIMITLINE_MACHINES_JSON") or os.path.join(machines.cache_dir(), "machines.json")
     # A caller-supplied JSON path is an input for readers. Refresh writes the cache copy
     # unless that env var is the destination the tests set on purpose.

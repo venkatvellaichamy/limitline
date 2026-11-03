@@ -215,32 +215,60 @@ def parse_snapshot(name, text, threshold):
     }
 
 
+def mem_text(host):
+    """Memory is shown as free percent, the same number `memory_pressure` prints."""
+    free = host.get("free_pct")
+    if isinstance(free, (int, float)) and not isinstance(free, bool):
+        return "%d%% free" % int(free)
+    load = host.get("load_pct")
+    if isinstance(load, (int, float)) and not isinstance(load, bool):
+        return "load %d%%" % int(load)
+    return ""
+
+
 def format_host(host, long=False):
     name = host.get("name") or "host"
     if not host.get("reachable"):
         return name + " ∅"
-    bits = [name]
-    load = host.get("load_pct")
-    if isinstance(load, (int, float)) and not isinstance(load, bool):
-        bits.append("%d%%" % int(load))
+    text = name
+    mem = mem_text(host)
+    if mem:
+        text += " " + mem
     loaded = host.get("loaded") or ""
+    if loaded.endswith(":latest"):
+        loaded = loaded[: -len(":latest")]
     if loaded:
-        bits.append(loaded)
-    text = " ".join(bits)
-    count = host.get("installed_count")
-    if long and isinstance(count, int) and count > 0:
-        text += " · %d installed" % count
+        text += " · " + loaded
+    if long:
+        load = host.get("load_pct")
+        if host.get("free_pct") is not None and isinstance(load, (int, float)) and not isinstance(load, bool):
+            text += " · load %d%%" % int(load)
+        count = host.get("installed_count")
+        if isinstance(count, int) and count > 0:
+            text += " · %d installed" % count
     if host.get("mem_warn"):
         text += " ⚠"
     return text
 
 
+HOST_SEP = " / "
+
+
 def format_hosts(hosts, long=False):
     parts = [format_host(host, long=long) for host in hosts if isinstance(host, dict)]
-    return " · ".join(part for part in parts if part)
+    return HOST_SEP.join(part for part in parts if part)
 
 
-def read_cache(path=None, ttl=60):
+def default_ttl():
+    raw = setting("machines_ttl", "LIMITLINE_MACHINES_TTL", "180")
+    try:
+        value = int(float(raw))
+    except (TypeError, ValueError):
+        value = 180
+    return value if value > 0 else 180
+
+
+def read_cache(path=None, ttl=180):
     path = path or json_path()
     if not os.path.isfile(path):
         return None
@@ -263,15 +291,15 @@ def read_cache(path=None, ttl=60):
     return data
 
 
-def status_text(ttl=60):
-    data = read_cache(ttl=ttl)
+def status_text(ttl=None):
+    data = read_cache(ttl=default_ttl() if ttl is None else ttl)
     if not data:
         return ""
     return format_hosts(data.get("hosts") or [], long=True)
 
 
-def idle_hint(ttl=60):
-    data = read_cache(ttl=ttl)
+def idle_hint(ttl=None):
+    data = read_cache(ttl=default_ttl() if ttl is None else ttl)
     if not data:
         return ""
     best = None
@@ -291,7 +319,7 @@ def idle_hint(ttl=60):
 
 
 def main():
-    text = format_hosts((read_cache(ttl=int(os.environ.get("LIMITLINE_MACHINES_TTL") or "60")) or {}).get("hosts") or [])
+    text = format_hosts((read_cache(ttl=default_ttl()) or {}).get("hosts") or [])
     if text:
         sys.stdout.write(text + "\n")
 

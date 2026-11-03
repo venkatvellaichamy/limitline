@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # limitline — local usage-limit status line for Claude Code.
 # Reads one JSON object on stdin. No network. Always exits 0.
-# Version: 0.4.0
+# Version: 0.4.1
 
 _here=${0%/*}
 [[ "$_here" == "$0" ]] && _here="."
@@ -15,6 +15,7 @@ limitline — local usage limits for Claude Code and nearby CLIs
   bin/limitline status
   bin/limitline --host tmux|starship|prompt|json|swiftbar|cursor|codex
   bin/limitline preview|doctor|config|report|watch|theme|refresh
+  bin/limitline install-refresher|uninstall-refresher
 
 Config: ~/.config/limitline/config or config.toml
 EOF
@@ -22,7 +23,7 @@ EOF
 fi
 
 case "${1:-}" in
-  status|preview|doctor|config|report|watch|theme|refresh|--host)
+  status|preview|doctor|config|report|watch|theme|refresh|install-refresher|uninstall-refresher|--host)
     if command -v python3 >/dev/null 2>&1; then
       exec python3 "$LIMITLINE_ROOT/lib/cli.py" "$@"
     fi
@@ -89,8 +90,8 @@ FLEET_MODE=""
 MACHINES_MODE=""
 FLEET_SET=0
 MACHINES_SET=0
-FLEET_TTL=60
-MACHINES_TTL=60
+FLEET_TTL=180
+MACHINES_TTL=180
 SSH_TIMEOUT=2
 MEM_WARN=15
 HOSTS_RAW=""
@@ -1278,7 +1279,7 @@ emit_kv() {
   emit_kv sparkle "$sparkle"
   emit_kv compactions "$compactions"
   emit_kv cost_trend "$cost_trend"
-} | awk '
+} | LC_ALL=C awk '
 function val(k) { return (k in v) ? v[k] : "" }
 function pct(p) {
   if (p < 0) p = 0
@@ -1588,10 +1589,16 @@ function burn_pace(path, now, pct,    line, n, a, i, start, base_t, base_p, dt, 
   if (mins >= 60) return sprintf("pace ~%dh%dm", int(mins / 60), mins % 60)
   return sprintf("pace ~%dm", mins)
 }
-function plain_len(s) {
+# Display columns, not bytes. macOS awk counts bytes, so a bar cell (3 bytes)
+# counted as 3 columns and the line was trimmed far too early. Drop UTF-8
+# continuation bytes, and count 4-byte characters (emoji) as two columns.
+function plain_len(s,    wide) {
   gsub(/\033\[[0-9;]*m/, "", s)
   gsub(/\033\]8;;[^\007]*\007/, "", s)
-  return length(s)
+  if (length("\342\226\223") == 1) return length(s)
+  wide = gsub(/[\360-\364]/, "&", s)
+  gsub(/[\200-\277]/, "", s)
+  return length(s) + wide
 }
 function push(pri, kind, text,    i) {
   if (text == "") return
@@ -1643,17 +1650,35 @@ function join_range(lo, hi,    i, out, count, sep) {
   }
   return out
 }
-function fit(maxc,    total, i, best, best_i, guard) {
+function join_band(band,    i, out, count, sep) {
+  out = ""
+  count = 0
+  sep = sep_of()
+  for (i = 1; i <= nseg; i++) {
+    if (drop[i]) continue
+    if (band == 1 && pri_of[i] < 70) continue
+    if (band == 2 && pri_of[i] >= 70) continue
+    if (count == 0) out = seg[i]
+    else out = out sep seg[i]
+    count++
+  }
+  return out
+}
+# band 0 fits the whole single line. With two lines, each line (band 1 is
+# priority >= 70, band 2 the rest) gets the full width on its own.
+function fit(maxc, band,    total, i, best, best_i, guard) {
   if (maxc <= 0) return
   guard = 0
-  while (guard < 30) {
+  while (guard < 40) {
     guard++
-    total = plain_len(join_range(1, nseg))
+    total = plain_len(band == 0 ? join_range(1, nseg) : join_band(band))
     if (total <= maxc) return
     best = 999
     best_i = 0
     for (i = 1; i <= nseg; i++) {
       if (drop[i]) continue
+      if (band == 1 && pri_of[i] < 70) continue
+      if (band == 2 && pri_of[i] >= 70) continue
       if (pri_of[i] < best) { best = pri_of[i]; best_i = i }
     }
     if (best_i == 0) return
@@ -1674,7 +1699,7 @@ END {
   }
   push(100, "model", themed("model", model_text))
   push(25, "style", themed("style", val("style")))
-  push(70, "ctx", themed("ctx", ctx_seg(val("ctx"), ctx_note(val("ctx"), val("ctx_size"), val("ctx_tokens"), val("compact_at"), val("auto_warn")))))
+  push(85, "ctx", themed("ctx", ctx_seg(val("ctx"), ctx_note(val("ctx"), val("ctx_size"), val("ctx_tokens"), val("compact_at"), val("auto_warn")))))
   if (val("show_five") == "1")
     push(90, "5h", themed("5h", window_seg("5h", val("five_pct"), val("five_reset"), val("five_abs"))))
   push(88, "spark", themed("spark", spark_seg("5h", val("spark5"), val("five_pct"))))
@@ -1689,8 +1714,8 @@ END {
   else
     push(50, "cost", themed("cost", cost_seg(val("cost_usd"), val("cost_ms"), val("lines_added"), val("lines_removed"))))
   push(40, "git", themed("git", val("git")))
-  push(36, "fleet", themed("fleet", val("fleet")))
-  push(34, "machines", themed("machines", val("machines")))
+  push(58, "fleet", themed("fleet", val("fleet")))
+  push(56, "machines", themed("machines", val("machines")))
   push(20, "pr", themed("pr", val("pr")))
   push(15, "cache", themed("cache", val("cache")))
   push(10, "vim", themed("vim", val("vim")))
@@ -1699,23 +1724,15 @@ END {
   push(5, "codex", themed("codex", codex_seg(val("codex5"), val("codex7"))))
   push(1, "session", themed("session", val("session")))
   reorder()
-  fit(val("max_cols") + 0)
   if (val("lines") + 0 >= 2) {
-    line1 = ""
-    line2 = ""
-    # rebuild by priority: >= 70 on line 1
-    n1 = 0; n2 = 0
-    for (i = 1; i <= nseg; i++) {
-      if (drop[i]) continue
-      if (pri_of[i] >= 70) { n1++; a1[n1] = seg[i] }
-      else { n2++; a2[n2] = seg[i] }
-    }
-    sep = sep_of()
-    for (i = 1; i <= n1; i++) line1 = (line1 == "" ? a1[i] : line1 sep a1[i])
-    for (i = 1; i <= n2; i++) line2 = (line2 == "" ? a2[i] : line2 sep a2[i])
+    fit(val("max_cols") + 0, 1)
+    fit(val("max_cols") + 0, 2)
+    line1 = join_band(1)
+    line2 = join_band(2)
     if (line1 != "") print line1
     if (line2 != "") print line2
   } else {
+    fit(val("max_cols") + 0, 0)
     out = join_range(1, nseg)
     if (out != "") print out
   }

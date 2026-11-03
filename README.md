@@ -114,7 +114,7 @@ Each segment can be turned off or reordered with `segments` in the config file.
 | Model | `.model.display_name`, with a leading `Claude ` removed |
 | Style | `.output_style.name` when it is not `default` |
 | Context | used percent, a bar, tokens left when the window size is known, and `↯ auto-compact in ~N%` once usage reaches the warn line (default 80, compact default 95) |
-| `5h` / `7d` | `.rate_limits.five_hour` and `.seven_day` |
+| `5h` / `7d` | `.rate_limits.five_hour` and `.seven_day`. Claude Code sends each window only when the account reports it, so a line can show `7d` alone |
 | Spend | `.rate_limits.spend_limit` when present |
 | Pace | projection from local 5-hour snapshots, such as `pace ~1h35m` |
 | Cost | `.cost.total_cost_usd`, duration, and lines added or removed. `$0` is omitted |
@@ -128,8 +128,8 @@ Each segment can be turned off or reordered with `segments` in the config file.
 | Sparkline | `5h ▁▃▅▆▅ 62%` from local snapshots, and a 7-day daily history. Off until `spark = "on"` |
 | Fresh | `fresh in 1h42m`, and `✨` on the first prompt after usage drops into a new window. Off until `fresh = "on"` |
 | Nudge | `→ codex 12% · mini idle`, `→ cursor ok`, or `↯ compact soon: /compact`. Off until `nudges = "on"` |
-| Fleet | `⚙ 3 run · 1 ✗`, from a local cache of Pharos runs or a process scan. `⚠` when a run is stalled or paused for quota. Off until named |
-| Machines | `mini 27% qwen3:14b` from a 60-second cache. Unreachable is `mini ∅`. A loaded model that would leave under 15% free memory adds `⚠`. Off until named |
+| Fleet | `⚙ 3 run · 1 ✗`, from a local cache of Pharos runs or a process scan. Only runs that are live or were active in the last 12 hours (`fleet_window`). `⚠` when a run is stalled or paused for quota. Off until named |
+| Machines | `mini 29% free · qwen3:14b`: free memory, then the loaded Ollama model. Hosts are split by ` / `. Unreachable is `mini ∅`. A loaded model that would leave under 15% free memory adds `⚠`. Off until named |
 | Value | `≈ $412 of value this week`, an estimate. Off until `value = "on"` |
 | Vitals | session duration, auto-compactions, lines, and the cost trend. Off until `vitals = "on"` |
 
@@ -156,6 +156,8 @@ Host snippets:
 | bash or zsh | `integrations/prompt/limitline.sh` |
 | SwiftBar / xbar | `integrations/swiftbar/limitline.30s.sh` |
 | JSON | `limitline --host json` |
+
+With `lines = 2`, line 1 holds the model, context, and Claude windows, and line 2 holds the rest (fleet and machines come first there). Each line is fitted to the terminal width on its own. Claude Code passes the width as `COLUMNS`; when a line is too wide, the lowest-priority segment on that line is dropped first. Widths are counted in display columns, so bars and emoji no longer count as several characters.
 
 Cursor and Grok can also run `limitline` with no arguments so the line is that tool's own stdin (model and context) instead of the multi-tool summary.
 
@@ -187,6 +189,9 @@ segments = ["model", "style", "context", "limits", "burn", "cost", "git", "pr", 
 # fleet = "on"
 # machines = "on"
 # hosts = ["mini", "worker-1"]
+# fleet_window = "12h"
+# fleet_ttl = 180
+# machines_ttl = 180
 # ssh_timeout = 2
 # mem_free_warn = 15
 # cursor_week_tokens = 1000000
@@ -206,21 +211,25 @@ With `spark = "on"`, each status line stores the current percent under `~/.cache
 
 ## Fleet
 
-`fleet` is off on the Claude Code line until `segments` names it or `fleet = "on"`. The segment reads one cached line, `⚙ 3 run · 1 ✗`. Counts are running (including stalled), awaiting verify, and failed. `⚠` is added when any run is stalled or paused for quota. Pharos is optional. When `~/.pharos/runs/*/state.json` exists, those files are the source. Otherwise limitline counts `cursor-agent`, `codex exec`, `claude -p`, `grok`, and `agy` in the process list. `limitline refresh` writes the cache. The status line never waits on that scan.
+`fleet` is off on the Claude Code line until `segments` names it or `fleet = "on"`. The segment reads one cached line, `⚙ 3 run · 1 ✗`. Counts are running (including stalled), awaiting verify, and failed. `⚠` is added when any run is stalled or paused for quota.
 
-`limitline status`, `limitline watch`, and the SwiftBar menu add a Runs list: run id, tool, repository basename, status, and age. SwiftBar opens `stdout.log` for that run. Full paths are not printed.
+Only recent runs are counted. A run that is `starting`, `running`, or `paused-quota` always counts. Any other run (awaiting verify, failed, stopped, stalled) counts only when its latest recorded time is inside `fleet_window`, default `12h`. The time used is the newest of `last_activity`, `finished_at`, `ended_at`, `completed_at`, `updated_at`, and `started_at` in `state.json`. File modification times are not used, because Pharos rewrites every `state.json` when it sweeps. Naive timestamps such as `2026-01-02T08:41:27` are read as local time. `fleet_window` takes `90m`, `12h`, `2d`, or a bare number of hours; `off` counts every run. limitline never edits Pharos files. Pharos is optional. When `~/.pharos/runs/*/state.json` exists, those files are the source. Otherwise limitline counts `cursor-agent`, `codex exec`, `claude -p`, `grok`, and `agy` in the process list. `limitline refresh` writes the cache. The status line never waits on that scan.
+
+`limitline status`, `limitline watch`, and the SwiftBar menu add a Runs list: run id, tool, repository basename, status, and age. Runs outside the window move to an `Older` block with their own counts, such as `17 verify · 3 ✗ · 4 stopped, last active over 12h ago`. SwiftBar opens `stdout.log` for that run. Full paths are not printed.
 
 ## Machines and local models
 
-`machines` is off on the Claude Code line until it is named or `machines = "on"`. `limitline refresh` collects each host with `ssh`, `BatchMode`, and `ConnectTimeout` (default 2 seconds). The status line only reads the cache, which is kept for 60 seconds (`machines_ttl`). A host that does not answer is `mini ∅`.
+`machines` is off on the Claude Code line until it is named or `machines = "on"`. `limitline refresh` collects each host with `ssh`, `BatchMode`, and `ConnectTimeout` (default 2 seconds). The status line only reads the cache, which stays fresh for 180 seconds (`machines_ttl`). A host that does not answer is `mini ∅`.
 
-Each row is load divided by CPU count, then the Ollama model that is loaded: `mini 27% qwen3:14b`. The same snapshot records installed models. `limitline status` adds the installed count: `mini 27% qwen3:14b · 2 installed`. If a loaded model leaves under `mem_free_warn` percent of memory free (default 15), either because free memory is already under that line or because the model itself is that large, the row gains `⚠`.
+Each row is free memory, then the Ollama model that is loaded: `mini 29% free · qwen3:14b / laptop 62% free`. The percent is the `System-wide memory free percentage` that `memory_pressure` prints on that host, so you can check it there. When a host has no `memory_pressure` (not macOS), the row falls back to labelled CPU load, `worker-1 load 13%`. `limitline status` adds CPU load (1-minute load average over CPU count) and the installed count: `mini 29% free · qwen3:14b · load 27% · 2 installed`. Before 0.4.1 the line showed that CPU load with no label, which read like memory. If a loaded model leaves under `mem_free_warn` percent of memory free (default 15), either because free memory is already under that line or because the model itself is that large, the row gains `⚠`.
+
+The probe adds `/opt/homebrew/bin` and `/usr/local/bin` to `PATH` before it runs `ollama`, because a non-interactive ssh session and launchd both start without them.
 
 Hosts come from `hosts` or `LIMITLINE_HOSTS` (`mini` or `mini=user@host`). When that list is empty, limitline reads `~/.pharos/machines.json` if the file exists. It does not require Pharos. `name=local` runs the same probe on this Mac and does not use ssh. There is no network on the status-line path.
 
 ## Providers
 
-`limitline status` prints the tightest measured window first. Claude still comes from the status-line snapshot. Codex still comes from the newest session `rate_limits` event. Grok's `usage.json` is a session token ledger (`inputTokens`, `outputTokens`, `totalTokens`, `costUsdTicks`) and still has no account window. Cursor has no local quota file. When Pharos captured `usage.input_tokens` and `usage.output_tokens` on a cursor run, or a file passed as `LIMITLINE_CURSOR_LOG` has those fields, limitline estimates a weekly percent against `cursor_week_tokens` (default 1,000,000). That number is an estimate, not a bill. Antigravity (`agy`) still uses the last `quota reached` / `Resets in` line, and also a Pharos run whose status is `paused-quota`. A local ledger at `~/.pharos/ledger.jsonl` or `research-spend.jsonl` (or `LIMITLINE_LEDGER`) adds an `api` row such as `spend $0.25` when the file exists. Rows with no window stay at the bottom.
+`limitline status` prints the tightest measured window first, then estimates. Claude still comes from the status-line snapshot. Codex still comes from the newest session `rate_limits` event. Grok's `usage.json` is a session token ledger (`inputTokens`, `outputTokens`, `totalTokens`, `costUsdTicks`) and still has no account window. Cursor has no local quota file. When Pharos captured `usage.input_tokens` and `usage.output_tokens` on a cursor run, or a file passed as `LIMITLINE_CURSOR_LOG` has those fields, limitline estimates a weekly percent against `cursor_week_tokens` (default 1,000,000). That number is an estimate, not a quota reading: Cursor does not publish a token budget, and 1,000,000 is only a default you should replace with your own. It is input plus output tokens (cache reads are left out) from cursor run logs that started or were written in the last 7 days, divided by that budget and capped at 100. It is shown with `~` everywhere (`cursor 7d ~100%`), `limitline status` prints the inputs (`7d ~100% (estimate: 3.1M of 1.0M tokens)`), and estimated rows are listed after measured ones. A `~100%` means you used more tokens than the budget you set, not that Cursor will stop you. Antigravity (`agy`) still uses the last `quota reached` / `Resets in` line, and also a Pharos run whose status is `paused-quota`. A local ledger at `~/.pharos/ledger.jsonl` or `research-spend.jsonl` (or `LIMITLINE_LEDGER`) adds an `api` row such as `spend $0.25` when the file exists. Rows with no window stay at the bottom.
 
 ## Reset moments
 
@@ -257,6 +266,25 @@ Hosts come from `hosts` or `LIMITLINE_HOSTS` (`mini` or `mini=user@host`). When 
 
 Set `sync_dir` or `LIMITLINE_SYNC_DIR` to a folder you already sync, such as an iCloud or Dropbox directory. Each machine writes its own snapshot there. `limitline status`, `report`, and `watch` keep the higher percent for a shared window and mark it `×2` when two machines reported it. Nothing is uploaded by limitline. `LIMITLINE_HOST` sets the folder name; otherwise the short hostname is used, with characters outside letters, digits, and `-` removed.
 
+## Background refresh
+
+The status line never runs ssh or scans runs. It reads `fleet.line` and `machines.json` from `~/.cache/limitline/`, and when they are older than their TTL it starts one `limitline refresh` in the background and shows nothing for that segment until the next render. If nothing renders for a while, the segment can sit empty.
+
+On macOS, `limitline install-refresher` installs a launchd agent (`~/Library/LaunchAgents/dev.limitline.refresh.plist`) that runs `limitline refresh` every 60 seconds with `ProcessType Background`, low-priority IO, and `Nice 10`. The agent runs a small launcher in `~/.local/share/limitline/`, which follows `claude plugin update` to the newest installed copy, so the agent keeps working after an update. `limitline uninstall-refresher` stops it and removes both files. `limitline doctor` reports whether it is installed and loaded. On Linux, run `limitline refresh` from cron instead; `install-refresher` prints the line.
+
+## Fleet and machines from another machine or session
+
+Every Claude Code session on the same Mac shares one cache, so a second session needs nothing extra. A session on a different machine sees only what that machine can collect. There are two ways to give it fleet and machine data.
+
+1. Collect directly. On that machine, set `fleet = "on"` and `machines = "on"`, list the workers in `hosts` (such as `["mini=user@mini.local", "laptop=local"]`), and make sure `ssh -o BatchMode=yes user@mini.local true` works with a key and a known host entry, because refresh never prompts. Then run `limitline install-refresher`. Fleet counts there come from that machine's own Pharos runs or process list.
+2. Share snapshots. Set the same `sync_dir` on each machine to a folder you already sync. Every `limitline refresh` writes `<sync_dir>/<host>/cockpit/fleet.json` and `machines.json`. When refresh runs elsewhere, it adds run counts from other machines' snapshots (each machine publishes only its own runs, so nothing is counted twice) and adds hosts it does not collect itself. Snapshots older than 15 minutes are ignored. The machine that publishes needs the refresher, or snapshots go stale.
+
+A cloud-hosted Claude Code session (for example, one started from claude.ai) runs on a remote container. It cannot ssh to your Macs or read their Pharos runs. It can only show fleet and machine data from `sync_dir` snapshots, and only if that folder is reachable from inside the container, such as a mounted volume or a checked-out repository that a local machine commits snapshots to. Most desktop sync folders are not available there. `limitline doctor` says `session: cloud-hosted` when it detects this.
+
+## Doctor
+
+`limitline doctor` lists the tools on `PATH`, then the fleet sources it can see: whether the fleet and machines segments are on and why, Pharos runs inside and outside the window (or the process scan count), each cache's age against its TTL, the host list and where it came from, which hosts were reachable at the last refresh, whether the refresher is installed and loaded, and how many machines publish into `sync_dir`. When a segment would be empty, an `empty segments` block says why, such as `fleet: cache older than fleet_ttl; install-refresher keeps it fresh` or `machines: no hosts`. With a status payload on stdin it also lists which known fields are present. Host names are printed; ssh user names and addresses are not.
+
 | Variable | Meaning |
 | --- | --- |
 | `LIMITLINE_THEME` | `minimal`, `powerline`, `ascii`, `pill`, `emoji`, or `mono` |
@@ -283,8 +311,9 @@ Set `sync_dir` or `LIMITLINE_SYNC_DIR` to a folder you already sync, such as an 
 | `LIMITLINE_HOSTS` | Comma-separated workers, such as `mini,worker-1` |
 | `LIMITLINE_SSH_TIMEOUT` | SSH connect timeout in seconds, default 2 |
 | `LIMITLINE_MEM_WARN` | Warn when a loaded model would leave free memory under this percent, default 15 |
-| `LIMITLINE_FLEET_TTL` | Seconds a fleet cache line stays fresh, default 60 |
-| `LIMITLINE_MACHINES_TTL` | Seconds a machine cache stays fresh, default 60 |
+| `LIMITLINE_FLEET_TTL` | Seconds a fleet cache line stays fresh, default 180 |
+| `LIMITLINE_MACHINES_TTL` | Seconds a machine cache stays fresh, default 180 |
+| `LIMITLINE_FLEET_WINDOW` | Count finished runs active within this window, default `12h`. `off` counts all |
 | `LIMITLINE_REFRESH` | `0` stops the status line from starting a background refresh |
 | `LIMITLINE_CURSOR_WEEK_TOKENS` | Denominator for the Cursor weekly estimate, default 1000000 |
 | `LIMITLINE_LEDGER` | JSONL file of `usd` amounts for the api row |
@@ -298,7 +327,7 @@ Set `sync_dir` or `LIMITLINE_SYNC_DIR` to a folder you already sync, such as an 
 
 ## Privacy
 
-limitline reads the status JSON a host already pipes in, an optional local config file, a cache directory it writes itself, and the local files named above. It does not send them anywhere. It does not read API keys or OAuth tokens. Debug output stays in the cache file you opted into. Session id display is off unless `LIMITLINE_SESSION=1`. The value file is read only when the value meter is on, and only for cost and token counts. The report and the Runs list keep repository folder names, not full paths. A sync folder is written only when you set one. Pharos is detected and used when its run files or machine list are present, and limitline still runs when they are absent. SSH runs only inside `limitline refresh`, with a timeout, and only for hosts you listed.
+limitline reads the status JSON a host already pipes in, an optional local config file, a cache directory it writes itself, and the local files named above. It does not send them anywhere. It does not read API keys or OAuth tokens. Debug output stays in the cache file you opted into. Session id display is off unless `LIMITLINE_SESSION=1`. The value file is read only when the value meter is on, and only for cost and token counts. The report and the Runs list keep repository folder names, not full paths. A sync folder is written only when you set one. Pharos is detected and used when its run files or machine list are present, and limitline still runs when they are absent. SSH runs only inside `limitline refresh`, with a timeout, and only for hosts you listed. The background refresher exists only if you run `limitline install-refresher`, and it runs the same `limitline refresh`. Fleet and machine snapshots go to `sync_dir` only when you set one; they hold counts, host names, memory, load, and model names, not paths or user names.
 
 ## Tests
 

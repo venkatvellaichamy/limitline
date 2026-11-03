@@ -20,7 +20,7 @@ def brief(data):
         used = window.get("used_pct")
         text = name
         if isinstance(used, (int, float)) and not isinstance(used, bool):
-            text += " %d%%" % int(used + 0.5)
+            text += " %s%d%%" % ("~" if window.get("estimate") else "", int(used + 0.5))
         machines = window.get("machines")
         if isinstance(machines, int) and machines > 1:
             text += " ×%d" % machines

@@ -20,6 +20,11 @@ def run_provider(name):
 
 
 def lowest_pct(data):
+    found = lowest_window(data)
+    return None if found is None else found[0]
+
+
+def lowest_window(data):
     best = None
     for window in data.get("windows") or []:
         if not isinstance(window, dict):
@@ -27,8 +32,8 @@ def lowest_pct(data):
         used = window.get("used_pct")
         if isinstance(used, bool) or not isinstance(used, (int, float)):
             continue
-        if best is None or used < best:
-            best = used
+        if best is None or used < best[0]:
+            best = (used, bool(window.get("estimate")))
     return best
 
 
@@ -36,7 +41,7 @@ def idle_machine():
     sys.path.insert(0, os.path.join(ROOT, "lib"))
     try:
         import machines
-        return machines.idle_hint(ttl=int(os.environ.get("LIMITLINE_MACHINES_TTL") or "60"))
+        return machines.idle_hint()
     except Exception:
         return ""
 
@@ -46,15 +51,16 @@ def suggestion():
     empty = []
     for name in ORDER:
         data = run_provider(name)
-        used = lowest_pct(data)
-        if used is None:
+        found = lowest_window(data)
+        if found is None:
             empty.append(name)
             continue
+        used, rough = found
         if measured is None or used < measured[0]:
-            measured = (used, name)
+            measured = (used, name, "~" if rough else "")
     hint = idle_machine()
     if measured is not None and measured[0] < 50:
-        text = "%s %d%%" % (measured[1], int(measured[0] + 0.5))
+        text = "%s %s%d%%" % (measured[1], measured[2], int(measured[0] + 0.5))
         if hint:
             text += " · " + hint
         return text
@@ -64,7 +70,7 @@ def suggestion():
         if name in empty:
             return name + " ok"
     if measured is not None:
-        return "%s %d%%" % (measured[1], int(measured[0] + 0.5))
+        return "%s %s%d%%" % (measured[1], measured[2], int(measured[0] + 0.5))
     return ""
 
 

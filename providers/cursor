@@ -188,7 +188,10 @@ def main():
     if tokens <= 0:
         emit(empty)
         return
-    pct = int(tokens * 100 / budget() + 0.5)
+    # Not a quota reading. Cursor publishes no local token budget, so this is
+    # input+output tokens from the last 7 days over `cursor_week_tokens`.
+    limit = budget()
+    pct = int(tokens * 100 / limit + 0.5)
     if pct > 100:
         pct = 100
     emit({
@@ -196,7 +199,7 @@ def main():
         "provider": "cursor",
         "source": "estimate",
         "stale": False,
-        "windows": [{"name": "7d", "used_pct": pct}],
+        "windows": [{"budget": limit, "estimate": True, "name": "7d", "tokens": tokens, "used_pct": pct}],
     })
 
 

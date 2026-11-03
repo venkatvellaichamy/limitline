@@ -120,3 +120,14 @@ Pace on the full fixture adds `~15%/day left for 4d`. The over-80 fixture is ahe
 ## 0.4.0
 
 Fleet fixtures under `tests/fixtures/fleet/` produce `⚙ 3 run · 1 ✗`, `⚙ 1 run ⚠` for a stalled run, `⚙ ⚠` for a quota pause, and `⚙ 1 verify`. A process-list fixture counts `cursor-agent`, `codex exec`, `claude -p`, `grok`, and `agy` as five running. Repository fields are reduced to a basename. Machine fixtures produce `mini 27% qwen3:14b`, `worker-1 ∅`, and `laptop 10% qwen3:14b ⚠`. The refresh path reads those fixtures and does not invoke `ssh`. Cursor usage of 110,000 tokens against the default million-token week is `7d 11%`. An Antigravity `paused-quota` state and a two-line ledger are covered. With warm fleet and machine caches, a status-line render averaged 32 ms, under the 50 ms budget. Names in the fixtures are `mini`, `worker-1`, `laptop`, and `demo`.
+
+## 0.4.1
+
+Problems found on a real two-Mac setup, each with a test. The installed 0.4.0 line, fed a Claude Code 2.1.317-shaped payload that has only a `seven_day` window, printed `🧠 Opus 5.5 │ 📅 7d ▓▓▓░░ +53% fresh Wed 04:00 │ 📈 7d ▅▅ 53%` even at 130 columns. Two causes: the width fit measured the joined two-line output as one line, and macOS awk measured bytes, so each bar cell counted as three. Claude Code does keep every non-empty line of status output, and it passes the terminal width as `COLUMNS`. The 5-hour segment was absent because that payload carried no `five_hour` window. The `7d` window was the only one Claude Code sent.
+
+The machine number without a label was CPU load (1-minute load average over CPU count), not memory. `limitline refresh` and `memory_pressure`, run back to back on both hosts, now agree on the free percentage. A model loaded on an ssh host was invisible because non-interactive ssh has no Homebrew `PATH`.
+
+Pharos stores `started_at` as naive local time, and 0.4.0 read it as UTC. Ages were off by the UTC offset. `state.json` modification times and the last event in `events.jsonl` all move together on every Pharos sweep, so they are not activity signals. The window uses the recorded timestamps instead.
+
+The Cursor `7d 100%` came from about 3.1M input and output tokens in a week of cursor run logs, against the 1,000,000 default denominator, capped at 100. It is a ratio to a number the user picks, not a Cursor limit, so it is now shown as `~`.
+

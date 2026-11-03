@@ -123,7 +123,8 @@ def window_lines(rows, now):
                 extra = " ×%d" % machines
             when = rel(window.get("resets_at"), now)
             reset = ("  " + when) if when else ""
-            lines.append("  %s  %s  %d%%%s%s" % (name, bar(shown), shown, extra, reset))
+            mark = "~" if window.get("estimate") else ""
+            lines.append("  %s  %s  %s%d%%%s%s" % (name, bar(shown), mark, shown, extra, reset))
             if when:
                 resets.append("%s %s  %s" % (provider, name, when))
     return lines, resets

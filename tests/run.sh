@@ -36,7 +36,8 @@ unset NO_COLOR LIMITLINE_DEBUG LIMITLINE_DEBUG_FILE LIMITLINE_CODEX_DIR LIMITLIN
   LIMITLINE_FLEET_TTL LIMITLINE_MACHINES_TTL LIMITLINE_PHAROS_RUNS LIMITLINE_PHAROS_HOME \
   LIMITLINE_HOSTS LIMITLINE_MACHINE_DIR LIMITLINE_MACHINES_JSON LIMITLINE_LEDGER \
   LIMITLINE_CURSOR_LOG LIMITLINE_CURSOR_DIR LIMITLINE_CURSOR_WEEK_TOKENS LIMITLINE_PS_FILE \
-  LIMITLINE_SSH_TIMEOUT LIMITLINE_MEM_WARN
+  LIMITLINE_SSH_TIMEOUT LIMITLINE_MEM_WARN LIMITLINE_FLEET_WINDOW LIMITLINE_LAUNCHCTL \
+  LIMITLINE_LAUNCH_AGENTS XDG_DATA_HOME CLAUDE_CODE_REMOTE LINES
 : > "$TEST_HOME/empty-ps"
 export LIMITLINE_PS_FILE="$TEST_HOME/empty-ps"
 export LIMITLINE_REFRESH=0
@@ -569,27 +570,27 @@ else
 fi
 machines_line=$(cat "$XDG_CACHE_HOME/limitline/machines.line")
 machines_line=${machines_line%$'\n'}
-check "machines-segment" "$machines_line" 'mini 27% qwen3:14b · worker-1 ∅'
+check "machines-segment" "$machines_line" 'mini 41% free · qwen3:14b / worker-1 ∅'
 LIMITLINE_HOSTS=laptop LIMITLINE_MACHINE_DIR="$FIX/machines" "$BIN" refresh
 laptop_line=$(cat "$XDG_CACHE_HOME/limitline/machines.line")
 laptop_line=${laptop_line%$'\n'}
-check "machines-mem-warn" "$laptop_line" 'laptop 10% qwen3:14b ⚠'
+check "machines-mem-warn" "$laptop_line" 'laptop 10% free · qwen3:14b ⚠'
 machine_status=$(LIMITLINE_HOSTS=mini LIMITLINE_MACHINE_DIR="$FIX/machines" "$BIN" refresh >/dev/null; "$BIN" status)
-printf '%s' "$machine_status" | grep -q -F 'mini 27% qwen3:14b · 2 installed' \
+printf '%s' "$machine_status" | grep -q -F 'mini 41% free · qwen3:14b · load 27% · 2 installed' \
   && check "machines-installed" "yes" "yes" || check "machines-installed" "$machine_status" "installed"
 mkdir -p "$TEST_HOME/.pharos"
 cp "$FIX/fleet/pharos-machines.json" "$TEST_HOME/.pharos/machines.json"
 env -u LIMITLINE_HOSTS LIMITLINE_MACHINE_DIR="$FIX/machines" "$BIN" refresh
 pharos_hosts=$(cat "$XDG_CACHE_HOME/limitline/machines.line")
 pharos_hosts=${pharos_hosts%$'\n'}
-check "machines-pharos-list" "$pharos_hosts" 'mini 27% qwen3:14b · worker-1 ∅'
+check "machines-pharos-list" "$pharos_hosts" 'mini 41% free · qwen3:14b / worker-1 ∅'
 
 # Warm caches stay on the hot path: one line each, no python and no ssh.
 LIMITLINE_PHAROS_RUNS="$FIX/fleet/runs" LIMITLINE_HOSTS=mini LIMITLINE_MACHINE_DIR="$FIX/machines" "$BIN" refresh
 hot_payload='{"model":{"display_name":"Opus"}}'
 hot_got=$(printf '%s' "$hot_payload" | NO_COLOR=1 LIMITLINE_SEGMENTS=machines,fleet,model "$BIN" | strip_ansi)
 hot_got=${hot_got%$'\n'}
-check "hot-fleet-machines" "$hot_got" 'mini 27% qwen3:14b │ ⚙ 3 run · 1 ✗ │ Opus'
+check "hot-fleet-machines" "$hot_got" 'mini 41% free · qwen3:14b │ ⚙ 3 run · 1 ✗ │ Opus'
 touch -t 202001010000 "$XDG_CACHE_HOME/limitline/fleet.line" "$XDG_CACHE_HOME/limitline/machines.line"
 stale_got=$(printf '%s' "$hot_payload" | NO_COLOR=1 LIMITLINE_SEGMENTS=machines,fleet,model "$BIN" | strip_ansi)
 printf '%s' "$stale_got" | grep -q -F '⚙' && check "hot-cache-stale" "shown" "hidden" || check "hot-cache-stale" "hidden" "hidden"
@@ -606,7 +607,7 @@ printf '%s' "$swift_runs" | grep -q -F 'Fleet' && printf '%s' "$swift_runs" | gr
 
 cursor_got=$(LIMITLINE_CURSOR_LOG="$FIX/providers/cursor-usage.jsonl" "$ROOT/providers/cursor")
 cursor_got=${cursor_got%$'\n'}
-check "provider-cursor-estimate" "$cursor_got" '{"observed_at":1762056000,"provider":"cursor","source":"estimate","stale":false,"windows":[{"name":"7d","used_pct":11}]}'
+check "provider-cursor-estimate" "$cursor_got" '{"observed_at":1762056000,"provider":"cursor","source":"estimate","stale":false,"windows":[{"budget":1000000,"estimate":true,"name":"7d","tokens":110000,"used_pct":11}]}'
 agy_root="$TEST_HOME/agy-runs"
 mkdir -p "$agy_root/run-agy"
 cp "$FIX/providers/agy-state.json" "$agy_root/run-agy/state.json"
@@ -628,6 +629,128 @@ cfg_out=$("$BIN" config)
 printf '%s' "$cfg_out" | grep -q -F 'hosts = ["mini", "worker-1"]' \
   && printf '%s' "$cfg_out" | grep -q -F 'mem_free_warn = 15' \
   && check "config-fleet" "yes" "yes" || check "config-fleet" "no" "yes"
+
+# 0.4.1: fleet window. Live runs always count; finished runs only within fleet_window.
+win_line=$(LIMITLINE_PHAROS_RUNS="$FIX/fleet/window" "$ROOT/lib/fleet.py")
+check "fleet-window-default" "${win_line%$'\n'}" '⚙ 1 run · 1 verify'
+win_off=$(LIMITLINE_FLEET_WINDOW=off LIMITLINE_PHAROS_RUNS="$FIX/fleet/window" "$ROOT/lib/fleet.py")
+check "fleet-window-off" "${win_off%$'\n'}" '⚙ 1 run · 2 verify · 1 ✗'
+win_day=$(LIMITLINE_FLEET_WINDOW=1d LIMITLINE_PHAROS_RUNS="$FIX/fleet/window" "$ROOT/lib/fleet.py")
+check "fleet-window-1d" "${win_day%$'\n'}" '⚙ 1 run · 2 verify · 1 ✗'
+win_cfg="$TEST_HOME/window.toml"
+printf '%s\n' 'fleet_window = "30m"' > "$win_cfg"
+win_cfg_got=$(LIMITLINE_CONFIG="$win_cfg" LIMITLINE_PHAROS_RUNS="$FIX/fleet/window" "$ROOT/lib/fleet.py")
+check "fleet-window-config" "${win_cfg_got%$'\n'}" '⚙ 1 run'
+win_status=$(LIMITLINE_PHAROS_RUNS="$FIX/fleet/window" "$BIN" status)
+older_block=$(printf '%s\n' "$win_status" | sed -n '/^Older$/,$p')
+runs_block=$(printf '%s\n' "$win_status" | sed -n '/^Runs$/,/^$/p')
+printf '%s' "$older_block" | grep -q -F '1 verify · 1 ✗ · 1 stopped, last active over 12h ago' \
+  && printf '%s' "$older_block" | grep -q -F 'old-verify  cursor  widget  awaiting-verify' \
+  && printf '%s' "$runs_block" | grep -q -F 'recent-verif  cursor  demo  awaiting-verify' \
+  && ! printf '%s' "$runs_block" | grep -q -F 'old-verify' \
+  && check "fleet-status-older" "yes" "yes" || check "fleet-status-older" "$win_status" "Older block"
+LIMITLINE_PHAROS_RUNS="$FIX/fleet/window" LIMITLINE_HOSTS= "$BIN" refresh
+check "fleet-window-refresh" "$(cat "$XDG_CACHE_HOME/limitline/fleet.line")" '⚙ 1 run · 1 verify'
+
+# Pharos writes naive local time. Read it as local time, not UTC.
+tz_root="$TEST_HOME/tz-runs/run-tz"
+mkdir -p "$tz_root"
+printf '%s\n' '{"id": "run-tz", "status": "running", "tool": "codex", "repo": "demo", "started_at": "2025-11-02T09:00:00"}' > "$tz_root/state.json"
+tz_status=$(TZ=Asia/Kolkata LIMITLINE_PHAROS_RUNS="$TEST_HOME/tz-runs" "$BIN" status)
+printf '%s' "$tz_status" | grep -q -F 'run-tz  codex  demo  running  30m' \
+  && check "fleet-local-time" "yes" "yes" || check "fleet-local-time" "$tz_status" "30m in local time"
+
+# Machines: memory is "N% free" as memory_pressure prints it. No pressure output falls back to labelled load.
+probe_line=$(LIMITLINE_HOSTS=noprobe LIMITLINE_MACHINE_DIR="$FIX/machines" "$BIN" refresh; cat "$XDG_CACHE_HOME/limitline/machines.line")
+check "machines-load-label" "$probe_line" 'noprobe load 13%'
+path_ok=$(cd "$ROOT/lib" && python3 -c 'import refresh; print(refresh.SCRIPT.startswith("PATH=/opt/homebrew/bin:/usr/local/bin:$PATH"))')
+check "machines-probe-path" "$path_ok" "True"
+
+# Two lines: each line is fitted to the width on its own, so line 2 does not
+# push context off line 1. Payload shape from Claude Code 2.1.317 (7d only).
+LIMITLINE_PHAROS_RUNS="$FIX/fleet/runs" LIMITLINE_HOSTS=mini LIMITLINE_MACHINE_DIR="$FIX/machines" "$BIN" refresh
+two_fit=$(NO_COLOR=1 LIMITLINE_LINES=2 LIMITLINE_COLUMNS=80 LIMITLINE_FLEET=1 LIMITLINE_MACHINES=1 LIMITLINE_THEME=emoji "$BIN" < "$FIX/seven_day_only.json" | strip_ansi)
+line_one=$(printf '%s\n' "$two_fit" | sed -n 1p)
+line_two=$(printf '%s\n' "$two_fit" | sed -n 2p)
+widest=$(printf '%s\n' "$two_fit" | python3 -c 'import sys; print(max(len(l) for l in sys.stdin.read().splitlines()))')
+if printf '%s' "$line_one" | grep -q -F 'ctx' && printf '%s' "$line_one" | grep -q -F '7d' \
+  && printf '%s' "$line_two" | grep -q -F '⚙ 3 run' && printf '%s' "$line_two" | grep -q -F 'mini 41% free' \
+  && [[ "$widest" -le 80 ]]; then
+  check "two-line-fit" "yes" "yes"
+else
+  check "two-line-fit" "$two_fit" "ctx and 7d on line 1, fleet and machines on line 2, each <= 80"
+fi
+one_fit=$(NO_COLOR=1 LIMITLINE_COLUMNS=64 "$BIN" < "$FIX/seven_day_only.json" | strip_ansi)
+printf '%s' "$one_fit" | grep -q -F 'ctx' && printf '%s' "$one_fit" | grep -q -F '7d' \
+  && check "ctx-before-spark" "yes" "yes" || check "ctx-before-spark" "$one_fit" "ctx and 7d kept at 64 columns"
+
+# Background refresher: launchd is stubbed, plist goes under the test HOME.
+lc_log="$TEST_HOME/launchctl.log"
+lc_stub="$TEST_HOME/launchctl"
+printf '#!/bin/sh\necho "$@" >> "%s"\nexit 0\n' "$lc_log" > "$lc_stub"
+chmod +x "$lc_stub"
+agents="$TEST_HOME/Library/LaunchAgents"
+inst_out=$(LIMITLINE_LAUNCHCTL="$lc_stub" "$BIN" install-refresher)
+plist="$agents/dev.limitline.refresh.plist"
+plist_ok=$(python3 -c '
+import plistlib, sys
+d = plistlib.load(open(sys.argv[1], "rb"))
+print(d["StartInterval"] == 60 and d["ProcessType"] == "Background" and d["LowPriorityIO"] and d["Nice"] == 10 and d["ProgramArguments"][1].endswith("refresh-launcher.py"))
+' "$plist" 2>/dev/null)
+if [[ "$plist_ok" == "True" ]] && grep -q 'bootstrap gui/' "$lc_log" && [[ -x "$TEST_HOME/.local/share/limitline/refresh-launcher.py" ]] \
+  && printf '%s' "$inst_out" | grep -q -F 'every 60s'; then
+  check "refresher-install" "yes" "yes"
+else
+  check "refresher-install" "$inst_out" "plist, launcher, bootstrap"
+fi
+launch_run=$(cd "$TEST_HOME" && LIMITLINE_PHAROS_RUNS="$FIX/fleet/window" LIMITLINE_HOSTS= python3 "$TEST_HOME/.local/share/limitline/refresh-launcher.py"; cat "$XDG_CACHE_HOME/limitline/fleet.line")
+check "refresher-launcher-runs" "$launch_run" '⚙ 1 run · 1 verify'
+doc_ref=$(LIMITLINE_LAUNCHCTL="$lc_stub" "$BIN" doctor < /dev/null)
+printf '%s' "$doc_ref" | grep -q -F 'refresher: installed (launchd every 60s, loaded)' \
+  && check "doctor-refresher" "yes" "yes" || check "doctor-refresher" "$doc_ref" "refresher installed"
+LIMITLINE_LAUNCHCTL="$lc_stub" "$BIN" uninstall-refresher >/dev/null
+[[ ! -f "$plist" ]] && grep -q 'bootout gui/' "$lc_log" \
+  && check "refresher-uninstall" "yes" "yes" || check "refresher-uninstall" "still there" "removed"
+
+# Doctor names each fleet source and says why a segment is empty.
+rm -f "$XDG_CACHE_HOME/limitline/fleet.line" "$XDG_CACHE_HOME/limitline/machines.json"
+doc_empty=$(LIMITLINE_LAUNCHCTL="$lc_stub" LIMITLINE_FLEET=1 LIMITLINE_MACHINES=1 LIMITLINE_HOSTS= LIMITLINE_PHAROS_RUNS="$TEST_HOME/no-runs" "$BIN" doctor < /dev/null)
+printf '%s' "$doc_empty" | grep -q -F 'pharos runs: none; process scan sees 0 agent processes' \
+  && printf '%s' "$doc_empty" | grep -q -F 'fleet: no cache yet' \
+  && printf '%s' "$doc_empty" | grep -q -F 'machines: no hosts' \
+  && printf '%s' "$doc_empty" | grep -q -F 'refresher: missing' \
+  && printf '%s' "$doc_empty" | grep -q -F 'sync_dir: not set' \
+  && check "doctor-fleet-sources" "yes" "yes" || check "doctor-fleet-sources" "$doc_empty" "sources and reasons"
+doc_cloud=$(CLAUDE_CODE_REMOTE=true LIMITLINE_LAUNCHCTL="$lc_stub" "$BIN" doctor < /dev/null)
+printf '%s' "$doc_cloud" | grep -q -F 'session: cloud-hosted' \
+  && check "doctor-cloud" "yes" "yes" || check "doctor-cloud" "$doc_cloud" "cloud session"
+
+# sync_dir carries fleet and machine snapshots between machines.
+shared="$TEST_HOME/shared"
+mkdir -p "$shared/worker-2/cockpit" "$shared/old-host/cockpit"
+printf '%s\n' '{"observed_at": 1762055940, "counts": {"run": 1, "verify": 2, "failed": 0, "warn": 0, "stopped": 0}}' > "$shared/worker-2/cockpit/fleet.json"
+printf '%s\n' '{"observed_at": 1762055940, "hosts": [{"name": "worker-2", "reachable": true, "free_pct": 33, "load_pct": 5, "loaded": "qwen3:14b"}]}' > "$shared/worker-2/cockpit/machines.json"
+printf '%s\n' '{"observed_at": 1761900000, "counts": {"run": 9}}' > "$shared/old-host/cockpit/fleet.json"
+LIMITLINE_SYNC_DIR="$shared" LIMITLINE_HOST=laptop LIMITLINE_HOSTS=mini LIMITLINE_MACHINE_DIR="$FIX/machines" \
+  LIMITLINE_PHAROS_RUNS="$FIX/fleet/window" "$BIN" refresh
+check "sync-fleet-merge" "$(cat "$XDG_CACHE_HOME/limitline/fleet.line")" '⚙ 2 run · 3 verify'
+check "sync-machines-merge" "$(cat "$XDG_CACHE_HOME/limitline/machines.line")" 'mini 41% free · qwen3:14b / worker-2 33% free · qwen3:14b'
+[[ -f "$shared/laptop/cockpit/fleet.json" && -f "$shared/laptop/cockpit/machines.json" ]] \
+  && check "sync-publish-cockpit" "yes" "yes" || check "sync-publish-cockpit" "missing" "published"
+# A machine with no Pharos runs and no hosts (a cloud session with the folder) still sees the others.
+LIMITLINE_SYNC_DIR="$shared" LIMITLINE_HOST=cloud LIMITLINE_HOSTS= LIMITLINE_PHAROS_RUNS="$TEST_HOME/no-runs" "$BIN" refresh
+check "sync-consumer-only" "$(cat "$XDG_CACHE_HOME/limitline/fleet.line") | $(cat "$XDG_CACHE_HOME/limitline/machines.line")" '⚙ 2 run · 3 verify | mini 41% free · qwen3:14b / worker-2 33% free · qwen3:14b'
+
+# Cursor is an estimate: "~" everywhere, tokens and budget in status, ranked after measured windows.
+cur_status=$(LIMITLINE_CURSOR_LOG="$FIX/providers/cursor-usage.jsonl" LIMITLINE_CLAUDE_SNAPSHOT="$TEST_HOME/claude-snapshot.json" "$BIN" status)
+printf '%s' "$cur_status" | grep -q -F 'cursor   7d ~11% (estimate: 110k of 1.0M tokens)' \
+  && check "cursor-estimate-status" "yes" "yes" || check "cursor-estimate-status" "$cur_status" "~ and tokens"
+cur_host=$(LIMITLINE_CURSOR_LOG="$FIX/providers/cursor-usage.jsonl" "$BIN" --host prompt)
+printf '%s' "$cur_host" | grep -q -F 'cursor 7d ~11%' \
+  && check "cursor-estimate-host" "yes" "yes" || check "cursor-estimate-host" "$cur_host" "cursor 7d ~11%"
+cur_report=$(LIMITLINE_CURSOR_LOG="$FIX/providers/cursor-usage.jsonl" "$BIN" report)
+printf '%s' "$cur_report" | grep -q -F '~11%' \
+  && check "cursor-estimate-report" "yes" "yes" || check "cursor-estimate-report" "$cur_report" "~11%"
 
 # Typical speed without the Codex scan: average of 8 runs after one warmup.
 "$BIN" < "$FIX/full.json" >/dev/null

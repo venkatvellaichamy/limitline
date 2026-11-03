@@ -4,6 +4,10 @@ import json, os, re, sys, time
 from datetime import datetime, timezone
 
 RUN_STATES = {"starting", "running", "stalled"}
+# Counted no matter how old: the run is still live, or waiting to resume.
+ACTIVE_STATES = {"starting", "running", "paused-quota"}
+ACTIVITY_KEYS = ("last_activity", "finished_at", "ended_at", "completed_at", "updated_at", "started_at")
+DEFAULT_WINDOW = 12 * 3600
 VERIFY_STATES = {"awaiting-verify"}
 FAIL_STATES = {"failed", "verify-failed"}
 WARN_STATES = {"stalled", "paused-quota"}
@@ -44,7 +48,9 @@ def epoch_of(value):
     except ValueError:
         return None
     if stamp.tzinfo is None:
-        stamp = stamp.replace(tzinfo=timezone.utc)
+        # Pharos writes naive local time (2026-01-02T08:41:27). Read it as local,
+        # not UTC, or every age is off by the UTC offset.
+        return int(time.mktime(stamp.timetuple()))
     return int(stamp.timestamp())
 
 
@@ -147,10 +153,86 @@ def collect():
     return from_ps(read_ps())
 
 
+def parse_window(raw):
+    """`12h`, `90m`, `2d`, `3600s`, or a bare number of hours. `0` or `off` keeps every run."""
+    text = str(raw if raw is not None else "").strip().lower()
+    if text in ("", "default"):
+        return DEFAULT_WINDOW
+    if text in ("0", "off", "none", "all"):
+        return 0
+    unit = 3600
+    if text[-1:] in ("s", "m", "h", "d"):
+        unit = {"s": 1, "m": 60, "h": 3600, "d": 86400}[text[-1]]
+        text = text[:-1]
+    try:
+        value = float(text)
+    except ValueError:
+        return DEFAULT_WINDOW
+    if value <= 0:
+        return 0
+    return int(value * unit)
+
+
+def window_seconds():
+    try:
+        sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+        from config import setting
+        raw = setting("fleet_window", "LIMITLINE_FLEET_WINDOW", "")
+    except Exception:
+        raw = os.environ.get("LIMITLINE_FLEET_WINDOW", "")
+    return parse_window(raw)
+
+
+def window_label(seconds):
+    if seconds % 86400 == 0:
+        return "%dd" % (seconds // 86400)
+    if seconds % 3600 == 0:
+        return "%dh" % (seconds // 3600)
+    if seconds % 60 == 0:
+        return "%dm" % (seconds // 60)
+    return "%ds" % seconds
+
+
+def activity_epoch(state):
+    """Latest timestamp the run itself recorded. File mtimes are not used: Pharos
+    rewrites every state.json on a sweep, so they all look fresh."""
+    best = None
+    for key in ACTIVITY_KEYS:
+        stamp = epoch_of(state.get(key))
+        if stamp is not None and (best is None or stamp > best):
+            best = stamp
+    return best
+
+
+def is_recent(state, now, window):
+    status = str(state.get("status") or "")
+    if status in ACTIVE_STATES:
+        return True
+    if not window:
+        return True
+    stamp = activity_epoch(state)
+    if stamp is None:
+        return True
+    return now - stamp <= window
+
+
+def split_recent(states, now=None, window=None):
+    if now is None:
+        now = now_epoch()
+    if window is None:
+        window = window_seconds()
+    recent, older = [], []
+    for state in states:
+        (recent if is_recent(state, now, window) else older).append(state)
+    return recent, older
+
+
 def summarize(states):
-    counts = {"run": 0, "verify": 0, "failed": 0, "warn": 0}
+    counts = {"run": 0, "verify": 0, "failed": 0, "warn": 0, "stopped": 0}
     for state in states:
         status = str(state.get("status") or "")
+        if status == "stopped":
+            counts["stopped"] += 1
         if status in RUN_STATES:
             counts["run"] += 1
         elif status in VERIFY_STATES:
@@ -180,16 +262,34 @@ def format_segment(counts):
     return text
 
 
-def segment_text(states=None):
+def segment_text(states=None, now=None, window=None):
     if states is None:
         states = collect()
-    return format_segment(summarize(states))
+    recent, _ = split_recent(states, now=now, window=window)
+    return format_segment(summarize(recent))
+
+
+def older_summary(states):
+    counts = summarize(states)
+    parts = []
+    if counts.get("run"):
+        parts.append("%d run" % counts["run"])
+    if counts.get("verify"):
+        parts.append("%d verify" % counts["verify"])
+    if counts.get("failed"):
+        parts.append("%d ✗" % counts["failed"])
+    if counts.get("stopped"):
+        parts.append("%d stopped" % counts["stopped"])
+    other = len(states) - counts["run"] - counts["verify"] - counts["failed"] - counts["stopped"]
+    if other > 0:
+        parts.append("%d other" % other)
+    return " · ".join(parts)
 
 
 def age_of(state, now):
     stamp = epoch_of(state.get("started_at"))
     if stamp is None:
-        stamp = epoch_of(state.get("last_activity"))
+        stamp = activity_epoch(state)
     if stamp is None or not now:
         return "-"
     delta = int(now - stamp)
