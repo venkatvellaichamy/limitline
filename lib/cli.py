@@ -557,9 +557,28 @@ def cmd_report(markdown):
         sys.stdout.write("limitline report\n\nusage\n  no local windows yet\n")
 
 
+def watch_header():
+    try:
+        watch = load_lib("watch")
+        rows = prepare(load_all())
+        extra = []
+        for title, lines in cockpit_blocks():
+            # Runs and jobs are the selectable list in the interactive view.
+            if title in ("Runs", "Jobs", "Older"):
+                continue
+            extra.append(title)
+            extra.extend(lines)
+        return watch.frame(rows, extra)
+    except Exception:
+        return "limitline watch\n"
+
+
 def cmd_watch():
     import time
     once = os.environ.get("LIMITLINE_WATCH_ONCE") == "1" or not sys.stdout.isatty()
+    if os.environ.get("LIMITLINE_WATCH_KEYS") is not None or (not once and sys.stdin.isatty()):
+        load_lib("tui").main(watch_header)
+        return
     try:
         watch = load_lib("watch")
     except Exception:

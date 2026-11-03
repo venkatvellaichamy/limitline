@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.7.0
+
+- `limitline watch` is interactive in a terminal. It lists recent Pharos runs and jobs; `r` resumes, `s` stops (after `y`), and `l` opens logs, through `pharos resume|stop|logs <id>` for runs and signals for jobs on this machine. `p` pauses a job; Pharos has no per-run pause, so `P` and `U` run `pharos pause` and `pharos unpause`. Piped output and `LIMITLINE_WATCH_ONCE=1` still print one plain frame. The status line stays display-only.
+- 0.6 (budgets and forecasts) is deferred; see ROADMAP.md.
+
 ## 0.5.0
 
 - Cursor and Grok are one xAI plan. A new `xai-plan` provider reads `~/.cache/limitline/xai-plan.json` (`used_pct`, `resets_at`, `observed_at`, `plan`, `source`), and Cursor and Grok then render as one row: `cursor+grok 69% · Nov 5 · grok 7d 1.2M tok`. The reading is dimmed with its age after 6 hours, hidden after 7 days, and its percent is dropped once `resets_at` has passed. `limitline set xai-plan <pct> [--resets "YYYY-MM-DD HH:MM"] [--plan NAME]` writes the cache. Nudges use the plan percent.

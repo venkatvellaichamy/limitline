@@ -301,7 +301,21 @@ The Claude Code line shows `jobs mining 62/1842 ✗3 · backup ok 08:36`: runnin
 
 ## Watch
 
-`limitline watch` redraws every tool side by side every 5 seconds. In a terminal it clears the screen first. If stdout is not a terminal, or `LIMITLINE_WATCH_ONCE=1`, it prints one frame and exits.
+`limitline watch` redraws every tool side by side every 5 seconds. In a terminal it is interactive: below the tools is a list of recent Pharos runs and background jobs, and keys act on the selected one.
+
+| Key | Pharos run | Job on this machine |
+| --- | --- | --- |
+| `↑` `↓` or `k` `j` | select | select |
+| `r` | `pharos resume <id>` | `SIGCONT`, status `running` |
+| `s`, then `y` | `pharos stop <id>` | `SIGTERM`, status `stopped` |
+| `p` | not available: Pharos has no per-run pause | `SIGSTOP`, status `paused` |
+| `l` | `pharos logs <id>` in the pager | the job's `log` in the pager |
+| `P` / `U` | `pharos pause` / `pharos unpause` (new runs are held or let in) | same |
+| `q` | quit | quit |
+
+`LIMITLINE_PHAROS` points at another `pharos` binary. The pager is `$PAGER`, else `less -R +G`. A job is only signalled when it runs on this machine and its pid is alive; a job reported from another machine says so instead. Stop always asks `y/n`. The status line itself never runs these commands.
+
+If stdout is not a terminal, or `LIMITLINE_WATCH_ONCE=1`, it prints one plain frame and exits. `LIMITLINE_WATCH_KEYS="down s y q"` replays keys without a terminal, which is how the tests drive it.
 
 ## More than one Mac
 
@@ -380,4 +394,4 @@ limitline reads the status JSON a host already pipes in, an optional local confi
 tests/run.sh
 ```
 
-Fixtures cover a full payload, no rate limits, spend only, a near reset, usage over 80%, a context window near auto-compact, a cold prompt cache, a 60-column row, and every theme. The same script covers pace, sparklines, fresh wording, nudges, the value estimate, session vitals, alerts, the report, watch, and a two-machine merge. Fleet, machine, Cursor, Antigravity, Grok, and ledger fixtures are synthetic and use names such as `mini` and `worker-1`. ANSI colour codes are stripped before the comparison. The same fixtures are rendered once with `jq` and once with the python3 fallback. Codex fixtures cover many session files of mixed ages, a newest file with no event, a malformed last line, a second limit id, a 7-day window that outlives its 5-hour one, and events with no reset time. The shared plan has fixtures for a fresh, stale, reset, and week-old reading; jobs have fixtures for merging updates, a dead pid, another machine's pid, the finished-job window, and bad names. A warm status line, including a warm fleet, machine, or jobs cache, stays under 50 ms.
+Fixtures cover a full payload, no rate limits, spend only, a near reset, usage over 80%, a context window near auto-compact, a cold prompt cache, a 60-column row, and every theme. The same script covers pace, sparklines, fresh wording, nudges, the value estimate, session vitals, alerts, the report, watch, and a two-machine merge. Fleet, machine, Cursor, Antigravity, Grok, and ledger fixtures are synthetic and use names such as `mini` and `worker-1`. ANSI colour codes are stripped before the comparison. The same fixtures are rendered once with `jq` and once with the python3 fallback. Codex fixtures cover many session files of mixed ages, a newest file with no event, a malformed last line, a second limit id, a 7-day window that outlives its 5-hour one, and events with no reset time. The shared plan has fixtures for a fresh, stale, reset, and week-old reading; jobs have fixtures for merging updates, a dead pid, another machine's pid, the finished-job window, and bad names. The interactive watch is driven with replayed keys against a fake `pharos` and a real `sleep` process for job signals, and once in a pseudo-terminal. A warm status line, including a warm fleet, machine, or jobs cache, stays under 50 ms.
