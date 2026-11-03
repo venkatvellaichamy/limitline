@@ -299,6 +299,25 @@ The Claude Code line shows `jobs mining 62/1842 ✗3 · backup ok 08:36`: runnin
 
 `limitline report` prints usage bars for each tool, the last week of local 5-hour samples by day, the busiest hours, the project folder names that showed up most, and the resets that are still ahead. Names are the last path segment only. A full path is dropped. `limitline report --md` prints the same facts as Markdown.
 
+## History
+
+`limitline refresh` (so the background refresher, every minute) and `limitline status` each record one sample per plan, at most every 10 minutes, into `~/.cache/limitline/history/<plan>.tsv` (`LIMITLINE_HISTORY_DIR`) as `epoch percent resets_at`. Samples older than 30 days are dropped. Plans are measured windows only: `claude-5h`, `claude-7d`, `codex-5h`, `codex-7d`, `cursor+grok-week`, and `gemini-quota`. A stale row, a Cursor token estimate, or a window merged from several machines is never recorded.
+
+Finished jobs (ok, failed, stopped) and jobs found dead are appended once each to `~/.cache/limitline/jobs-history.jsonl` (`LIMITLINE_JOBS_HISTORY`), with their machine, counts, and finish time.
+
+`limitline history [--days N]` prints one mark per day (the day's peak, `.` for a day with no sample) and the job history per machine:
+
+```
+plans
+  claude-7d  ........................█.▄▁▅▅  peak 92% Oct 28 · last 58%
+
+jobs by machine
+  mini    2 jobs · 1 ok · 1 dead · 123 items · last crawler dead Nov 2 04:00
+  worker  1 job · 1 failed · 1800 items · 42 item failures · last mining failed Nov 2 04:00
+```
+
+`limitline report --week` (and `--week --md`) is the weekly report: for each plan, the 7-day sparkline, the peak and its day, the average daily peak, the days over 80%, and how many window resets the samples saw, then the week's jobs by machine. Days are local days.
+
 ## Watch
 
 `limitline watch` redraws every tool side by side every 5 seconds. In a terminal it is interactive: below the tools is a list of recent Pharos runs and background jobs, and keys act on the selected one.
@@ -394,4 +413,4 @@ limitline reads the status JSON a host already pipes in, an optional local confi
 tests/run.sh
 ```
 
-Fixtures cover a full payload, no rate limits, spend only, a near reset, usage over 80%, a context window near auto-compact, a cold prompt cache, a 60-column row, and every theme. The same script covers pace, sparklines, fresh wording, nudges, the value estimate, session vitals, alerts, the report, watch, and a two-machine merge. Fleet, machine, Cursor, Antigravity, Grok, and ledger fixtures are synthetic and use names such as `mini` and `worker-1`. ANSI colour codes are stripped before the comparison. The same fixtures are rendered once with `jq` and once with the python3 fallback. Codex fixtures cover many session files of mixed ages, a newest file with no event, a malformed last line, a second limit id, a 7-day window that outlives its 5-hour one, and events with no reset time. The shared plan has fixtures for a fresh, stale, reset, and week-old reading; jobs have fixtures for merging updates, a dead pid, another machine's pid, the finished-job window, and bad names. The interactive watch is driven with replayed keys against a fake `pharos` and a real `sleep` process for job signals, and once in a pseudo-terminal. A warm status line, including a warm fleet, machine, or jobs cache, stays under 50 ms.
+Fixtures cover a full payload, no rate limits, spend only, a near reset, usage over 80%, a context window near auto-compact, a cold prompt cache, a 60-column row, and every theme. The same script covers pace, sparklines, fresh wording, nudges, the value estimate, session vitals, alerts, the report, watch, and a two-machine merge. Fleet, machine, Cursor, Antigravity, Grok, and ledger fixtures are synthetic and use names such as `mini` and `worker-1`. ANSI colour codes are stripped before the comparison. The same fixtures are rendered once with `jq` and once with the python3 fallback. Codex fixtures cover many session files of mixed ages, a newest file with no event, a malformed last line, a second limit id, a 7-day window that outlives its 5-hour one, and events with no reset time. The shared plan has fixtures for a fresh, stale, reset, and week-old reading; jobs have fixtures for merging updates, a dead pid, another machine's pid, the finished-job window, and bad names. History has fixtures for the 10-minute sample gap, 30-day pruning, daily peaks, the weekly table, and jobs per machine, including a dead pid. The interactive watch is driven with replayed keys against a fake `pharos` and a real `sleep` process for job signals, and once in a pseudo-terminal. A warm status line, including a warm fleet, machine, or jobs cache, stays under 50 ms.

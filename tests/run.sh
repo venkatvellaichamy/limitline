@@ -40,7 +40,8 @@ unset NO_COLOR LIMITLINE_DEBUG LIMITLINE_DEBUG_FILE LIMITLINE_CODEX_DIR LIMITLIN
   LIMITLINE_LAUNCH_AGENTS XDG_DATA_HOME CLAUDE_CODE_REMOTE LINES \
   LIMITLINE_GROK LIMITLINE_GROK_SETTINGS LIMITLINE_GROK_LINE LIMITLINE_GROK_TTL \
   LIMITLINE_XAI_PLAN LIMITLINE_JOBS LIMITLINE_JOBS_TTL LIMITLINE_JOBS_DIR LIMITLINE_JOBS_LINE \
-  LIMITLINE_PHAROS LIMITLINE_PAGER LIMITLINE_WATCH_KEYS PAGER
+  LIMITLINE_PHAROS LIMITLINE_PAGER LIMITLINE_WATCH_KEYS PAGER \
+  LIMITLINE_HISTORY_DIR LIMITLINE_JOBS_HISTORY
 : > "$TEST_HOME/empty-ps"
 export LIMITLINE_PS_FILE="$TEST_HOME/empty-ps"
 export LIMITLINE_REFRESH=0
@@ -1036,6 +1037,56 @@ printf '%s' "$cfg_pharos" | grep -q -F '> pharos resume run-a: ok resume run-a' 
   && check "tui-pharos-config" "yes" "yes" || check "tui-pharos-config" "$cfg_pharos" "pharos from config"
 pty_got=$(LIMITLINE_PHAROS_RUNS="$FIX/fleet/runs" HOME="$TEST_HOME" python3 "$ROOT/tests/pty_watch.py" "$BIN")
 check "tui-pty" "$pty_got" "exited selected-b cursor-restored"
+
+# 30-day history (0.8): plan samples, sparklines, the weekly report, and jobs per machine.
+hist_home="$TEST_HOME/hist"
+mkdir -p "$hist_home/plans"
+export LIMITLINE_HISTORY_DIR="$hist_home/plans" LIMITLINE_JOBS_HISTORY="$hist_home/jobs-history.jsonl"
+export LIMITLINE_JOBS_DIR="$hist_home/jobs" LIMITLINE_JOBS_LINE="$hist_home/jobs.line" LIMITLINE_HOST=mini
+LIMITLINE_CLAUDE_SNAPSHOT="$TEST_HOME/claude-snapshot.json" LIMITLINE_CODEX_DIR="$codex_prov" LIMITLINE_CURSOR_LOG="$FIX/providers/cursor-usage.jsonl" "$BIN" status >/dev/null
+check "history-record-plans" "$(ls "$hist_home/plans" | tr '\n' ' ')" 'claude-5h.tsv claude-7d.tsv codex-5h.tsv codex-7d.tsv '
+check "history-record-line" "$(cat "$hist_home/plans/codex-7d.tsv")" '1762056000 55 1762419600'
+LIMITLINE_NOW=1762056300 LIMITLINE_CLAUDE_SNAPSHOT="$TEST_HOME/claude-snapshot.json" LIMITLINE_CODEX_DIR="$codex_prov" "$BIN" status >/dev/null
+check "history-ten-minute-gap" "$(wc -l < "$hist_home/plans/codex-7d.tsv" | tr -d ' ')" '1'
+LIMITLINE_NOW=1762056700 LIMITLINE_CLAUDE_SNAPSHOT="$TEST_HOME/claude-snapshot.json" LIMITLINE_CODEX_DIR="$codex_prov" "$BIN" status >/dev/null
+check "history-second-sample" "$(wc -l < "$hist_home/plans/codex-7d.tsv" | tr -d ' ')" '2'
+rm -f "$hist_home/plans/"*.tsv
+printf '%s\n' '1758000000 99 -' '1761645600 92 1761850000' '1761649200 70 1761850000' '1761818400 40 1761850000' \
+  '1761890400 10 1762419600' '1761980400 60 1762419600' '1762052400 58 1762419600' > "$hist_home/plans/claude-7d.tsv"
+hist_got=$("$BIN" history | sed -n 4p)
+check "history-spark" "$hist_got" '  claude-7d  ........................█.▄▁▅▅  peak 92% Oct 28 · last 58%'
+hist_week=$("$BIN" report --week | sed -n 4p)
+check "report-week-plan" "$hist_week" '  claude-7d  .█.▄▁▅▅  peak 92% Oct 28 · avg 52% · 1 day over 80% · 1 reset seen'
+check "history-days" "$("$BIN" history --days 7 | sed -n 4p)" '  claude-7d  .█.▄▁▅▅  peak 92% Oct 28 · last 58%'
+LIMITLINE_NOW=1762059600 "$BIN" status >/dev/null
+check "history-prunes-30d" "$(head -n 1 "$hist_home/plans/claude-7d.tsv" | cut -d' ' -f1)" '1761645600'
+
+# Finished jobs are kept once each, per machine; a dead pid is history too.
+"$BIN" job update backup --status ok --done 120 >/dev/null
+"$BIN" job update backup --status ok >/dev/null
+"$BIN" job update mining --machine worker --done 1800 --total 1842 --failed 42 --status failed >/dev/null
+sleep 0 &
+gone=$!
+wait "$gone" 2>/dev/null
+"$BIN" job update crawler --done 3 --pid "$gone" >/dev/null
+python3 "$ROOT/lib/refresh.py"
+check "jobs-history-once" "$(wc -l < "$hist_home/jobs-history.jsonl" | tr -d ' ')" '3'
+grep -q '"name": "crawler".*"status": "dead"' "$hist_home/jobs-history.jsonl" \
+  && check "jobs-history-dead" "yes" "yes" || check "jobs-history-dead" "$(cat "$hist_home/jobs-history.jsonl")" "dead recorded"
+jobs_hist=$("$BIN" history | sed -n '/^jobs by machine/,$p')
+check "history-jobs-by-machine" "$jobs_hist" "$(printf '%s\n' 'jobs by machine' '  mini    2 jobs · 1 ok · 1 dead · 123 items · last crawler dead Nov 2 04:00' '  worker  1 job · 1 failed · 1800 items · 42 item failures · last mining failed Nov 2 04:00')"
+md_week=$("$BIN" report --week --md)
+printf '%s' "$md_week" | grep -q -F '| claude-7d `.█.▄▁▅▅` | 5 | 92% on Oct 28 | 52% | 1 | 1 |' \
+  && printf '%s' "$md_week" | grep -q -F -- '- worker  1 job · 1 failed' \
+  && check "report-week-md" "yes" "yes" || check "report-week-md" "$md_week" "markdown table and jobs"
+empty_hist=$(LIMITLINE_HISTORY_DIR="$hist_home/none" LIMITLINE_JOBS_HISTORY="$hist_home/none.jsonl" "$BIN" history)
+printf '%s' "$empty_hist" | grep -q -F 'no samples yet' && printf '%s' "$empty_hist" | grep -q -F 'no finished jobs yet' \
+  && check "history-empty" "yes" "yes" || check "history-empty" "$empty_hist" "empty messages"
+# A cursor estimate is never recorded as history.
+LIMITLINE_CURSOR_LOG="$FIX/providers/cursor-usage.jsonl" LIMITLINE_NOW=1762070000 "$BIN" status >/dev/null
+[[ -e "$hist_home/plans/cursor-7d.tsv" ]] && check "history-skips-estimate" "recorded" "skipped" || check "history-skips-estimate" "skipped" "skipped"
+rm -rf "$hist_home"
+unset LIMITLINE_HISTORY_DIR LIMITLINE_JOBS_HISTORY LIMITLINE_JOBS_DIR LIMITLINE_JOBS_LINE LIMITLINE_HOST
 
 # Typical speed without the Codex scan: average of 8 runs after one warmup.
 "$BIN" < "$FIX/full.json" >/dev/null

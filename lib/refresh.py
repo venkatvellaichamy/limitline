@@ -195,8 +195,19 @@ def write_jobs():
     jobs.write_line()
 
 
+def write_history():
+    """One plan sample per 10 minutes, from the same rows limitline status reads."""
+    import importlib.util
+    path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "cli.py")
+    spec = importlib.util.spec_from_file_location("limitline_cli", path)
+    cli = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(cli)
+    import history
+    history.record(cli.load_all())
+
+
 def main():
-    for step in (write_grok, write_jobs, write_fleet, write_machines):
+    for step in (write_grok, write_jobs, write_fleet, write_machines, write_history):
         try:
             step()
         except Exception:

@@ -151,3 +151,8 @@ Tests: 204 pass. Speed: `speed-31ms`, `warm-cache-32ms`, and a new `jobs-warm-29
 ## 0.7.0
 
 `pharos --help` on this Mac lists `pause`, `unpause`, `resume`, `stop`, and `logs`. `pharos pause` and `pharos unpause` take no run id: they hold or reopen admissions for new runs. `resume`, `logs`, and `stop` take a `run_id`. So the watch maps `r`, `s`, and `l` to the selected run, and puts the global pause on `P` / `U` rather than pretending to pause one run. Tests replay keys against a fake `pharos` that records its arguments (`resume run-a,stop run-b,pause,unpause,logs run-b`), pause, resume, and stop a real `sleep` process registered as a job (checked with `ps -o stat=`), refuse a job reported from another machine, and run the real loop once in a pseudo-terminal to check that the arrow key moves the selection and `q` restores the cursor. 214 tests pass.
+
+
+## 0.8.0
+
+History is built only from rows `limitline status` already trusts. Estimated windows (the Cursor token ratio), stale rows, and windows merged from several machines are skipped, so a sparkline cannot be drawn from a guess. Each plan keeps at most one sample per 10 minutes, and every file is pruned to 30 days whenever any sample is written. A day's mark is that local day's peak. "Resets seen" counts samples whose `resets_at` moved later, so it only counts windows that limitline actually observed rolling over. Job history records a job once per `(machine, name, started_at)` when it finishes or when its pid is found gone. 228 tests pass. The speed tests are unchanged, because nothing on the status-line path reads history.

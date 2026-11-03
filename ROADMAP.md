@@ -14,11 +14,11 @@ limitline stays local: no network calls, no account logins, and every number eit
 - `limitline watch` is a TUI with keys to stop, resume, or open the logs of Pharos runs (`pharos stop|resume|logs <id>`) and to pause, stop, resume, or read the logs of jobs. Pharos only pauses admissions as a whole (`pharos pause` takes no run id), so that is `P` / `U`.
 - The status line itself stays display-only.
 
-## 0.8 History
+## 0.8 History (done)
 
-- A 30-day local history per plan, with sparklines.
-- A weekly report.
-- Per-machine job history.
+- A 30-day local history per plan, with sparklines: `limitline history`.
+- A weekly report: `limitline report --week [--md]`.
+- Per-machine job history from finished and dead jobs.
 
 ## Later
 

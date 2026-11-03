@@ -224,8 +224,16 @@ def cockpit_blocks(swiftbar=False):
     return blocks
 
 
+def record_history(rows):
+    try:
+        load_lib("history").record(rows)
+    except Exception:
+        pass
+
+
 def cmd_status():
     rows = prepare(load_all())
+    record_history(rows)
     width = max([8] + [len(label(row)) for row in rows])
     print("%-*s %s" % (width, "tool", "limits"))
     for row in rows:
@@ -551,7 +559,13 @@ def cmd_config():
     print("# LIMITLINE_ASCII=1 forces the ascii theme. NO_COLOR disables ANSI.")
 
 
-def cmd_report(markdown):
+def cmd_report(markdown, week=False):
+    if week:
+        try:
+            sys.stdout.write(load_lib("history").render_week(markdown=markdown))
+        except Exception:
+            sys.stdout.write("limitline weekly report\n\nno local history yet\n")
+        return
     try:
         rows = prepare(load_all())
         sys.stdout.write(load_lib("report").render(rows, markdown=markdown))
@@ -610,7 +624,7 @@ def cmd_theme():
 
 
 USAGE = ("usage: limitline status | --host NAME | preview | doctor | config | report | watch | theme | refresh"
-         " | set xai-plan PCT [--resets \"YYYY-MM-DD HH:MM\"] [--plan NAME] | job update|list|rm"
+         " | history [--days N] | report [--week] [--md] | set xai-plan PCT [--resets \"YYYY-MM-DD HH:MM\"] [--plan NAME] | job update|list|rm"
          " | install-refresher | uninstall-refresher")
 
 
@@ -689,7 +703,9 @@ def main(argv):
     elif cmd == "config":
         cmd_config()
     elif cmd == "report":
-        cmd_report("--md" in argv[1:])
+        cmd_report("--md" in argv[1:], week="--week" in argv[1:])
+    elif cmd == "history":
+        sys.exit(load_lib("history").main(argv[1:]) or 0)
     elif cmd == "watch":
         cmd_watch()
     elif cmd == "theme":
