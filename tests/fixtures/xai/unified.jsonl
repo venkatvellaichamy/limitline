@@ -1,0 +1,6 @@
+{"ts":"2025-11-02T01:00:00.000Z","src":"shell","pid":1,"ver":"1.0.70","lvl":"info","msg":"billing: fetched credits config","ctx":{"config":{"creditUsagePercent":61.0,"currentPeriod":{"type":"USAGE_PERIOD_TYPE_WEEKLY","start":"2025-10-31T05:22:35.070+00:00","end":"2025-11-07T05:22:35.070+00:00"},"prepaidBalance":{"val":0},"isUnifiedBillingUser":true},"onDemandEnabled":null,"subscriptionTier":"SuperGrok Plus"}}
+{"ts":"2025-11-02T02:00:00.000Z","src":"shell","pid":1,"ver":"1.0.70","lvl":"info","msg":"session: started","ctx":{}}
+{"ts":"2025-11-02T03:30:00.000Z","src":"shell","pid":2,"ver":"1.0.70","lvl":"info","msg":"billing: fetched credits config","ctx":{"config":{"creditUsagePercent":74.0,"currentPeriod":{"type":"USAGE_PERIOD_TYPE_WEEKLY","start":"2025-10-31T05:22:35.070+00:00","end":"2025-11-07T05:22:35.070+00:00"},"prepaidBalance":{"val":0},"isUnifiedBillingUser":true},"onDemandEnabled":null,"subscriptionTier":"SuperGrok Plus"}}
+{"ts":"2025-11-02T03:40:00.000Z","src":"shell","pid":2,"ver":"1.0.70","lvl":"info","msg":"billing: fetched credits config","ctx":{"config":{"creditUsagePercent":"n/a"}}}
+{"ts":"2025-11-02T03:45:00.000Z","msg":"billing: fetched credits config","ctx":{"config":{"creditUsagePercent":99.0,
+{"ts":"2025-11-02T03:50:00.000Z","src":"shell","pid":2,"ver":"1.0.70","lvl":"info","msg":"render: frame","ctx":{}}

@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # limitline — local usage-limit status line for Claude Code.
 # Reads one JSON object on stdin. No network. Always exits 0.
-# Version: 0.8.1
+# Version: 0.8.2
 
 _here=${0%/*}
 [[ "$_here" == "$0" ]] && _here="."
@@ -14,12 +14,13 @@ limitline — local usage limits for Claude Code and nearby CLIs
   bin/limitline < status.json
   bin/limitline status
   bin/limitline --host tmux|starship|prompt|json|swiftbar|cursor|codex
-  bin/limitline preview|doctor|config|report|watch|theme|refresh
+  bin/limitline preview|doctor|config|report|watch|theme|refresh [--force]
   bin/limitline set xai-plan PCT [--resets "YYYY-MM-DD HH:MM"] [--plan NAME]
   bin/limitline job update NAME --done N --total N --failed N --status running
   bin/limitline job list|rm NAME
   bin/limitline history [--days N] | report --week [--md]
   bin/limitline install-refresher|uninstall-refresher
+  bin/limitline schedule install|uninstall|status
 
 Config: ~/.config/limitline/config or config.toml
 EOF
@@ -27,7 +28,7 @@ EOF
 fi
 
 case "${1:-}" in
-  status|preview|doctor|config|report|watch|theme|refresh|install-refresher|uninstall-refresher|--host|set|job|history)
+  status|preview|doctor|config|report|watch|theme|refresh|install-refresher|uninstall-refresher|schedule|--host|set|job|history)
     if command -v python3 >/dev/null 2>&1; then
       exec python3 "$LIMITLINE_ROOT/lib/cli.py" "$@"
     fi
@@ -1102,7 +1103,8 @@ kick_refresh() {
     fi
   fi
   : > "$lock" 2>/dev/null || return 0
-  nohup python3 "$LIMITLINE_ROOT/lib/refresh.py" >/dev/null 2>&1 &
+  # --no-fetch: the Grok plan fetch (a pty session) never starts from the status line.
+  nohup python3 "$LIMITLINE_ROOT/lib/refresh.py" --no-fetch >/dev/null 2>&1 &
 }
 
 fleet_text=""

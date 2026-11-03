@@ -41,10 +41,14 @@ unset NO_COLOR LIMITLINE_DEBUG LIMITLINE_DEBUG_FILE LIMITLINE_CODEX_DIR LIMITLIN
   LIMITLINE_GROK LIMITLINE_GROK_SETTINGS LIMITLINE_GROK_LINE LIMITLINE_GROK_TTL \
   LIMITLINE_XAI_PLAN LIMITLINE_JOBS LIMITLINE_JOBS_TTL LIMITLINE_JOBS_DIR LIMITLINE_JOBS_LINE \
   LIMITLINE_PHAROS LIMITLINE_PAGER LIMITLINE_WATCH_KEYS PAGER \
-  LIMITLINE_HISTORY_DIR LIMITLINE_JOBS_HISTORY
+  LIMITLINE_HISTORY_DIR LIMITLINE_JOBS_HISTORY \
+  LIMITLINE_GROK_LOG LIMITLINE_GROK_BIN LIMITLINE_XAI_TTL LIMITLINE_XAI_BOOT LIMITLINE_XAI_QUIET \
+  LIMITLINE_XAI_TYPE_PAUSE LIMITLINE_XAI_TIMEOUT FAKE_PCT FAKE_TS FAKE_STUBBORN FAKE_SILENT
 : > "$TEST_HOME/empty-ps"
 export LIMITLINE_PS_FILE="$TEST_HOME/empty-ps"
 export LIMITLINE_REFRESH=0
+# The Grok plan fetch starts a CLI in a pty; only the refresher tests turn it on.
+export LIMITLINE_XAI_FETCH=0
 
 fail=0
 pass=0
@@ -869,14 +873,20 @@ cur_nudge=$(NO_COLOR=1 LIMITLINE_NUDGES=1 LIMITLINE_CURSOR_LOG="$FIX/providers/c
 printf '%s' "$cur_nudge" | grep -q -F '→ cursor ~11% estimate' \
   && check "cursor-estimate-nudge" "yes" "yes" || check "cursor-estimate-nudge" "$cur_nudge" "→ cursor ~11% estimate"
 
-# Shared Cursor + Grok plan (0.5). One subscription, one row, from a cache the user or a
-# browser helper writes. The cache path is an override so nothing touches ~/.cache.
+# Shared Cursor + Grok plan. Live source (0.8.2): the newest "fetched credits config"
+# line in the Grok log. Manual override: the xai-plan.json cache, always labelled manual.
+# Every path is an override, so nothing touches ~/.grok or ~/.cache.
 plan_home="$TEST_HOME/plan"
 mkdir -p "$plan_home"
 export LIMITLINE_XAI_PLAN="$plan_home/xai-plan.json"
 export LIMITLINE_GROK_LINE="$plan_home/grok.line"
+export LIMITLINE_GROK_LOG="$plan_home/unified.jsonl"
 export LIMITLINE_CURSOR_LOG="$FIX/providers/cursor-usage.jsonl"
 export LIMITLINE_GROK_DIR="$TEST_HOME/grok"
+rm -f "$XDG_CACHE_HOME/limitline/xai-fetch.json"
+
+# Missing log and no manual cache: no plan row, the Cursor estimate stays.
+check "xai-log-missing" "$("$ROOT/providers/xai-plan")" '{"label":"cursor+grok","observed_at":null,"provider":"xai-plan","source":"none","stale":false,"windows":[]}'
 noplan_status=$("$BIN" status)
 printf '%s' "$noplan_status" | grep -q -F 'cursor   7d ~11% estimate (110k of 1.0M tokens)' \
   && printf '%s' "$noplan_status" | grep -q -F 'grok     7d 14 tok' \
@@ -886,60 +896,195 @@ noplan_host=$("$BIN" --host prompt)
 printf '%s' "$noplan_host" | grep -q -F 'cursor 7d ~11% estimate' \
   && check "plan-absent-host-estimate" "yes" "yes" || check "plan-absent-host-estimate" "$noplan_host" "cursor 7d ~11% estimate"
 
-set_out=$("$BIN" set xai-plan 69 --resets "2025-11-05 09:00" --plan Super)
-check "set-xai-plan" "$set_out" 'cursor+grok 69% · resets Nov 5 · Super'
-check "set-xai-plan-cache" "$(python3 -c 'import json,sys; d=json.load(open(sys.argv[1])); print(d["used_pct"], d["resets_at"], d["observed_at"], d["plan"], d["source"])' "$LIMITLINE_XAI_PLAN")" '69 1762333200 1762056000 Super manual'
-check "provider-xai-plan" "$("$ROOT/providers/xai-plan")" '{"age":0,"label":"cursor+grok","observed_at":1762056000,"plan":"Super","provider":"xai-plan","source":"manual","stale":false,"windows":[{"name":"week","resets_at":1762333200,"used_pct":69}]}'
-
-plan_status=$("$BIN" status)
-printf '%s' "$plan_status" | grep -q -F 'cursor+grok 69% · resets Nov 5 · Super · grok 7d 14 tok' \
-  && ! printf '%s' "$plan_status" | grep -q -E '^cursor |^grok |estimate' \
-  && check "plan-status-one-row" "yes" "yes" || check "plan-status-one-row" "$plan_status" "one cursor+grok row, no estimate"
-plan_host=$("$BIN" --host prompt)
-printf '%s' "$plan_host" | grep -q -F 'cursor+grok 69% · Nov 5 · grok 7d 14 tok' \
-  && ! printf '%s' "$plan_host" | grep -q -F 'estimate' \
-  && check "plan-host" "yes" "yes" || check "plan-host" "$plan_host" "cursor+grok 69% · Nov 5"
+# Live: the newest line that parses wins. A later marker line with a bad percent and a
+# truncated one are skipped; an older 61% reading is not used.
+cp "$FIX/xai/unified.jsonl" "$LIMITLINE_GROK_LOG"
+check "provider-xai-live" "$("$ROOT/providers/xai-plan")" '{"age":1800,"label":"cursor+grok","observed_at":1762054200,"plan":"SuperGrok Plus","provider":"xai-plan","source":"live","stale":false,"windows":[{"name":"week","resets_at":1762492955,"used_pct":74}]}'
+live_status=$("$BIN" status)
+printf '%s' "$live_status" | grep -q -F 'cursor+grok 74% · resets Fri 05:22 · SuperGrok Plus · live · grok 7d 14 tok' \
+  && ! printf '%s' "$live_status" | grep -q -E '^cursor |^grok |estimate|manual' \
+  && check "plan-live-status" "yes" "yes" || check "plan-live-status" "$live_status" "one live cursor+grok row"
+live_host=$("$BIN" --host prompt)
+printf '%s' "$live_host" | grep -q -F 'cursor+grok 74% · Fri 05:22 · grok 7d 14 tok' \
+  && check "plan-live-host" "yes" "yes" || check "plan-live-host" "$live_host" "cursor+grok 74% · Fri 05:22"
 plan_watch=$(LIMITLINE_WATCH_ONCE=1 "$BIN" watch)
 printf '%s' "$plan_watch" | grep -q -F 'cursor+grok' && ! printf '%s' "$plan_watch" | grep -q -F 'estimate' \
   && check "plan-watch" "yes" "yes" || check "plan-watch" "$plan_watch" "cursor+grok column"
-check "plan-grok-line" "$(cat "$LIMITLINE_GROK_LINE")" "$(printf '%s\n%s' 'cursor+grok 69% · Nov 5 · grok 7d 14 tok' '69 0')"
+python3 "$ROOT/lib/refresh.py" --no-fetch
+check "plan-live-grok-line" "$(cat "$LIMITLINE_GROK_LINE")" "$(printf '%s\n%s' 'cursor+grok 74% · Fri 05:22 · grok 7d 14 tok' '74 0 live')"
 plan_line=$(LIMITLINE_GROK=1 "$BIN" < "$FIX/no_rate_limits.json")
-check "plan-status-line" "$(printf '%s' "$plan_line" | strip_ansi)" 'Opus 5.5 │ ctx ▓▓░░░ ·41% │ $0.12 │ cursor+grok +69% · Nov 5 · grok 7d 14 tok'
-printf '%s' "$plan_line" | grep -q -F $'\033[33m+69%' \
-  && check "plan-status-line-colour" "yes" "yes" || check "plan-status-line-colour" "no" "yes"
+check "plan-status-line" "$(printf '%s' "$plan_line" | strip_ansi)" 'Opus 5.5 │ ctx ▓▓░░░ ·41% │ $0.12 │ cursor+grok +74% · Fri 05:22 · grok 7d 14 tok'
+printf '%s' "$plan_line" | grep -q -F $'\033[33m+74%' \
+  && check "plan-status-line-colour" "yes" "yes" || check "plan-status-line-colour" "$(printf '%s' "$plan_line" | cat -v)" "coloured live percent"
 plan_seg=$(NO_COLOR=1 LIMITLINE_SEGMENTS="model,cursor+grok" "$BIN" < "$FIX/no_rate_limits.json")
-check "plan-segment-alias" "$plan_seg" 'Opus 5.5 │ cursor+grok +69% · Nov 5 · grok 7d 14 tok'
+check "plan-segment-alias" "$plan_seg" 'Opus 5.5 │ cursor+grok +74% · Fri 05:22 · grok 7d 14 tok'
 plan_nudge=$(NO_COLOR=1 LIMITLINE_NUDGES=1 "$BIN" < "$FIX/over_80.json" | strip_ansi)
 printf '%s' "$plan_nudge" | grep -q -F '→ cursor ok' \
   && check "plan-nudge-no-cursor-ok" "no" "yes" || check "plan-nudge-no-cursor-ok" "yes" "yes"
 
+# Live beats an older manual value.
+printf '%s\n' '{"used_pct": 69, "resets_at": 1762333200, "observed_at": 1762052400, "plan": "Super", "source": "dashboard"}' > "$LIMITLINE_XAI_PLAN"
+older_manual=$("$BIN" status)
+printf '%s' "$older_manual" | grep -q -F 'cursor+grok 74% · resets Fri 05:22 · SuperGrok Plus · live' && ! printf '%s' "$older_manual" | grep -q -F '69%' \
+  && check "plan-live-over-older-manual" "yes" "yes" || check "plan-live-over-older-manual" "$older_manual" "live 74%"
+
+# A newer manual value is shown, but labelled manual and dimmed, never as live.
+set_out=$("$BIN" set xai-plan 69 --resets "2025-11-05 09:00" --plan Super)
+check "set-xai-plan" "$set_out" 'cursor+grok 69% · manual · resets Wed 09:00 · Super'
+check "set-xai-plan-cache" "$(python3 -c 'import json,sys; d=json.load(open(sys.argv[1])); print(d["used_pct"], d["resets_at"], d["observed_at"], d["plan"], d["source"])' "$LIMITLINE_XAI_PLAN")" '69 1762333200 1762056000 Super manual'
+check "provider-xai-manual" "$("$ROOT/providers/xai-plan")" '{"age":0,"label":"cursor+grok","observed_at":1762056000,"plan":"Super","provider":"xai-plan","source":"manual","stale":false,"windows":[{"name":"week","resets_at":1762333200,"used_pct":69}]}'
+check "plan-manual-grok-line" "$(cat "$LIMITLINE_GROK_LINE")" "$(printf '%s\n%s' 'cursor+grok 69% · manual · Wed 09:00 · grok 7d 14 tok' '69 1 manual')"
+manual_line=$(LIMITLINE_GROK=1 "$BIN" < "$FIX/no_rate_limits.json")
+printf '%s' "$manual_line" | grep -q -F $'\033[2mcursor+grok 69% · manual · Wed 09:00 · grok 7d 14 tok' \
+  && check "plan-manual-dim" "yes" "yes" || check "plan-manual-dim" "$(printf '%s' "$manual_line" | cat -v)" "dimmed manual segment"
+# A cache with no source at all is still manual.
+printf '%s\n' '{"used_pct": 69, "resets_at": 1762333200, "observed_at": 1762056000}' > "$LIMITLINE_XAI_PLAN"
+check "plan-manual-default-source" "$("$ROOT/providers/xai-plan" | python3 -c 'import json,sys; print(json.load(sys.stdin)["source"])')" 'manual'
+rm -f "$LIMITLINE_XAI_PLAN"
+
+# Huge log: the line inside the last 512 KB, and one just past it (full-scan fallback).
+python3 - "$plan_home/huge-tail.jsonl" "$plan_home/huge-deep.jsonl" "$FIX/xai/unified.jsonl" << 'PY'
+import sys
+line = open(sys.argv[3]).read().splitlines()[2] + "\n"
+filler = '{"ts":"2025-11-02T03:00:00.000Z","msg":"render: frame","ctx":{"pad":"%s"}}\n' % ("x" * 200)
+with open(sys.argv[1], "w") as h:
+    h.write(filler * 14000)
+    h.write(line.replace("74.0", "75.0"))
+    h.write(filler * 100)
+with open(sys.argv[2], "w") as h:
+    h.write(filler * 14000)
+    h.write(line.replace("74.0", "76.0"))
+    h.write(filler * 2800)
+PY
+huge_tail=$(LIMITLINE_GROK_LOG="$plan_home/huge-tail.jsonl" "$ROOT/providers/xai-plan" | python3 -c 'import json,sys; d=json.load(sys.stdin); print(d["windows"][0]["used_pct"], d["source"])')
+check "xai-huge-log-tail" "$huge_tail" '75 live'
+huge_deep=$(LIMITLINE_GROK_LOG="$plan_home/huge-deep.jsonl" "$ROOT/providers/xai-plan" | python3 -c 'import json,sys; d=json.load(sys.stdin); print(d["windows"][0]["used_pct"], d["source"])')
+check "xai-huge-log-past-tail" "$huge_deep" '76 live'
+deep_gap=$(python3 -c 'import os,sys; print(os.path.getsize(sys.argv[1]) - open(sys.argv[1],"rb").read().rfind(b"fetched credits") > 512*1024)' "$plan_home/huge-deep.jsonl")
+check "xai-huge-log-past-tail-is-deep" "$deep_gap" 'True'
+huge_ms=$(LIMITLINE_GROK_LOG="$plan_home/huge-tail.jsonl" python3 -c '
+import subprocess, time, sys
+start = time.perf_counter()
+subprocess.run([sys.argv[1]], stdout=subprocess.DEVNULL)
+print(int((time.perf_counter() - start) * 1000))' "$ROOT/providers/xai-plan")
+[[ "$huge_ms" -le 500 ]] && check "xai-huge-log-fast" "yes" "yes" || check "xai-huge-log-fast" "${huge_ms}ms" "under 500ms"
+
 # Older than 6 hours: dimmed, with its age.
-printf '%s\n' '{"used_pct": 69, "resets_at": 1762333200, "observed_at": 1762023600, "plan": "Super", "source": "dashboard"}' > "$LIMITLINE_XAI_PLAN"
+sed 's/2025-11-02T03:30:00.000Z/2025-11-01T19:00:00.000Z/' "$FIX/xai/unified.jsonl" | grep -v 'creditUsagePercent":61' > "$LIMITLINE_GROK_LOG"
 stale_status=$("$BIN" status)
-printf '%s' "$stale_status" | grep -q -F 'cursor+grok 69% · resets Nov 5 · Super · grok 7d 14 tok · 9h old' \
+printf '%s' "$stale_status" | grep -q -F 'cursor+grok 74% · resets Fri 05:22 · SuperGrok Plus · live · grok 7d 14 tok · 9h old' \
   && check "plan-stale-age" "yes" "yes" || check "plan-stale-age" "$stale_status" "9h old"
-python3 "$ROOT/lib/refresh.py"
-check "plan-stale-flags" "$(sed -n 2p "$LIMITLINE_GROK_LINE")" '69 1'
+python3 "$ROOT/lib/refresh.py" --no-fetch
+check "plan-stale-flags" "$(sed -n 2p "$LIMITLINE_GROK_LINE")" '74 1 live'
 stale_line=$(LIMITLINE_GROK=1 "$BIN" < "$FIX/no_rate_limits.json")
-printf '%s' "$stale_line" | grep -q -F $'\033[2mcursor+grok 69% · Nov 5 · grok 7d 14 tok · 9h old' \
+printf '%s' "$stale_line" | grep -q -F $'\033[2mcursor+grok 74% · Fri 05:22 · grok 7d 14 tok · 9h old' \
   && check "plan-stale-dim" "yes" "yes" || check "plan-stale-dim" "$(printf '%s' "$stale_line" | cat -v)" "dimmed segment"
 
+# A fetch that failed after the reading: keep the reading, mark it stale.
+cp "$FIX/xai/unified.jsonl" "$LIMITLINE_GROK_LOG"
+printf '%s\n' '{"last_attempt": 1762055000, "error": "grok not found at /nowhere/grok"}' > "$XDG_CACHE_HOME/limitline/xai-fetch.json"
+failed_status=$("$BIN" status)
+printf '%s' "$failed_status" | grep -q -F 'cursor+grok 74% · resets Fri 05:22 · SuperGrok Plus · live · grok 7d 14 tok · 30m old · refresh failed: grok not found at /nowhere/grok' \
+  && check "plan-fetch-failed-stale" "yes" "yes" || check "plan-fetch-failed-stale" "$failed_status" "74% kept, 30m old, refresh failed"
+python3 "$ROOT/lib/refresh.py" --no-fetch
+check "plan-fetch-failed-flags" "$(sed -n 2p "$LIMITLINE_GROK_LINE")" '74 1 live'
+# A failure older than the reading does not mark it stale.
+printf '%s\n' '{"last_attempt": 1762050000, "error": "grok not found"}' > "$XDG_CACHE_HOME/limitline/xai-fetch.json"
+check "plan-old-failure-ignored" "$("$ROOT/providers/xai-plan" | python3 -c 'import json,sys; print(json.load(sys.stdin)["stale"])')" 'False'
+rm -f "$XDG_CACHE_HOME/limitline/xai-fetch.json"
+
 # The window reset after the reading: no percent.
-printf '%s\n' '{"used_pct": 69, "resets_at": 1762020000, "observed_at": 1762016400, "source": "dashboard"}' > "$LIMITLINE_XAI_PLAN"
+printf '%s\n' '{"ts":"2025-11-01T17:00:00.000Z","msg":"billing: fetched credits config","ctx":{"config":{"creditUsagePercent":74.0,"currentPeriod":{"end":"2025-11-01T18:00:00.000+00:00"}}}}' > "$LIMITLINE_GROK_LOG"
 reset_status=$("$BIN" status)
-printf '%s' "$reset_status" | grep -q -F 'cursor+grok reset Nov 1, no newer reading' && ! printf '%s' "$reset_status" | grep -q -F '69%' \
+printf '%s' "$reset_status" | grep -q -F 'cursor+grok reset Sat 18:00, no newer reading' && ! printf '%s' "$reset_status" | grep -q -F '74%' \
   && check "plan-reset-passed" "yes" "yes" || check "plan-reset-passed" "$reset_status" "no stale percent"
 
 # Older than 7 days: hidden, and the labelled estimate comes back.
-printf '%s\n' '{"used_pct": 69, "resets_at": 1762333200, "observed_at": 1761360000}' > "$LIMITLINE_XAI_PLAN"
+printf '%s\n' '{"ts":"2025-10-25T00:00:00.000Z","msg":"billing: fetched credits config","ctx":{"config":{"creditUsagePercent":74.0,"currentPeriod":{"end":"2025-11-07T05:22:35.070+00:00"}}}}' > "$LIMITLINE_GROK_LOG"
 old_status=$("$BIN" status)
 printf '%s' "$old_status" | grep -q -F 'cursor   7d ~11% estimate' && ! printf '%s' "$old_status" | grep -q -F 'cursor+grok' \
   && check "plan-hidden-after-7d" "yes" "yes" || check "plan-hidden-after-7d" "$old_status" "estimate back"
 
 if "$BIN" set xai-plan 150 >/dev/null 2>&1; then check "set-xai-plan-range" "accepted" "refused"; else check "set-xai-plan-range" "refused" "refused"; fi
 if "$BIN" set xai-plan 50 --resets "next week" >/dev/null 2>&1; then check "set-xai-plan-date" "accepted" "refused"; else check "set-xai-plan-date" "refused" "refused"; fi
+rm -f "$LIMITLINE_XAI_PLAN"
+
+# Refresher: a fake grok in a pty. TTL, lock, failure, cleanup, and no fetch from the status line.
+: > "$LIMITLINE_GROK_LOG"
+fake_count="$plan_home/fake-count"
+fake_pid="$plan_home/fake-pid"
+: > "$fake_count"
+fetch_env=(LIMITLINE_XAI_FETCH=1 LIMITLINE_GROK_BIN="$FIX/xai/fake-grok" FAKE_COUNT="$fake_count" FAKE_PID_FILE="$fake_pid"
+  LIMITLINE_XAI_BOOT=3 LIMITLINE_XAI_QUIET=0.3 LIMITLINE_XAI_TYPE_PAUSE=0.1 LIMITLINE_XAI_TIMEOUT=10)
+fetch_runs() { grep -c '^start' "$fake_count"; }
+fetch_out=$(env "${fetch_env[@]}" FAKE_PCT=81 "$BIN" refresh)
+check "xai-fetch-runs" "$fetch_out" 'xai plan: fetched'
+check "xai-fetch-count" "$(fetch_runs) $(grep -c '^usage' "$fake_count")" '1 1'
+fetched_status=$("$BIN" status)
+printf '%s' "$fetched_status" | grep -q -F 'cursor+grok 81% · resets Fri 05:22 · SuperGrok Plus · live' \
+  && check "xai-fetch-live-status" "yes" "yes" || check "xai-fetch-live-status" "$fetched_status" "81% live"
+check "xai-fetch-grok-line" "$(sed -n 2p "$LIMITLINE_GROK_LINE")" '81 0 live'
+read -r child_pid child_cwd < "$fake_pid"
+kill -0 "$child_pid" 2>/dev/null && check "xai-fetch-child-gone" "alive" "gone" || check "xai-fetch-child-gone" "gone" "gone"
+check "xai-fetch-neutral-cwd" "$child_cwd" "$(cd "$XDG_CACHE_HOME/limitline/grok-cwd" && pwd -P)"
+# Within xai_ttl (30 minutes): no second grok.
+ttl_out=$(env "${fetch_env[@]}" LIMITLINE_NOW=$((LIMITLINE_NOW + 1700)) "$BIN" refresh)
+check "xai-fetch-ttl-skip" "$ttl_out $(fetch_runs)" 'xai plan: skipped: fetched 1700s ago, xai_ttl 1800s 1'
+ttl_cfg=$(env "${fetch_env[@]}" LIMITLINE_XAI_TTL=5 LIMITLINE_NOW=$((LIMITLINE_NOW + 299)) "$BIN" refresh)
+check "xai-fetch-ttl-config" "$ttl_cfg" 'xai plan: skipped: fetched 299s ago, xai_ttl 300s'
+# The status-line path (--no-fetch) never starts grok, even when due.
+env "${fetch_env[@]}" LIMITLINE_NOW=$((LIMITLINE_NOW + 4000)) python3 "$ROOT/lib/refresh.py" --no-fetch
+check "xai-no-fetch-from-statusline" "$(fetch_runs)" '1'
+grep -q 'lib/refresh.py" --no-fetch' "$BIN" \
+  && check "xai-kick-refresh-no-fetch" "yes" "yes" || check "xai-kick-refresh-no-fetch" "no" "yes"
+# Another fetch holds the lock: skip, do not wait.
+python3 -c 'import fcntl,sys,time; f=open(sys.argv[1],"a"); fcntl.flock(f, fcntl.LOCK_EX); print("held", flush=True); time.sleep(20)' "$XDG_CACHE_HOME/limitline/xai-fetch.lock" > "$plan_home/holder.out" &
+holder=$!
+for _ in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20; do grep -q held "$plan_home/holder.out" 2>/dev/null && break; python3 -c 'import time; time.sleep(0.1)'; done
+lock_out=$(env "${fetch_env[@]}" LIMITLINE_NOW=$((LIMITLINE_NOW + 4000)) "$BIN" refresh)
+kill "$holder" 2>/dev/null; wait "$holder" 2>/dev/null
+check "xai-fetch-lock" "$lock_out $(fetch_runs)" 'xai plan: skipped: another fetch is running 1'
+# After the TTL a new fetch runs.
+again_out=$(env "${fetch_env[@]}" FAKE_PCT=83 FAKE_TS=2025-11-02T05:10:00.000Z LIMITLINE_NOW=$((LIMITLINE_NOW + 4200)) "$BIN" refresh)
+check "xai-fetch-after-ttl" "$again_out $(fetch_runs)" 'xai plan: fetched 2'
+# A grok that ignores Ctrl-C and SIGTERM is killed; one that never logs is a failure.
+stub_out=$(env "${fetch_env[@]}" FAKE_STUBBORN=1 FAKE_SILENT=1 LIMITLINE_XAI_TIMEOUT=3 "$BIN" refresh --force)
+check "xai-fetch-no-reading" "$stub_out" 'xai plan: failed: no new reading in the grok log within 3s'
+read -r child_pid _ < "$fake_pid"
+kill -0 "$child_pid" 2>/dev/null && { check "xai-fetch-stubborn-killed" "alive" "killed"; kill -9 "$child_pid"; } || check "xai-fetch-stubborn-killed" "killed" "killed"
+# Missing grok binary: the last reading stays, marked stale.
+miss_out=$(env "${fetch_env[@]}" LIMITLINE_GROK_BIN="$plan_home/no-grok" LIMITLINE_NOW=$((LIMITLINE_NOW + 4300)) "$BIN" refresh --force)
+check "xai-fetch-missing-grok" "$miss_out" "xai plan: failed: grok not found at $plan_home/no-grok"
+miss_status=$(LIMITLINE_NOW=$((LIMITLINE_NOW + 4300)) "$BIN" status)
+printf '%s' "$miss_status" | grep -q -F 'cursor+grok 83% · resets Fri 05:22 · SuperGrok Plus · live · grok 7d 14 tok · 1m old · refresh failed: grok not found' \
+  && check "xai-fetch-missing-keeps-stale" "yes" "yes" || check "xai-fetch-missing-keeps-stale" "$miss_status" "83% kept, stale"
+check "xai-fetch-missing-flags" "$(sed -n 2p "$LIMITLINE_GROK_LINE")" '83 1 live'
+off_out=$(env "${fetch_env[@]}" LIMITLINE_XAI_FETCH=0 "$BIN" refresh --force)
+check "xai-fetch-disabled" "$off_out|$(fetch_runs)" '|3'
+rm -f "$XDG_CACHE_HOME/limitline/xai-fetch.json"
+
+# limitline schedule: com.limitline.refresh every 15 minutes, launchd stubbed.
+sched_out=$(LIMITLINE_LAUNCHCTL="$lc_stub" "$BIN" schedule install)
+sched_plist="$agents/com.limitline.refresh.plist"
+sched_ok=$(python3 -c '
+import plistlib, sys
+d = plistlib.load(open(sys.argv[1], "rb"))
+print(d["Label"] == "com.limitline.refresh" and d["StartInterval"] == 900 and d["ProgramArguments"][1].endswith("schedule-launcher.py"))
+' "$sched_plist" 2>/dev/null)
+if [[ "$sched_ok" == "True" ]] && [[ -x "$TEST_HOME/.local/share/limitline/schedule-launcher.py" ]] \
+  && printf '%s' "$sched_out" | grep -q -F 'installed com.limitline.refresh: limitline refresh every 15 minutes'; then
+  check "schedule-install" "yes" "yes"
+else
+  check "schedule-install" "$sched_out" "plist every 900s, launcher"
+fi
+check "schedule-status" "$(LIMITLINE_LAUNCHCTL="$lc_stub" "$BIN" schedule status)" 'installed: launchd every 15 minutes, loaded'
+LIMITLINE_LAUNCHCTL="$lc_stub" "$BIN" schedule uninstall >/dev/null
+[[ ! -f "$sched_plist" && ! -f "$TEST_HOME/.local/share/limitline/schedule-launcher.py" ]] \
+  && check "schedule-uninstall" "yes" "yes" || check "schedule-uninstall" "still there" "removed"
+check "schedule-status-missing" "$(LIMITLINE_LAUNCHCTL="$lc_stub" "$BIN" schedule status)" 'missing: not installed (limitline schedule install)'
+
 rm -rf "$plan_home"
-unset LIMITLINE_XAI_PLAN LIMITLINE_GROK_LINE LIMITLINE_CURSOR_LOG LIMITLINE_GROK_DIR
+unset LIMITLINE_XAI_PLAN LIMITLINE_GROK_LINE LIMITLINE_CURSOR_LOG LIMITLINE_GROK_DIR LIMITLINE_GROK_LOG
 
 # Background jobs (0.5): one JSON per job, reported by any script.
 export LIMITLINE_JOBS_DIR="$TEST_HOME/jobs"
