@@ -15,14 +15,16 @@ def stamp_epoch(line, now):
     if not match:
         return None
     month, day, hour, minute, second = (int(part) for part in match.groups())
-    year = datetime.fromtimestamp(now, timezone.utc).year
+    # glog stamps are local wall-clock time with no zone (checked against the
+    # log file's own modification time), so they are read as local, not UTC.
+    year = datetime.fromtimestamp(now).year
     try:
-        candidate = datetime(year, month, day, hour, minute, second, tzinfo=timezone.utc).timestamp()
+        candidate = datetime(year, month, day, hour, minute, second).timestamp()
     except ValueError:
         return None
     if candidate - now > 2 * 86400:
         try:
-            candidate = datetime(year - 1, month, day, hour, minute, second, tzinfo=timezone.utc).timestamp()
+            candidate = datetime(year - 1, month, day, hour, minute, second).timestamp()
         except ValueError:
             return None
     return int(candidate)

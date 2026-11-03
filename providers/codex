@@ -1,10 +1,31 @@
 #!/usr/bin/env python3
-"""Newest Codex session rate_limits event, if it is under six hours old."""
+"""Newest Codex rate_limits event across every recent session file.
+
+`codex exec` runs from scripts leave many short rollout files, and the newest
+one often has no rate_limits event at all. So this walks every session file
+modified in the last eight days, newest first, takes the last parseable
+rate_limits event in each, and keeps the newest event. It stops once a file is
+older than the best event found, because a file cannot hold an event newer
+than its own modification time.
+
+A window is shown while its resets_at is still ahead. With no resets_at, it
+is shown while the event is younger than the window itself.
+
+`--fields` prints `codex5 12` style lines for bin/limitline instead of JSON.
+"""
 import json, os, sys, time
+from datetime import datetime, timedelta, timezone
+
+SCAN_DAYS = 8
+TAIL_BYTES = 8000000
+# A rollout file is written a moment after its last event.
+SLACK = 120
+
 
 def emit(obj):
     json.dump(obj, sys.stdout, sort_keys=True, separators=(",", ":"))
     sys.stdout.write("\n")
+
 
 def num(value):
     if isinstance(value, bool) or value is None:
@@ -13,31 +34,62 @@ def num(value):
         number = float(value)
     except (TypeError, ValueError):
         return None
-    if number != number:
+    if number != number or number in (float("inf"), float("-inf")):
         return None
     if number.is_integer():
         return int(number)
     return round(number, 2)
 
+
 def to_epoch(value):
     if isinstance(value, bool) or value is None or value == "":
         return None
     if isinstance(value, (int, float)):
+        if value != value or value in (float("inf"), float("-inf")):
+            return None
         return int(value)
     text = str(value).strip()
     if text.isdigit():
         return int(text)
     iso = text[:-1] + "+00:00" if text.endswith(("Z", "z")) else text
     try:
-        from datetime import datetime
-        return int(datetime.fromisoformat(iso).timestamp())
+        stamp = datetime.fromisoformat(iso)
     except Exception:
         return None
+    if stamp.tzinfo is None:
+        stamp = stamp.replace(tzinfo=timezone.utc)
+    return int(stamp.timestamp())
 
-def newest_jsonl(root):
-    best = None
-    best_m = -1.0
-    for dirpath, _dirs, files in os.walk(root):
+
+def day_ok(parts, cutoff_day):
+    """Prune YYYY/MM/DD folders older than the scan window by name."""
+    try:
+        if len(parts) == 1:
+            return int(parts[0]) >= cutoff_day.year
+        if len(parts) == 2:
+            return (int(parts[0]), int(parts[1])) >= (cutoff_day.year, cutoff_day.month)
+        if len(parts) == 3:
+            return (int(parts[0]), int(parts[1]), int(parts[2])) >= (cutoff_day.year, cutoff_day.month, cutoff_day.day)
+    except ValueError:
+        return True
+    return True
+
+
+def candidates(root, now):
+    cutoff = now - SCAN_DAYS * 86400
+    cutoff_day = datetime.fromtimestamp(cutoff, timezone.utc).date() - timedelta(days=1)
+    found = []
+    for dirpath, dirs, files in os.walk(root):
+        rel = os.path.relpath(dirpath, root)
+        prefix = [] if rel == "." else rel.split(os.sep)
+        keep = []
+        for name in dirs:
+            parts = prefix + [name]
+            if len(parts) <= 3 and all(part.isdigit() for part in parts):
+                if not day_ok(parts, cutoff_day):
+                    continue
+            keep.append(name)
+        dirs[:] = keep
         for name in files:
             if not name.endswith(".jsonl"):
                 continue
@@ -46,82 +98,151 @@ def newest_jsonl(root):
                 mtime = os.path.getmtime(path)
             except OSError:
                 continue
-            if mtime > best_m:
-                best_m = mtime
-                best = path
-    return best, best_m
+            if mtime < cutoff:
+                continue
+            found.append((mtime, path))
+    found.sort(reverse=True)
+    return found
 
-def last_limits(path):
+
+def limits_of(obj):
+    payload = obj.get("payload") if isinstance(obj.get("payload"), dict) else {}
+    limits = payload.get("rate_limits")
+    if not isinstance(limits, dict):
+        limits = obj.get("rate_limits")
+    return limits if isinstance(limits, dict) else None
+
+
+def last_event(path):
+    """Last line that parses as JSON and carries a rate_limits object.
+    Lines for other limit ids (such as "premium") lose to the "codex" one."""
     try:
         size = os.path.getsize(path)
         with open(path, "rb") as fh:
-            if size > 8000000:
-                fh.seek(size - 8000000)
+            if size > TAIL_BYTES:
+                fh.seek(size - TAIL_BYTES)
                 fh.readline()
             blob = fh.read().decode("utf-8", "replace")
     except OSError:
         return None
-    line = None
-    for row in blob.splitlines():
-        if "rate_limits" in row:
-            line = row
-    if not line:
-        return None
-    try:
-        obj = json.loads(line)
-    except Exception:
-        return None
-    return obj if isinstance(obj, dict) else None
+    other = None
+    for row in reversed(blob.splitlines()):
+        if "rate_limits" not in row:
+            continue
+        try:
+            obj = json.loads(row)
+        except Exception:
+            continue
+        if not isinstance(obj, dict):
+            continue
+        limits = limits_of(obj)
+        if limits is None:
+            continue
+        limit_id = limits.get("limit_id")
+        if limit_id in (None, "", "codex"):
+            return obj, limits
+        if other is None:
+            other = (obj, limits)
+    return other
 
-def main():
+
+def window_name(minutes, fallback):
+    minutes = num(minutes)
+    if not isinstance(minutes, int) or minutes <= 0:
+        return fallback
+    if minutes % 1440 == 0:
+        return "%dd" % (minutes // 1440)
+    if minutes % 60 == 0:
+        return "%dh" % (minutes // 60)
+    return "%dm" % minutes
+
+
+def window_of(block, fallback_name, fallback_minutes, observed, now):
+    if not isinstance(block, dict):
+        return None
+    used = num(block.get("used_percent", block.get("used_percentage")))
+    if used is None:
+        return None
+    minutes = num(block.get("window_minutes"))
+    if not isinstance(minutes, int) or minutes <= 0:
+        minutes = fallback_minutes
+    reset = to_epoch(block.get("resets_at"))
+    if reset is None:
+        span = num(block.get("resets_in_seconds"))
+        if isinstance(span, (int, float)) and observed is not None:
+            reset = int(observed + span)
+    if reset is not None:
+        if reset <= now:
+            return None
+    elif observed is None or now - observed >= minutes * 60:
+        return None
+    item = {"name": window_name(block.get("window_minutes"), fallback_name), "used_pct": used}
+    if reset is not None:
+        item["resets_at"] = reset
+    return item
+
+
+def read(root, now):
+    out = {"observed_at": None, "provider": "codex", "source": "none", "stale": False, "windows": []}
+    if not root or not os.path.isdir(root):
+        return out
+    best = None
+    for mtime, path in candidates(root, now):
+        if best is not None and mtime + SLACK < best[0]:
+            break
+        found = last_event(path)
+        if not found:
+            continue
+        obj, limits = found
+        observed = to_epoch(obj.get("timestamp"))
+        if observed is None:
+            observed = int(mtime)
+        if best is None or observed > best[0]:
+            best = (observed, limits)
+    if best is None:
+        return out
+    observed, limits = best
+    windows = []
+    for key, name, minutes in (("primary", "5h", 300), ("secondary", "7d", 10080)):
+        item = window_of(limits.get(key), name, minutes, observed, now)
+        if item:
+            windows.append(item)
+    out["observed_at"] = observed
+    out["source"] = "session"
+    out["stale"] = not windows
+    out["windows"] = windows
+    plan = limits.get("plan_type")
+    if isinstance(plan, str) and plan.strip():
+        out["plan"] = "".join(ch for ch in plan.strip() if ch.isprintable())[:24]
+    return out
+
+
+def fields(data):
+    lines = []
+    by_name = {}
+    for item in data.get("windows") or []:
+        by_name[item.get("name")] = item
+    for key, name in (("codex5", "5h"), ("codex7", "7d")):
+        item = by_name.get(name) or {}
+        used = item.get("used_pct")
+        reset = item.get("resets_at")
+        lines.append(key if used is None else "%s %s" % (key, used))
+        lines.append(key + "_reset" if reset is None else "%s_reset %s" % (key, reset))
+    sys.stdout.write("\n".join(lines) + "\n")
+
+
+def main(argv):
     now = int(os.environ.get("LIMITLINE_NOW") or time.time())
     root = os.environ.get("LIMITLINE_CODEX_DIR") or os.path.join(os.path.expanduser("~"), ".codex", "sessions")
-    empty = {"observed_at": None, "provider": "codex", "source": "none", "stale": False, "windows": []}
-    if not os.path.isdir(root):
-        emit(empty)
-        return
-    path, mtime = newest_jsonl(root)
-    if not path:
-        emit(empty)
-        return
-    obj = last_limits(path)
-    if not obj:
-        emit(empty)
-        return
-    payload = obj.get("payload") if isinstance(obj.get("payload"), dict) else {}
-    limits = payload.get("rate_limits") if isinstance(payload.get("rate_limits"), dict) else None
-    if limits is None and isinstance(obj.get("rate_limits"), dict):
-        limits = obj.get("rate_limits")
-    if not isinstance(limits, dict):
-        emit(empty)
-        return
-    observed = to_epoch(obj.get("timestamp"))
-    if observed is None and mtime >= 0:
-        observed = int(mtime)
-    stale = observed is None or now - observed >= 21600
-    windows = []
-    if not stale:
-        primary = limits.get("primary") if isinstance(limits.get("primary"), dict) else {}
-        secondary = limits.get("secondary") if isinstance(limits.get("secondary"), dict) else {}
-        for name, block in (("5h", primary), ("7d", secondary)):
-            used = num(block.get("used_percent", block.get("used_percentage")))
-            if used is None:
-                continue
-            item = {"name": name, "used_pct": used}
-            reset = to_epoch(block.get("resets_at"))
-            if reset is not None:
-                item["resets_at"] = reset
-            windows.append(item)
-    emit({
-        "observed_at": observed,
-        "provider": "codex",
-        "source": "session",
-        "stale": stale,
-        "windows": windows,
-    })
+    data = read(root, now)
+    if "--fields" in argv:
+        fields(data)
+    else:
+        emit(data)
+
 
 if __name__ == "__main__":
     try:
-        main()
+        main(sys.argv[1:])
     except Exception:
         sys.exit(0)

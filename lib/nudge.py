@@ -46,21 +46,35 @@ def idle_machine():
         return ""
 
 
+def rows():
+    """Provider rows, with Cursor and Grok folded into the shared plan when its
+    cache exists, so `→ cursor ok` is not offered for a plan that is 90% used."""
+    found = [dict(run_provider(name), provider=name) for name in ORDER]
+    plan = run_provider("xai-plan")
+    plan.setdefault("provider", "xai-plan")
+    sys.path.insert(0, os.path.join(ROOT, "lib"))
+    try:
+        import xaiplan
+        return xaiplan.merge(found + [plan])
+    except Exception:
+        return found
+
+
 def suggestion():
     measured = None
     empty = []
-    for name in ORDER:
-        data = run_provider(name)
+    for data in rows():
+        name = data.get("label") or data.get("provider")
         found = lowest_window(data)
         if found is None:
             empty.append(name)
             continue
         used, rough = found
         if measured is None or used < measured[0]:
-            measured = (used, name, "~" if rough else "")
+            measured = (used, name, "~" if rough else "", " estimate" if rough else "")
     hint = idle_machine()
     if measured is not None and measured[0] < 50:
-        text = "%s %s%d%%" % (measured[1], measured[2], int(measured[0] + 0.5))
+        text = "%s %s%d%%%s" % (measured[1], measured[2], int(measured[0] + 0.5), measured[3])
         if hint:
             text += " · " + hint
         return text
@@ -70,7 +84,7 @@ def suggestion():
         if name in empty:
             return name + " ok"
     if measured is not None:
-        return "%s %s%d%%" % (measured[1], measured[2], int(measured[0] + 0.5))
+        return "%s %s%d%%%s" % (measured[1], measured[2], int(measured[0] + 0.5), measured[3])
     return ""
 
 

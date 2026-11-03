@@ -1,7 +1,10 @@
 #!/usr/bin/env python3
 """Terminal and markdown usage report from local snapshots only."""
-import os
+import os, sys
 from datetime import datetime, timezone
+
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import timefmt
 
 
 def cache_dir():
@@ -34,7 +37,7 @@ def rel(epoch, now):
         return ""
     delta = int(epoch) - now
     if delta >= 86400:
-        return datetime.fromtimestamp(int(epoch), timezone.utc).strftime("%a %H:%M")
+        return timefmt.day_time(epoch)
     if delta < 0:
         delta = 0
     hours, minutes = divmod(delta // 60, 60)
@@ -106,7 +109,7 @@ def window_lines(rows, now):
     lines = []
     resets = []
     for row in rows:
-        provider = row.get("provider") or "tool"
+        provider = row.get("label") or row.get("provider") or "tool"
         windows = [item for item in (row.get("windows") or []) if isinstance(item, dict)]
         if not windows:
             continue
@@ -122,8 +125,13 @@ def window_lines(rows, now):
             if isinstance(machines, int) and machines > 1:
                 extra = " ×%d" % machines
             when = rel(window.get("resets_at"), now)
+            if when and row.get("provider") == "gemini":
+                # Antigravity only logs "Resets in 4h0m" once, so the reset is a fixed moment.
+                when = timefmt.day_time(window.get("resets_at"))
             reset = ("  " + when) if when else ""
             mark = "~" if window.get("estimate") else ""
+            if mark:
+                extra += " estimate"
             lines.append("  %s  %s  %s%d%%%s%s" % (name, bar(shown), mark, shown, extra, reset))
             if when:
                 resets.append("%s %s  %s" % (provider, name, when))

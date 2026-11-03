@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.5.0
+
+- Cursor and Grok are one xAI plan. A new `xai-plan` provider reads `~/.cache/limitline/xai-plan.json` (`used_pct`, `resets_at`, `observed_at`, `plan`, `source`), and Cursor and Grok then render as one row: `cursor+grok 69% · Nov 5 · grok 7d 1.2M tok`. The reading is dimmed with its age after 6 hours, hidden after 7 days, and its percent is dropped once `resets_at` has passed. `limitline set xai-plan <pct> [--resets "YYYY-MM-DD HH:MM"] [--plan NAME]` writes the cache. Nudges use the plan percent.
+- The Cursor token estimate shows only when there is no plan cache, and every printer now says `estimate` (`cursor 7d ~11% estimate`). Before, Cursor read as `~100%` against an invented 1M-token budget.
+- Codex reads the newest `rate_limits` event across every session file modified in the last 8 days, not only the newest file, which is often a short `codex exec` run with no event. Malformed lines are skipped, a `codex` limit wins over `premium`, and each window lasts until its own `resets_at` instead of a 6-hour log cutoff. The status line, its python fallback, and `limitline status` all use the one scan in `providers/codex`.
+- Background jobs: `limitline job update <name> --done N --total N --failed N --status running [--pid P] [--log PATH]`, `job list`, and `job rm`. One JSON file per job in `~/.cache/limitline/jobs/`. A job whose pid is gone on this machine is `dead`. A `jobs` segment (`jobs mining 62/1842 · backup ok 08:36`) is on by default once a job exists, and `limitline status`, `watch`, and SwiftBar gain a Jobs block.
+- Gemini resets show as a local time, `quota 100% · resets Fri 09:35`. Antigravity's log stamps are now read as local time; they were read as UTC. `limitline report` dates resets in local time.
+- `limitline doctor` reports the plan cache and jobs. ROADMAP.md lists what comes next.
+
 ## 0.4.2
 
 - Grok shows its plan and 7-day usage: `grok SuperGrok Plus · 7d 1.2M tok`. The plan is the subscription tier in `~/.grok/settings_cache.json`; tokens are `session.totalTokens` from `usage.json` files updated in the last 7 days. `limitline status` and `watch` add the ledger cost (`costUsdTicks` / 10^10, at API rates) and say `not a quota`. Grok still has no window or percent, and `auth.json` is never read.
