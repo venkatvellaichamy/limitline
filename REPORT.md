@@ -131,3 +131,7 @@ Pharos stores `started_at` as naive local time, and 0.4.0 read it as UTC. Ages w
 
 The Cursor `7d 100%` came from about 3.1M input and output tokens in a week of cursor run logs, against the 1,000,000 default denominator, capped at 100. It is a ratio to a number the user picks, not a Cursor limit, so it is now shown as `~`.
 
+
+## 0.4.2
+
+Grok has no local account quota, and that stays true: its row has no window, no percent, and does not sort with measured quotas. Two local facts are now shown. The plan is `settings.subscription_tier_display`, which sits inside the JSON-encoded `payload` string of `~/.grok/settings_cache.json`; the identity and signature in that file are never printed, and a fixture plants both to check it. Seven-day tokens are `session.totalTokens` from `usage.json` files whose `updatedAt` is in the last 7 days. Fixtures cover a file older than 7 days, a file without `updatedAt`, a malformed payload, and a file without `costUsdTicks` (cost is then left out). The cost conversion comes from Grok's own docs (`docs/user-guide/17-sessions.md` and `14-headless-mode.md`): 1 USD = 10^10 ticks, and billing on a plan lives in the TUI's `/usage`, so the dollar figure is labelled as API rates. On this Mac the line read `grok SuperGrok Plus · 7d 18.3M tok`, and `limitline status` read `SuperGrok Plus · 7d 18.3M tok · $13.48 at API rates · not a quota`.

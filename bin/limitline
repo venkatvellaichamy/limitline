@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # limitline — local usage-limit status line for Claude Code.
 # Reads one JSON object on stdin. No network. Always exits 0.
-# Version: 0.4.1
+# Version: 0.4.2
 
 _here=${0%/*}
 [[ "$_here" == "$0" ]] && _here="."
@@ -92,6 +92,9 @@ FLEET_SET=0
 MACHINES_SET=0
 FLEET_TTL=180
 MACHINES_TTL=180
+GROK_MODE=""
+GROK_SET=0
+GROK_TTL=180
 SSH_TIMEOUT=2
 MEM_WARN=15
 HOSTS_RAW=""
@@ -157,6 +160,8 @@ load_config() {
       mem_free_warn) MEM_WARN="$val" ;;
       fleet_ttl) FLEET_TTL="$val" ;;
       machines_ttl) MACHINES_TTL="$val" ;;
+      grok) GROK_MODE="$val"; GROK_SET=1 ;;
+      grok_ttl) GROK_TTL="$val" ;;
     esac
   done < "$cfg"
 }
@@ -212,6 +217,8 @@ if [[ -n "${LIMITLINE_FLEET:-}" ]]; then FLEET_MODE="$LIMITLINE_FLEET"; FLEET_SE
 if [[ -n "${LIMITLINE_MACHINES:-}" ]]; then MACHINES_MODE="$LIMITLINE_MACHINES"; MACHINES_SET=1; fi
 if [[ -n "${LIMITLINE_FLEET_TTL:-}" ]]; then FLEET_TTL="$LIMITLINE_FLEET_TTL"; fi
 if [[ -n "${LIMITLINE_MACHINES_TTL:-}" ]]; then MACHINES_TTL="$LIMITLINE_MACHINES_TTL"; fi
+if [[ -n "${LIMITLINE_GROK:-}" ]]; then GROK_MODE="$LIMITLINE_GROK"; GROK_SET=1; fi
+if [[ -n "${LIMITLINE_GROK_TTL:-}" ]]; then GROK_TTL="$LIMITLINE_GROK_TTL"; fi
 if [[ -n "${LIMITLINE_SSH_TIMEOUT:-}" ]]; then SSH_TIMEOUT="$LIMITLINE_SSH_TIMEOUT"; fi
 if [[ -n "${LIMITLINE_MEM_WARN:-}" ]]; then MEM_WARN="$LIMITLINE_MEM_WARN"; fi
 if [[ -z "${LIMITLINE_HOSTS+x}" && -n "$HOSTS_RAW" ]]; then
@@ -241,7 +248,7 @@ ON_MODEL=1; ON_STYLE=1; ON_CTX=1; ON_FIVE=1; ON_SEVEN=1; ON_SPEND=1
 ON_BURN=1; ON_COST=1; ON_GIT=1; ON_PR=1; ON_CACHE=1; ON_VIM=1
 ON_SESSION=0; ON_CODEX=1
 ON_PACE=0; ON_SPARK=0; ON_NUDGE=0; ON_FRESH=0; ON_VALUE=0; ON_VITALS=0
-ON_FLEET=0; ON_MACHINES=0
+ON_FLEET=0; ON_MACHINES=0; ON_GROK=0
 add_order() {
   case ",$ORDER_LIST," in
     *,"$1",*) ;;
@@ -253,7 +260,7 @@ if [[ -n "$SEGMENTS" ]]; then
   ON_BURN=0; ON_COST=0; ON_GIT=0; ON_PR=0; ON_CACHE=0; ON_VIM=0
   ON_SESSION=0; ON_CODEX=0
   ON_PACE=0; ON_SPARK=0; ON_NUDGE=0; ON_FRESH=0; ON_VALUE=0; ON_VITALS=0
-  ON_FLEET=0; ON_MACHINES=0
+  ON_FLEET=0; ON_MACHINES=0; ON_GROK=0
   old_ifs=$IFS
   IFS=','
   for raw in $SEGMENTS; do
@@ -283,6 +290,7 @@ if [[ -n "$SEGMENTS" ]]; then
       vitals) ON_VITALS=1; add_order vitals ;;
       fleet) ON_FLEET=1; add_order fleet ;;
       machines) ON_MACHINES=1; add_order machines ;;
+      grok) ON_GROK=1; add_order grok ;;
     esac
   done
   IFS=$old_ifs
@@ -299,7 +307,9 @@ if [[ "$VALUE_SET" == "1" ]]; then flag_on "$VALUE_MODE" && ON_VALUE=1 || ON_VAL
 if [[ "$VITALS_SET" == "1" ]]; then flag_on "$VITALS_MODE" && ON_VITALS=1 || ON_VITALS=0; fi
 if [[ "$FLEET_SET" == "1" ]]; then flag_on "$FLEET_MODE" && ON_FLEET=1 || ON_FLEET=0; fi
 if [[ "$MACHINES_SET" == "1" ]]; then flag_on "$MACHINES_MODE" && ON_MACHINES=1 || ON_MACHINES=0; fi
+if [[ "$GROK_SET" == "1" ]]; then flag_on "$GROK_MODE" && ON_GROK=1 || ON_GROK=0; fi
 case "$FLEET_TTL" in ''|*[!0-9]*) FLEET_TTL=60 ;; esac
+case "$GROK_TTL" in ''|*[!0-9]*) GROK_TTL=180 ;; esac
 case "$MACHINES_TTL" in ''|*[!0-9]*) MACHINES_TTL=60 ;; esac
 case "$ALERTS_MODE" in
   bell|notify|test|osascript) ;;
@@ -1216,6 +1226,14 @@ if [[ "$ON_MACHINES" == "1" ]]; then
   machines_text=$(fresh_line "$machines_file" "$MACHINES_TTL")
   [[ -n "$machines_text" ]] || need_refresh=1
 fi
+# Grok has no quota. The segment is the plan and 7-day session tokens that
+# limitline refresh read from ~/.grok, never a percent.
+grok_text=""
+grok_file="${LIMITLINE_GROK_LINE:-$cache_dir/grok.line}"
+if [[ "$ON_GROK" == "1" ]]; then
+  grok_text=$(fresh_line "$grok_file" "$GROK_TTL")
+  [[ -n "$grok_text" ]] || need_refresh=1
+fi
 if [[ "$need_refresh" == "1" ]]; then
   kick_refresh
 fi
@@ -1275,6 +1293,7 @@ emit_kv() {
   emit_kv value "$value_text"
   emit_kv fleet "$fleet_text"
   emit_kv machines "$machines_text"
+  emit_kv grok "$grok_text"
   emit_kv order "$ORDER_LIST"
   emit_kv sparkle "$sparkle"
   emit_kv compactions "$compactions"
@@ -1463,6 +1482,7 @@ function themed(kind, text,    prefix) {
     else if (kind == "cache") prefix = "❄ "
     else if (kind == "vim") prefix = "✏ "
     else if (kind == "codex") prefix = "⌘ "
+    else if (kind == "grok") prefix = "🤖 "
     else if (kind == "session" || kind == "vitals") prefix = "♥ "
     else if (kind == "spark") prefix = "📈 "
     else if (kind == "pace") prefix = "🏃 "
@@ -1716,6 +1736,7 @@ END {
   push(40, "git", themed("git", val("git")))
   push(58, "fleet", themed("fleet", val("fleet")))
   push(56, "machines", themed("machines", val("machines")))
+  push(54, "grok", themed("grok", val("grok")))
   push(20, "pr", themed("pr", val("pr")))
   push(15, "cache", themed("cache", val("cache")))
   push(10, "vim", themed("vim", val("vim")))

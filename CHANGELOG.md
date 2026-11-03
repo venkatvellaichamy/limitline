@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.4.2
+
+- Grok shows its plan and 7-day usage: `grok SuperGrok Plus · 7d 1.2M tok`. The plan is the subscription tier in `~/.grok/settings_cache.json`; tokens are `session.totalTokens` from `usage.json` files updated in the last 7 days. `limitline status` and `watch` add the ledger cost (`costUsdTicks` / 10^10, at API rates) and say `not a quota`. Grok still has no window or percent, and `auth.json` is never read.
+- Optional `grok` segment on the Claude Code line, off until `grok = "on"`, `LIMITLINE_GROK=1`, or `grok` in `segments`. It reads `grok.line`, which `limitline refresh` writes, so the status line never walks `~/.grok`.
+
 ## 0.4.1
 
 - Two-line status lines fit each line to the width on its own, and widths are counted in display columns instead of bytes. Before, macOS awk counted every bar cell as three characters, so context, fleet, and machines were dropped even on a wide terminal. Context now outranks sparklines and pace; fleet and machines lead line 2.

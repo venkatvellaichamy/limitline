@@ -1,0 +1,1 @@
+{"payload": "{\"fetched_at\": \"2025-11-02T01:00:00Z\", \"grok_version\": \"0.0.0-test\", \"identity\": {\"email\": \"secret-identity@example.com\", \"user_id\": \"user-should-not-print\"}, \"settings\": {\"subscription_tier_display\": \"SuperGrok Plus\", \"release_channel\": \"stable\"}}", "signature": "sig-should-not-print"}

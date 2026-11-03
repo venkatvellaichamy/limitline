@@ -4,6 +4,7 @@ import json, os, subprocess, sys, time
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import fleet
+import grokline
 import machines
 import sync
 from config import setting
@@ -166,9 +167,20 @@ def write_machines():
     write_text(line_dest, line)
 
 
+def write_grok():
+    """Plan and 7-day tokens from ~/.grok. Written even when empty, so a stale
+    line does not outlive the files it came from."""
+    text = grokline.segment()
+    path = os.environ.get("LIMITLINE_GROK_LINE") or os.path.join(machines.cache_dir(), "grok.line")
+    write_text(path, text)
+
+
 def main():
-    write_fleet()
-    write_machines()
+    for step in (write_grok, write_fleet, write_machines):
+        try:
+            step()
+        except Exception:
+            continue
 
 
 if __name__ == "__main__":

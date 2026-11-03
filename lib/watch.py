@@ -1,14 +1,24 @@
 #!/usr/bin/env python3
 """One frame of the side-by-side watch view."""
-import os
+import os, sys
 from datetime import datetime, timezone
+
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import grokline
 
 
 def brief(data):
     windows = data.get("windows") or []
     if not windows:
-        if data.get("provider") == "grok" and data.get("source") == "usage.json":
-            return "session tokens only"
+        if data.get("provider") == "grok":
+            # The plan goes in the Grok block below; the column keeps the short count.
+            tokens = grokline.week_tokens(data)
+            if tokens is not None:
+                return "7d %s tok" % grokline.short_tokens(tokens)
+            if data.get("plan"):
+                return "plan only"
+            if data.get("source") == "usage.json":
+                return "session tokens only"
         if data.get("source") == "none":
             return "no local quota"
         return "no window"
@@ -51,6 +61,12 @@ def frame(rows, extra=None):
         "".join(names).rstrip(),
         "".join(values).rstrip(),
     ]
+    for row in rows:
+        if row.get("provider") == "grok" and not row.get("windows"):
+            text = grokline.brief(row, long=True)
+            if text:
+                lines.append("Grok")
+                lines.append(text)
     for line in extra or []:
         if line:
             lines.append(line)

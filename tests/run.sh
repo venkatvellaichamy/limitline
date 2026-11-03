@@ -37,7 +37,8 @@ unset NO_COLOR LIMITLINE_DEBUG LIMITLINE_DEBUG_FILE LIMITLINE_CODEX_DIR LIMITLIN
   LIMITLINE_HOSTS LIMITLINE_MACHINE_DIR LIMITLINE_MACHINES_JSON LIMITLINE_LEDGER \
   LIMITLINE_CURSOR_LOG LIMITLINE_CURSOR_DIR LIMITLINE_CURSOR_WEEK_TOKENS LIMITLINE_PS_FILE \
   LIMITLINE_SSH_TIMEOUT LIMITLINE_MEM_WARN LIMITLINE_FLEET_WINDOW LIMITLINE_LAUNCHCTL \
-  LIMITLINE_LAUNCH_AGENTS XDG_DATA_HOME CLAUDE_CODE_REMOTE LINES
+  LIMITLINE_LAUNCH_AGENTS XDG_DATA_HOME CLAUDE_CODE_REMOTE LINES \
+  LIMITLINE_GROK LIMITLINE_GROK_SETTINGS LIMITLINE_GROK_LINE LIMITLINE_GROK_TTL
 : > "$TEST_HOME/empty-ps"
 export LIMITLINE_PS_FILE="$TEST_HOME/empty-ps"
 export LIMITLINE_REFRESH=0
@@ -300,7 +301,7 @@ mkdir -p "$grok_root"
 cp "$FIX/providers/grok-usage.json" "$grok_root/usage.json"
 grok_got=$(LIMITLINE_GROK_DIR="$TEST_HOME/grok" "$ROOT/providers/grok")
 grok_got=${grok_got%$'\n'}
-check "provider-grok" "$grok_got" '{"observed_at":1762055400,"provider":"grok","source":"usage.json","stale":false,"windows":[]}'
+check "provider-grok" "$grok_got" '{"observed_at":1762055400,"provider":"grok","source":"usage.json","stale":false,"week":{"cost_usd":0.0,"sessions":1,"tokens":14},"windows":[]}'
 
 gem_got=$(LIMITLINE_GEMINI_LOG="$FIX/providers/gemini-cli.txt" "$ROOT/providers/gemini")
 gem_got=${gem_got%$'\n'}
@@ -311,7 +312,7 @@ export LIMITLINE_CODEX_DIR="$codex_prov"
 export LIMITLINE_GROK_DIR="$TEST_HOME/grok"
 export LIMITLINE_GEMINI_LOG="$FIX/providers/gemini-cli.txt"
 status_got=$("$BIN" status)
-check "status-table" "$status_got" "$(printf '%s\n' 'tool     limits' 'gemini   quota 100%' 'claude   5h 62% · 7d 38%' 'codex    5h 12% · 7d 55%' 'cursor   no local quota' 'grok     session tokens only')"
+check "status-table" "$status_got" "$(printf '%s\n' 'tool     limits' 'gemini   quota 100%' 'claude   5h 62% · 7d 38%' 'codex    5h 12% · 7d 55%' 'cursor   no local quota' 'grok     7d 14 tok · $0.00 at API rates · not a quota')"
 
 host_got=$("$BIN" --host prompt)
 check "host-prompt" "$host_got" 'gemini quota 100% | claude 5h 62% · 7d 38% | codex 5h 12% · 7d 55%'
@@ -339,6 +340,53 @@ printf '%s' "$snap_got" | grep -q -F '"source":"statusline"' && printf '%s' "$sn
   && check "claude-snapshot" "yes" "yes" || check "claude-snapshot" "$snap_got" "snapshot"
 
 unset LIMITLINE_CLAUDE_SNAPSHOT LIMITLINE_CODEX_DIR LIMITLINE_GROK_DIR LIMITLINE_GEMINI_LOG
+
+# Grok: plan from settings_cache.json and 7-day session tokens. Never a window or a percent.
+grok_fix="$TEST_HOME/grok-fix"
+cp -R "$FIX/grok" "$grok_fix"
+touch -t 202601010000 "$grok_fix"/sessions/*/*/usage.json
+touch -t 202601020000 "$grok_fix/sessions/proj-a/s1/usage.json"
+grok_env=(LIMITLINE_GROK_DIR="$grok_fix/sessions" LIMITLINE_GROK_SETTINGS="$grok_fix/settings_cache.json")
+grok_week=$(env "${grok_env[@]}" "$ROOT/providers/grok")
+grok_week=${grok_week%$'\n'}
+check "provider-grok-week" "$grok_week" '{"observed_at":1762055400,"plan":"SuperGrok Plus","plan_fetched_at":1762045200,"provider":"grok","source":"usage.json","stale":false,"week":{"cost_usd":3.0,"sessions":2,"tokens":1200000},"windows":[]}'
+! printf '%s' "$grok_week" | grep -q -e 'secret-identity' -e 'should-not-print' \
+  && check "grok-identity-hidden" "yes" "yes" || check "grok-identity-hidden" "$grok_week" "no identity or signature"
+grok_plan_only=$(LIMITLINE_GROK_DIR="$TEST_HOME/missing-grok" LIMITLINE_GROK_SETTINGS="$grok_fix/settings_cache.json" "$ROOT/providers/grok")
+grok_plan_only=${grok_plan_only%$'\n'}
+check "provider-grok-plan-only" "$grok_plan_only" '{"observed_at":null,"plan":"SuperGrok Plus","plan_fetched_at":1762045200,"provider":"grok","source":"settings_cache","stale":false,"windows":[]}'
+grok_broken=$(LIMITLINE_GROK_DIR="$TEST_HOME/missing-grok" LIMITLINE_GROK_SETTINGS="$grok_fix/settings_broken.json" "$ROOT/providers/grok")
+grok_broken=${grok_broken%$'\n'}
+check "provider-grok-broken-plan" "$grok_broken" '{"observed_at":null,"provider":"grok","source":"none","stale":false,"windows":[]}'
+grok_nocost=$(LIMITLINE_GROK_DIR="$FIX/grok-nocost" "$ROOT/providers/grok")
+grok_nocost=${grok_nocost%$'\n'}
+check "provider-grok-no-cost" "$grok_nocost" '{"observed_at":1762055400,"provider":"grok","source":"usage.json","stale":false,"week":{"sessions":1,"tokens":300000},"windows":[]}'
+grok_status=$(env "${grok_env[@]}" "$BIN" status)
+printf '%s' "$grok_status" | grep -q -F 'grok     SuperGrok Plus · 7d 1.2M tok · $3.00 at API rates · not a quota' \
+  && check "grok-status" "yes" "yes" || check "grok-status" "$grok_status" "plan, tokens, cost, not a quota"
+grok_host=$(env "${grok_env[@]}" "$BIN" --host prompt)
+! printf '%s' "$grok_host" | grep -q -F 'grok' \
+  && check "grok-host-prompt" "yes" "yes" || check "grok-host-prompt" "$grok_host" "no grok in the quota line"
+grok_watch=$(env "${grok_env[@]}" LIMITLINE_WATCH_ONCE=1 "$BIN" watch)
+printf '%s' "$grok_watch" | grep -q -F '7d 1.2M tok' \
+  && printf '%s' "$grok_watch" | grep -q -F 'SuperGrok Plus · 7d 1.2M tok · $3.00 at API rates · not a quota' \
+  && check "grok-watch" "yes" "yes" || check "grok-watch" "$grok_watch" "grok column and block"
+grok_cache="$TEST_HOME/grok-cache"
+env "${grok_env[@]}" XDG_CACHE_HOME="$grok_cache" "$BIN" refresh
+check "grok-refresh-line" "$(cat "$grok_cache/limitline/grok.line")" 'grok SuperGrok Plus · 7d 1.2M tok'
+grok_off=$(XDG_CACHE_HOME="$grok_cache" NO_COLOR=1 "$BIN" < "$FIX/no_rate_limits.json" | strip_ansi)
+check "grok-segment-off-by-default" "$grok_off" 'Opus 5.5 │ ctx ▓▓░░░ ·41% │ $0.12'
+grok_on=$(XDG_CACHE_HOME="$grok_cache" LIMITLINE_GROK=1 NO_COLOR=1 "$BIN" < "$FIX/no_rate_limits.json" | strip_ansi)
+check "grok-segment-env" "$grok_on" 'Opus 5.5 │ ctx ▓▓░░░ ·41% │ $0.12 │ grok SuperGrok Plus · 7d 1.2M tok'
+grok_cfg="$TEST_HOME/grok.toml"
+printf '%s\n' 'grok = "on"' > "$grok_cfg"
+grok_cfg_got=$(XDG_CACHE_HOME="$grok_cache" LIMITLINE_CONFIG="$grok_cfg" NO_COLOR=1 "$BIN" < "$FIX/no_rate_limits.json" | strip_ansi)
+check "grok-segment-config" "$grok_cfg_got" "$grok_on"
+grok_seg=$(XDG_CACHE_HOME="$grok_cache" LIMITLINE_SEGMENTS="model,grok" NO_COLOR=1 "$BIN" < "$FIX/no_rate_limits.json" | strip_ansi)
+check "grok-segment-named" "$grok_seg" 'Opus 5.5 │ grok SuperGrok Plus · 7d 1.2M tok'
+touch -t 202001010000 "$grok_cache/limitline/grok.line"
+grok_stale=$(XDG_CACHE_HOME="$grok_cache" LIMITLINE_GROK=1 NO_COLOR=1 "$BIN" < "$FIX/no_rate_limits.json" | strip_ansi)
+check "grok-segment-stale-hidden" "$grok_stale" 'Opus 5.5 │ ctx ▓▓░░░ ·41% │ $0.12'
 
 if "$ROOT/integrations/codex/install.sh" | grep -q -F 'five-hour-limit'; then
   check "codex-install-print" "yes" "yes"

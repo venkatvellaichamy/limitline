@@ -123,6 +123,7 @@ Each segment can be turned off or reordered with `segments` in the config file.
 | Cache | `cache cold: <cause>` only when the prompt cache is cold |
 | Vim | `.vim.mode` |
 | Codex | newest local Codex rate-limit event under 6 hours old |
+| Grok | `grok SuperGrok Plus · 7d 1.2M tok`: the plan name and the session tokens Grok recorded in the last 7 days, from a cache that `limitline refresh` writes. Not a quota and never a percent. Off until `grok = "on"` or named |
 | Session | first 6 characters of `.session_id`. Off unless you opt in |
 | Pace | `▲ ahead of pace` or `▼ under pace` when usage and elapsed time differ by 8 points or more, plus `~15%/day left for 4d` on the weekly window. Off until `pace = "on"` |
 | Sparkline | `5h ▁▃▅▆▅ 62%` from local snapshots, and a 7-day daily history. Off until `spark = "on"` |
@@ -144,7 +145,7 @@ A second line is `lines = 2` or `LIMITLINE_LINES=2`. When `COLUMNS` or `LIMITLIN
 | Claude Code | `statusLine` command. `/limitline:install` | The stdin payload, then a snapshot at `~/.cache/limitline/claude.json` for other hosts. Stale after 15 minutes |
 | Codex | Built-in `/statusline` items. No external command. `integrations/codex/install.sh` prints the item list and refuses `--write` | Newest `~/.codex/sessions/**/*.jsonl` `rate_limits` event, under 6 hours old |
 | Cursor | `statusLine` command in `~/.cursor/cli-config.json`. `integrations/cursor/install.sh` prints the snippet. `--write` is opt-in and backs up the file | Model and context from stdin. No local quota file |
-| Grok | `[ui.status_line]` command. `integrations/grok/install.sh` prints the snippet and refuses `--write` | Model, context, and cost from stdin. `usage.json` is a session token ledger, not an account quota |
+| Grok | `[ui.status_line]` command. `integrations/grok/install.sh` prints the snippet and refuses `--write` | Model, context, and cost from stdin. The plan name from `~/.grok/settings_cache.json`, and 7-day tokens and ledger cost summed from `~/.grok/sessions/**/usage.json`. There is no account quota |
 | Gemini / agy | No status-line command in the build that was checked | Last `quota reached` / `Resets in` line in the CLI log |
 
 Host snippets:
@@ -195,6 +196,8 @@ segments = ["model", "style", "context", "limits", "burn", "cost", "git", "pr", 
 # ssh_timeout = 2
 # mem_free_warn = 15
 # cursor_week_tokens = 1000000
+# grok = "on"
+# grok_ttl = 180
 ```
 
 ## Pace
@@ -229,7 +232,7 @@ Hosts come from `hosts` or `LIMITLINE_HOSTS` (`mini` or `mini=user@host`). When 
 
 ## Providers
 
-`limitline status` prints the tightest measured window first, then estimates. Claude still comes from the status-line snapshot. Codex still comes from the newest session `rate_limits` event. Grok's `usage.json` is a session token ledger (`inputTokens`, `outputTokens`, `totalTokens`, `costUsdTicks`) and still has no account window. Cursor has no local quota file. When Pharos captured `usage.input_tokens` and `usage.output_tokens` on a cursor run, or a file passed as `LIMITLINE_CURSOR_LOG` has those fields, limitline estimates a weekly percent against `cursor_week_tokens` (default 1,000,000). That number is an estimate, not a quota reading: Cursor does not publish a token budget, and 1,000,000 is only a default you should replace with your own. It is input plus output tokens (cache reads are left out) from cursor run logs that started or were written in the last 7 days, divided by that budget and capped at 100. It is shown with `~` everywhere (`cursor 7d ~100%`), `limitline status` prints the inputs (`7d ~100% (estimate: 3.1M of 1.0M tokens)`), and estimated rows are listed after measured ones. A `~100%` means you used more tokens than the budget you set, not that Cursor will stop you. Antigravity (`agy`) still uses the last `quota reached` / `Resets in` line, and also a Pharos run whose status is `paused-quota`. A local ledger at `~/.pharos/ledger.jsonl` or `research-spend.jsonl` (or `LIMITLINE_LEDGER`) adds an `api` row such as `spend $0.25` when the file exists. Rows with no window stay at the bottom.
+`limitline status` prints the tightest measured window first, then estimates. Claude still comes from the status-line snapshot. Codex still comes from the newest session `rate_limits` event. Grok has no account window, so its row is never a percent and never sorts as a quota: `grok     SuperGrok Plus · 7d 1.2M tok · $3.00 at API rates · not a quota`. The plan is `settings.subscription_tier_display` inside the JSON-encoded `payload` of `~/.grok/settings_cache.json` (`LIMITLINE_GROK_SETTINGS`); no other field of that file is printed, and `~/.grok/auth.json` is never opened. Tokens are `session.totalTokens` summed over `~/.grok/sessions/**/usage.json` (`LIMITLINE_GROK_DIR`) whose `updatedAt` is in the last 7 days. A file without `updatedAt` or a numeric `totalTokens` is skipped, not dated by its modification time. Grok's own session docs say a session total includes history inherited by resume or fork, so a resumed or forked session can count that history twice. The dollar figure is `costUsdTicks` divided by 10^10 (Grok documents 1 USD = 10^10 ticks). It is what that usage would cost at API rates, not what a SuperGrok plan charges, and it is left out unless every counted file has `costUsdTicks`. It appears in `limitline status` and `watch` only; the status line shows the plan and tokens. A missing settings file or tier skips the plan, and a missing sessions folder skips the tokens. Cursor has no local quota file. When Pharos captured `usage.input_tokens` and `usage.output_tokens` on a cursor run, or a file passed as `LIMITLINE_CURSOR_LOG` has those fields, limitline estimates a weekly percent against `cursor_week_tokens` (default 1,000,000). That number is an estimate, not a quota reading: Cursor does not publish a token budget, and 1,000,000 is only a default you should replace with your own. It is input plus output tokens (cache reads are left out) from cursor run logs that started or were written in the last 7 days, divided by that budget and capped at 100. It is shown with `~` everywhere (`cursor 7d ~100%`), `limitline status` prints the inputs (`7d ~100% (estimate: 3.1M of 1.0M tokens)`), and estimated rows are listed after measured ones. A `~100%` means you used more tokens than the budget you set, not that Cursor will stop you. Antigravity (`agy`) still uses the last `quota reached` / `Resets in` line, and also a Pharos run whose status is `paused-quota`. A local ledger at `~/.pharos/ledger.jsonl` or `research-spend.jsonl` (or `LIMITLINE_LEDGER`) adds an `api` row such as `spend $0.25` when the file exists. Rows with no window stay at the bottom.
 
 ## Reset moments
 
@@ -268,7 +271,7 @@ Set `sync_dir` or `LIMITLINE_SYNC_DIR` to a folder you already sync, such as an 
 
 ## Background refresh
 
-The status line never runs ssh or scans runs. It reads `fleet.line` and `machines.json` from `~/.cache/limitline/`, and when they are older than their TTL it starts one `limitline refresh` in the background and shows nothing for that segment until the next render. If nothing renders for a while, the segment can sit empty.
+The status line never runs ssh or scans runs. It reads `fleet.line`, `machines.json`, and `grok.line` from `~/.cache/limitline/`, and when they are older than their TTL it starts one `limitline refresh` in the background and shows nothing for that segment until the next render. If nothing renders for a while, the segment can sit empty.
 
 On macOS, `limitline install-refresher` installs a launchd agent (`~/Library/LaunchAgents/dev.limitline.refresh.plist`) that runs `limitline refresh` every 60 seconds with `ProcessType Background`, low-priority IO, and `Nice 10`. The agent runs a small launcher in `~/.local/share/limitline/`, which follows `claude plugin update` to the newest installed copy, so the agent keeps working after an update. `limitline uninstall-refresher` stops it and removes both files. `limitline doctor` reports whether it is installed and loaded. On Linux, run `limitline refresh` from cron instead; `install-refresher` prints the line.
 
@@ -316,6 +319,10 @@ A cloud-hosted Claude Code session (for example, one started from claude.ai) run
 | `LIMITLINE_FLEET_WINDOW` | Count finished runs active within this window, default `12h`. `off` counts all |
 | `LIMITLINE_REFRESH` | `0` stops the status line from starting a background refresh |
 | `LIMITLINE_CURSOR_WEEK_TOKENS` | Denominator for the Cursor weekly estimate, default 1000000 |
+| `LIMITLINE_GROK` | `1` shows the Grok plan and 7-day tokens on the status line. `0` hides it |
+| `LIMITLINE_GROK_TTL` | Seconds the Grok cache line stays fresh, default 180 |
+| `LIMITLINE_GROK_DIR` | Grok sessions folder, default `~/.grok/sessions` |
+| `LIMITLINE_GROK_SETTINGS` | Grok settings cache, default `~/.grok/settings_cache.json` |
 | `LIMITLINE_LEDGER` | JSONL file of `usd` amounts for the api row |
 | `LIMITLINE_LINKS` | `1` adds OSC 8 links for a `owner/name` repo |
 | `LIMITLINE_CODEX` | `auto` (default), `1`, or `0` |
@@ -327,7 +334,7 @@ A cloud-hosted Claude Code session (for example, one started from claude.ai) run
 
 ## Privacy
 
-limitline reads the status JSON a host already pipes in, an optional local config file, a cache directory it writes itself, and the local files named above. It does not send them anywhere. It does not read API keys or OAuth tokens. Debug output stays in the cache file you opted into. Session id display is off unless `LIMITLINE_SESSION=1`. The value file is read only when the value meter is on, and only for cost and token counts. The report and the Runs list keep repository folder names, not full paths. A sync folder is written only when you set one. Pharos is detected and used when its run files or machine list are present, and limitline still runs when they are absent. SSH runs only inside `limitline refresh`, with a timeout, and only for hosts you listed. The background refresher exists only if you run `limitline install-refresher`, and it runs the same `limitline refresh`. Fleet and machine snapshots go to `sync_dir` only when you set one; they hold counts, host names, memory, load, and model names, not paths or user names.
+limitline reads the status JSON a host already pipes in, an optional local config file, a cache directory it writes itself, and the local files named above. It does not send them anywhere. It does not read API keys or OAuth tokens. Debug output stays in the cache file you opted into. Session id display is off unless `LIMITLINE_SESSION=1`. The value file is read only when the value meter is on, and only for cost and token counts. The report and the Runs list keep repository folder names, not full paths. A sync folder is written only when you set one. From Grok it reads the plan name in `settings_cache.json` and the token and cost counters in `usage.json`; it never opens `~/.grok/auth.json`, and it does not print the identity or signature in the settings file. Pharos is detected and used when its run files or machine list are present, and limitline still runs when they are absent. SSH runs only inside `limitline refresh`, with a timeout, and only for hosts you listed. The background refresher exists only if you run `limitline install-refresher`, and it runs the same `limitline refresh`. Fleet and machine snapshots go to `sync_dir` only when you set one; they hold counts, host names, memory, load, and model names, not paths or user names.
 
 ## Tests
 
@@ -335,4 +342,4 @@ limitline reads the status JSON a host already pipes in, an optional local confi
 tests/run.sh
 ```
 
-Fixtures cover a full payload, no rate limits, spend only, a near reset, usage over 80%, a context window near auto-compact, a cold prompt cache, a 60-column row, and every theme. The same script covers pace, sparklines, fresh wording, nudges, the value estimate, session vitals, alerts, the report, watch, and a two-machine merge. Fleet, machine, Cursor, Antigravity, and ledger fixtures are synthetic and use names such as `mini` and `worker-1`. ANSI colour codes are stripped before the comparison. The same fixtures are rendered once with `jq` and once with the python3 fallback. A warm status line, including a warm fleet and machine cache, stays under 50 ms.
+Fixtures cover a full payload, no rate limits, spend only, a near reset, usage over 80%, a context window near auto-compact, a cold prompt cache, a 60-column row, and every theme. The same script covers pace, sparklines, fresh wording, nudges, the value estimate, session vitals, alerts, the report, watch, and a two-machine merge. Fleet, machine, Cursor, Antigravity, Grok, and ledger fixtures are synthetic and use names such as `mini` and `worker-1`. ANSI colour codes are stripped before the comparison. The same fixtures are rendered once with `jq` and once with the python3 fallback. A warm status line, including a warm fleet and machine cache, stays under 50 ms.

@@ -1,0 +1,1 @@
+{"sessionId": "sample", "session": {"inputTokens": 999990, "outputTokens": 10, "totalTokens": 1000000, "turnCount": 1, "primaryModelId": "sample", "costUsdTicks": 25000000000}, "turns": [], "updatedAt": "2025-11-02T03:50:00+00:00"}

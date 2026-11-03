@@ -1,10 +1,25 @@
 #!/usr/bin/env python3
-"""Grok usage.json is a session ledger, not an account quota. Windows stay empty."""
+"""Grok has no local account quota, so windows stay empty.
+
+Two local facts are reported beside the empty windows:
+- plan: settings.subscription_tier_display from ~/.grok/settings_cache.json,
+  whose "payload" is a JSON-encoded string. Nothing else in that file is read
+  or printed. ~/.grok/auth.json is never opened.
+- week: session.totalTokens summed over sessions/**/usage.json files whose
+  updatedAt is inside the last 7 days. A file without a parseable updatedAt or
+  a numeric totalTokens is skipped. Cost is costUsdTicks / 1e10 (Grok's docs:
+  1 USD = 10^10 ticks) and is left out unless every counted file has it.
+"""
 import json, os, sys, time
+
+WEEK = 7 * 86400
+TICKS_PER_USD = 10 ** 10
+
 
 def emit(obj):
     json.dump(obj, sys.stdout, sort_keys=True, separators=(",", ":"))
     sys.stdout.write("\n")
+
 
 def to_epoch(value):
     if not isinstance(value, str) or not value:
@@ -16,9 +31,53 @@ def to_epoch(value):
     except Exception:
         return None
 
-def newest(root):
-    best = None
-    best_m = -1.0
+
+def whole(value):
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return None
+    if value != value or value < 0:
+        return None
+    return int(value)
+
+
+def clean_text(value, limit=40):
+    if not isinstance(value, str):
+        return None
+    text = "".join(ch for ch in value if ch.isprintable()).strip()
+    text = " ".join(text.split())
+    if not text:
+        return None
+    return text[:limit]
+
+
+def read_plan(path):
+    try:
+        outer = json.load(open(path))
+        payload = outer.get("payload") if isinstance(outer, dict) else None
+        if isinstance(payload, str):
+            payload = json.loads(payload)
+        if not isinstance(payload, dict):
+            return None, None
+        settings = payload.get("settings")
+        if not isinstance(settings, dict):
+            return None, None
+        plan = clean_text(settings.get("subscription_tier_display"))
+    except Exception:
+        return None, None
+    if plan is None:
+        return None, None
+    return plan, to_epoch(payload.get("fetched_at"))
+
+
+def scan(root, now):
+    """Newest usage.json time, and the 7-day totals."""
+    newest = None
+    newest_m = -1.0
+    tokens = 0
+    ticks = 0
+    every_cost = True
+    sessions = 0
+    cutoff = now - WEEK
     for dirpath, _dirs, files in os.walk(root):
         for name in files:
             if name != "usage.json":
@@ -28,33 +87,62 @@ def newest(root):
                 mtime = os.path.getmtime(path)
             except OSError:
                 continue
-            if mtime > best_m:
-                best_m = mtime
-                best = path
-    return best
+            fresh_enough = mtime >= cutoff
+            if mtime <= newest_m and not fresh_enough:
+                continue
+            try:
+                data = json.load(open(path))
+            except Exception:
+                continue
+            if not isinstance(data, dict):
+                continue
+            if mtime > newest_m:
+                newest_m = mtime
+                newest = data
+            updated = to_epoch(data.get("updatedAt"))
+            if updated is None or updated < cutoff or updated > now + 300:
+                continue
+            session = data.get("session") if isinstance(data.get("session"), dict) else {}
+            total = whole(session.get("totalTokens"))
+            if total is None:
+                continue
+            sessions += 1
+            tokens += total
+            cost = whole(session.get("costUsdTicks"))
+            if cost is None:
+                every_cost = False
+            else:
+                ticks += cost
+    week = None
+    if newest is not None:
+        week = {"sessions": sessions, "tokens": tokens}
+        if sessions and every_cost:
+            week["cost_usd"] = round(ticks / float(TICKS_PER_USD), 4)
+    return newest, week
+
 
 def main():
     now = int(os.environ.get("LIMITLINE_NOW") or time.time())
     stale_s = int(os.environ.get("LIMITLINE_STALE_MINUTES") or "15") * 60
-    root = os.environ.get("LIMITLINE_GROK_DIR") or os.path.join(os.path.expanduser("~"), ".grok", "sessions")
-    empty = {"observed_at": None, "provider": "grok", "source": "none", "stale": False, "windows": []}
-    path = newest(root) if os.path.isdir(root) else None
-    if not path:
-        emit(empty)
-        return
-    try:
-        data = json.load(open(path))
-    except Exception:
-        emit(empty)
-        return
-    observed = to_epoch(data.get("updatedAt") if isinstance(data, dict) else None)
-    emit({
-        "observed_at": observed,
-        "provider": "grok",
-        "source": "usage.json",
-        "stale": observed is None or now - observed > stale_s,
-        "windows": [],
-    })
+    home = os.path.join(os.path.expanduser("~"), ".grok")
+    root = os.environ.get("LIMITLINE_GROK_DIR") or os.path.join(home, "sessions")
+    settings = os.environ.get("LIMITLINE_GROK_SETTINGS") or os.path.join(home, "settings_cache.json")
+    out = {"observed_at": None, "provider": "grok", "source": "none", "stale": False, "windows": []}
+    plan, fetched = read_plan(settings) if os.path.isfile(settings) else (None, None)
+    if plan:
+        out["plan"] = plan
+        if fetched is not None:
+            out["plan_fetched_at"] = fetched
+        out["source"] = "settings_cache"
+    newest, week = scan(root, now) if os.path.isdir(root) else (None, None)
+    if newest is not None:
+        observed = to_epoch(newest.get("updatedAt"))
+        out["observed_at"] = observed
+        out["source"] = "usage.json"
+        out["stale"] = observed is None or now - observed > stale_s
+        out["week"] = week
+    emit(out)
+
 
 if __name__ == "__main__":
     try:

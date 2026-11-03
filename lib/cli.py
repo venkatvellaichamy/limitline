@@ -94,8 +94,12 @@ def prepare(rows):
 def provider_brief(data):
     windows = data.get("windows") or []
     if not windows:
-        if data.get("provider") == "grok" and data.get("source") == "usage.json":
-            return "session tokens only"
+        if data.get("provider") == "grok":
+            text = load_lib("grokline").brief(data)
+            if text:
+                return text
+            if data.get("source") == "usage.json":
+                return "session tokens only"
         if data.get("source") == "none":
             return "no local quota"
         return "no window"
@@ -119,6 +123,10 @@ def short_tokens(value):
 
 
 def status_brief(data):
+    if data.get("provider") == "grok" and not data.get("windows"):
+        text = load_lib("grokline").brief(data, long=True)
+        if text:
+            return text
     text = provider_brief(data)
     for window in data.get("windows") or []:
         if isinstance(window, dict) and window.get("estimate") and window.get("tokens") is not None:
@@ -472,6 +480,8 @@ def cmd_config():
     print("# fleet_ttl = 180")
     print("# machines_ttl = 180")
     print("# cursor_week_tokens = 1000000")
+    print("# grok plan and 7-day tokens stay off on the Claude Code line until named")
+    print('# grok = "on"')
     print("# themes: minimal, powerline, ascii, pill, emoji, mono")
     print("# LIMITLINE_ASCII=1 forces the ascii theme. NO_COLOR disables ANSI.")
 
