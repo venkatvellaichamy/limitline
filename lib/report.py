@@ -130,6 +130,8 @@ def window_lines(rows, now):
                 when = timefmt.day_time(window.get("resets_at"))
             reset = ("  " + when) if when else ""
             mark = "~" if window.get("estimate") else ""
+            if mark:
+                extra += " estimate"
             lines.append("  %s  %s  %s%d%%%s%s" % (name, bar(shown), mark, shown, extra, reset))
             if when:
                 resets.append("%s %s  %s" % (provider, name, when))

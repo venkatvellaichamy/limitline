@@ -71,10 +71,10 @@ def suggestion():
             continue
         used, rough = found
         if measured is None or used < measured[0]:
-            measured = (used, name, "~" if rough else "")
+            measured = (used, name, "~" if rough else "", " estimate" if rough else "")
     hint = idle_machine()
     if measured is not None and measured[0] < 50:
-        text = "%s %s%d%%" % (measured[1], measured[2], int(measured[0] + 0.5))
+        text = "%s %s%d%%%s" % (measured[1], measured[2], int(measured[0] + 0.5), measured[3])
         if hint:
             text += " · " + hint
         return text
@@ -84,7 +84,7 @@ def suggestion():
         if name in empty:
             return name + " ok"
     if measured is not None:
-        return "%s %s%d%%" % (measured[1], measured[2], int(measured[0] + 0.5))
+        return "%s %s%d%%%s" % (measured[1], measured[2], int(measured[0] + 0.5), measured[3])
     return ""
 
 
