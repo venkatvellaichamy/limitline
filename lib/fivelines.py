@@ -16,8 +16,10 @@ from the status line come in as LL_* environment variables. Always exits 0.
 """
 
 import json
+import math
 import os
 import re
+import stat
 import sys
 import time
 import unicodedata
@@ -58,20 +60,96 @@ def pharos_home():
 
 
 def num(value):
+    """A finite number, or None. A bool is not a number here (True is not 1%)."""
+    if isinstance(value, bool):
+        return None
     try:
         out = float(value)
     except (TypeError, ValueError):
         return None
-    return None if out != out else out
+    return out if math.isfinite(out) else None
+
+
+def pct(value):
+    """A used percent, or None. Negative is not a reading; above 100 is drawn as full."""
+    out = num(value)
+    return None if out is None or out < 0 else min(100.0, out)
+
+
+# ---- reading Pharos's files ------------------------------------------------------------
+# Every file is read at most once per build() (the fit tries several variants of a line),
+# only if it is a regular file under MAX_BYTES, and opened non-blocking, so a FIFO or a
+# device in its place cannot hang the status line.
+
+FORMAT = 1          # the newest usage.json / summary.json version this display understands
+STALE_S = 15 * 60   # Pharos refreshes every 2 minutes; a reading older than this is not current
+SKEW_S = 120        # a reading up to this far in the future is clock jitter, not a future reading
+MAX_BYTES = 4 << 20
+MISSING, BAD = "missing", "bad"
+_memo = None        # a dict while build() runs
+
+
+def read_raw(path, tail=None):
+    """(state, bytes, mtime): state is "ok", MISSING, or BAD."""
+    key = ("raw", path, tail)
+    if _memo is not None and key in _memo:
+        return _memo[key]
+    out = _read_raw(path, tail)
+    if _memo is not None:
+        _memo[key] = out
+    return out
+
+
+def _read_raw(path, tail):
+    try:
+        info = os.stat(path)
+    except (OSError, TypeError, ValueError):
+        return MISSING, b"", None
+    if not stat.S_ISREG(info.st_mode) or (tail is None and info.st_size > MAX_BYTES):
+        return BAD, b"", info.st_mtime
+    try:
+        fd = os.open(path, os.O_RDONLY | getattr(os, "O_NONBLOCK", 0))
+        with open(fd, "rb") as handle:
+            if tail:
+                handle.seek(max(0, info.st_size - tail))
+            return "ok", handle.read(MAX_BYTES), info.st_mtime
+    except OSError:
+        return BAD, b"", info.st_mtime
+
+
+def read_json_state(path):
+    key = ("json", path)
+    if _memo is not None and key in _memo:
+        return _memo[key]
+    state, raw, _mtime = read_raw(path)
+    data = None
+    if state == "ok":
+        try:
+            data = json.loads(raw.decode("utf-8"))
+        except ValueError:
+            state = BAD
+    out = (state, data)
+    if _memo is not None:
+        _memo[key] = out
+    return out
 
 
 def read_json(path):
-    try:
-        with open(path, encoding="utf-8") as handle:
-            data = json.load(handle)
-    except (OSError, ValueError):
-        return None
-    return data
+    return read_json_state(path)[1]
+
+
+def freshness(observed, now):
+    """(kind, age) for a reading taken at `observed`: kind is "fresh", "old", "future"
+    (beyond SKEW_S ahead of this clock), or None when there is no usable time. age is
+    whole seconds and never negative; it is None unless kind is fresh or old."""
+    when = num(observed)
+    if when is None or when <= 0:
+        return None, None
+    age = now - when
+    if age < -SKEW_S:
+        return "future", None
+    age = int(max(0, age))
+    return ("old" if age > STALE_S else "fresh"), age
 
 
 # ---- drawing -------------------------------------------------------------------------
@@ -174,6 +252,8 @@ def reset_label(epoch, now):
 
 
 def age_label(seconds):
+    if seconds < 0:  # never a negative age; callers drop future readings before this
+        return "0m"
     if seconds < 3600:
         return f"{max(1, seconds // 60)}m"
     if seconds < 86400:
@@ -185,8 +265,9 @@ class Cell:
     """One plan window. `used` None means no reading. Pharos's numbers are always used; with
     `plan_show = "left"` the display shows 100 - used, but colours and the cap still follow used."""
 
-    def __init__(self, name, used, reset=None, age=None, estimate=False, window=None):
+    def __init__(self, name, used, reset=None, age=None, estimate=False, window=None, passed=False):
         self.name, self.used, self.reset, self.age, self.estimate = name, used, reset, age, estimate
+        self.passed = passed          # the window's reset time has gone by and nothing newer came
         self.window = window or name  # the window id in Pharos's files
         self.cap = None               # set from usage.json cap_pct
         self.trend = None             # 7 values from usage-report.json daily, used
@@ -236,8 +317,10 @@ class Cell:
 
     def text(self, style, now, resets=True, cells=BAR_WIDTH):
         self.left = style.left
+        if self.passed:
+            return f"{self.name} " + style.paint("2", "reset, no newer reading" if resets else "reset")
         if self.used is None:
-            age = f" {age_label(self.age)} ago" if self.age else ""
+            age = f" {age_label(self.age)} ago" if self.age is not None and self.age > 0 else ""
             return f"{self.name} " + style.paint("2", "—" + age)
         code = used_code(self.used)
         if self.fresh_change and style.animate:
@@ -264,11 +347,42 @@ class Cell:
 
 
 def window_cell(name, used, reset, now):
-    used = num(used)
-    reset = int(num(reset) or 0) or None
-    if used is None or (reset and reset <= now):
+    """One window's cell, or None when there is no reading at all. A reset time that has
+    gone by is said as such (the old percent is not shown); an unreadable percent is `—`."""
+    when = num(reset)
+    reset = int(when) if when and when > 0 else None
+    if reset and reset <= now:
+        return Cell(name, None, reset, passed=True)
+    if used is None or used == "":
         return None
-    return Cell(name, min(100.0, max(0.0, used)), reset)
+    used = pct(used)
+    if used is None:
+        return Cell(name, None)
+    return Cell(name, used, reset)
+
+
+def held(usage, plan, now):
+    """None when `plan` (a usage.json plan) can be drawn as current. Otherwise the cell to
+    show instead: `—` with the reading's age when it is old, `—` alone when it has no time
+    or is from the future."""
+    if usage is not None and (usage.get("stale") or usage.get("skew")):
+        age = usage.get("age")
+        return HELD_NO_AGE if age is None else age
+    if plan is None:
+        return None
+    kind, age = freshness(plan.get("observed_at"), now)
+    if kind == "future":
+        return HELD_NO_AGE
+    if kind == "old" or plan.get("stale"):
+        return age if age is not None else HELD_NO_AGE
+    return None
+
+
+HELD_NO_AGE = -1  # held() result: hold the plan, show no age
+
+
+def held_cell(name, hold):
+    return Cell(name, None, age=None if hold == HELD_NO_AGE else hold)
 
 
 def claude_cells(now):
@@ -278,41 +392,62 @@ def claude_cells(now):
         if cell:
             cells.append(cell)
     if not cells:
-        data = read_json(os.path.join(cache_dir(), "claude.json")) or {}
-        for window in data.get("windows") or []:
-            cell = window_cell(str(window.get("name") or "7d"), window.get("used_pct"), window.get("resets_at"), now)
-            if cell:
-                cells.append(cell)
+        # This session's input had no limits; the last status line's own snapshot, if current.
+        data = read_json(os.path.join(cache_dir(), "claude.json"))
+        if isinstance(data, dict) and isinstance(data.get("windows"), list):
+            kind, age = freshness(data.get("observed_at"), now)
+            if kind != "fresh":
+                return [Cell("7d", None, age=age)]
+            for window in data["windows"]:
+                if isinstance(window, dict):
+                    cell = window_cell(str(window.get("name") or "7d"), window.get("used_pct"), window.get("resets_at"), now)
+                    if cell:
+                        cells.append(cell)
     return cells or [Cell("7d", None)]
 
 
-def codex_cells(now):
+def codex_cells(now, usage=None):
+    plan = plan_of(usage, "codex")
+    hold = held(usage, plan, now)
+    if hold is not None:
+        return [held_cell("7d", hold)]
+    if plan is not None:
+        # Pharos's own Codex reading, so a window whose reset went by can say so.
+        windows = plan.get("windows") if isinstance(plan.get("windows"), list) else []
+        by_name = {str(w.get("name")): w for w in windows if isinstance(w, dict)}
+        cells = []
+        for name in ("5h", "7d"):
+            window = by_name.get(name)
+            cell = window and window_cell(name, window.get("used_pct"), window.get("resets_at"), now)
+            if cell:
+                cells.append(cell)
+        return cells or [Cell("7d", None)]
     values = [env("LL_CODEX5"), env("LL_CODEX5_RESET"), env("LL_CODEX7"), env("LL_CODEX7_RESET")]
     if not any(values):
-        path = env("LL_CODEX_CACHE")
-        try:
-            with open(path, encoding="utf-8") as handle:
-                parts = handle.read().split()
-            if len(parts) >= 6 and parts[1] == "1":
-                values = [p if p != "-" else "" for p in parts[2:6]]
-        except (OSError, TypeError):
-            pass
+        state, raw, _mtime = read_raw(env("LL_CODEX_CACHE"))
+        parts = raw.decode("utf-8", "replace").split() if state == "ok" else []
+        if len(parts) >= 6 and parts[1] == "1":
+            values = [p if p != "-" else "" for p in parts[2:6]]
     cells = [c for c in (window_cell("5h", values[0], values[1], now), window_cell("7d", values[2], values[3], now)) if c]
     return cells or [Cell("7d", None)]
 
 
-def cursor_cell(now):
-    path = os.path.join(cache_dir(), "grok.line")
-    try:
-        with open(path, encoding="utf-8") as handle:
-            first = handle.readline().strip()
-            flags = handle.readline().split()
-        age = now - int(os.path.getmtime(path))
-    except OSError:
+def cursor_cell(now, usage=None):
+    state, raw, mtime = read_raw(os.path.join(cache_dir(), "grok.line"))
+    if state != "ok":
         return None
+    lines = raw.decode("utf-8", "replace").splitlines()
+    first = lines[0].strip() if lines else ""
+    flags = lines[1].split() if len(lines) > 1 else []
     if not first.startswith("cursor+grok"):
         return None
-    used = num(flags[0]) if flags else None
+    hold = held(usage, None, now)
+    if hold is not None:
+        return held_cell("cursor+grok", hold)
+    kind, age = freshness(mtime, now)
+    if kind != "fresh":
+        return Cell("cursor+grok", None, age=age)  # an old line, or one from the future: no percent
+    used = pct(flags[0]) if flags else None
     if used is None:
         match = re.search(r"(\d+)%", first)
         used = num(match.group(1)) if match else None
@@ -342,12 +477,52 @@ def usage_file():
     return env("LIMITLINE_PHAROS_USAGE") or os.path.join(pharos_home(), "usage.json")
 
 
-def read_usage(now):
-    data = read_json(usage_file())
-    if not isinstance(data, dict) or not isinstance(data.get("plans"), list):
+def format_version(data):
+    """The file's format version (1 when absent), or None when it is not a number."""
+    version = data.get("version", 1)
+    value = num(version)
+    if value is None or value < 1:
         return None
-    data["stale"] = now - int(num(data.get("generated_at")) or 0) > 15 * 60
-    return data
+    return int(value) if value == int(value) else value
+
+
+def too_new_note(what, version):
+    return f"pharos {what}format v{version} is newer than this limitline"
+
+
+def pharos_state(now):
+    """(usage, note). usage is usage.json with `age`, `stale` and `skew` added, or None when
+    nothing from it can be drawn; note then says why, for the end of the used line:
+    no Pharos home is silence (limitline is used without Pharos), an empty home is "pharos
+    not running", a broken file is "unreadable", a newer format is named."""
+    key = ("usage", now)
+    if _memo is not None and key in _memo:
+        return _memo[key]
+    out = _pharos_state(now)
+    if _memo is not None:
+        _memo[key] = out
+    return out
+
+
+def _pharos_state(now):
+    state, data = read_json_state(usage_file())
+    if state == MISSING:
+        return None, ("pharos not running" if os.path.isdir(pharos_home()) else "")
+    if state != "ok" or not isinstance(data, dict) or not isinstance(data.get("plans"), list):
+        return None, "pharos usage.json unreadable"
+    version = format_version(data)
+    if version is None:
+        return None, "pharos usage.json unreadable"
+    if version > FORMAT:
+        return None, too_new_note("", version)
+    kind, age = freshness(data.get("generated_at"), now)
+    data["age"], data["skew"] = age, kind == "future"
+    data["stale"] = kind != "fresh"
+    return data, ""
+
+
+def read_usage(now):
+    return pharos_state(now)[0]
 
 
 def plan_of(usage, provider):
@@ -359,34 +534,41 @@ def plan_of(usage, provider):
 
 def agy_cells(now, usage=None):
     plan = plan_of(usage, "antigravity")
-    if not plan or plan.get("stale") or (usage or {}).get("stale"):
-        observed = int(num((plan or {}).get("observed_at")) or 0)
-        return [Cell("gemini", None, age=now - observed if observed else None)]
-    data = {"buckets": [w for w in plan.get("windows") or [] if isinstance(w, dict)]}
+    if not plan:
+        return [Cell("gemini", None)]
+    hold = held(usage, plan, now)
+    if hold is not None:
+        return [held_cell("gemini", hold)]
+    buckets = [w for w in plan.get("windows") or [] if isinstance(w, dict)] if isinstance(plan.get("windows"), list) else []
     cells = []
     for group, name in AGY_NAMES:
-        best = None
-        for bucket in data["buckets"]:
-            if not isinstance(bucket, dict) or bucket.get("group") != group:
-                continue
+        found = [b for b in buckets if b.get("group") == group]
+        if not found:
+            continue
+        best = passed = None
+        for bucket in found:
             cell = window_cell(name, bucket.get("used_pct"), bucket.get("resets_at"), now)
-            if cell:
-                cell.window = str(bucket.get("id") or bucket.get("name") or name)
-            if cell and (best is None or cell.used > best.used):
+            if cell is None:
+                continue
+            cell.window = str(bucket.get("id") or bucket.get("name") or name)
+            if cell.passed:
+                passed = passed or cell
+            elif cell.used is not None and (best is None or cell.used > best.used):
                 best = cell
-        if best:
-            cells.append(best)
+        # the fullest live bucket; else say the window reset; else the group is unreadable
+        cells.append(best or passed or Cell(name, None))
     return cells or [Cell("gemini", None)]
 
 
 def used_parts(now):
-    """[(mark key, label, [cells])] in the fixed order. Without Pharos, Claude only."""
+    """[(mark key, label, [cells])] in the fixed order, which is also the priority order
+    when the terminal is narrow (the last is dropped first). Without Pharos, Claude only."""
     parts = [("claude", "claude", claude_cells(now))]
     usage = read_usage(now)
     if usage is None:
         return parts
-    parts.append(("codex", "codex", codex_cells(now)))
-    cursor = cursor_cell(now)
+    parts.append(("codex", "codex", codex_cells(now, usage)))
+    cursor = cursor_cell(now, usage)
     if cursor:
         parts.append(("cursor", "", [cursor]))
     parts.append(("agy", "agy", agy_cells(now, usage)))
@@ -454,22 +636,37 @@ def mark_changes(parts, now):
             os.replace(tmp, path)
         except OSError:
             pass
+        if _memo is not None:  # the next fit variant in this build sees what was just written
+            _memo[("json", path)] = ("ok", seen)
 
 
-def render_used(style, now, resets=True, drop_agy_3p=False, cells=BAR_WIDTH):
+def used_note(now):
+    """What the used line says about Pharos's reading as a whole, or ""."""
+    usage, note = pharos_state(now)
+    if usage is None:
+        return note
+    if usage.get("skew"):
+        return "pharos clock ahead"
+    if usage.get("age") is None:
+        return "pharos reading has no time"
+    if usage["age"] > STALE_NOTE_S:
+        return f"{age_label(usage['age'])} old"
+    return ""
+
+
+def render_used(style, now, resets=True, drop_agy_3p=False, cells=BAR_WIDTH, keep=None):
+    """`keep` limits how many plans are drawn, from the left (Claude is first and stays)."""
     out, bar = [], cells
     parts = used_parts(now)
     mark_changes(parts, now)
-    for key, label, cells in parts:
+    for key, label, cells in parts[:keep]:
         shown = [c for c in cells if c.name != "claude+gpt"] if drop_agy_3p else cells
         body = " · ".join(c.text(style, now, resets, bar) for c in shown)
         out.append(style.mark(key) + (label + " " if label else "") + body)
     line = style.paint("2", "left " if style.left else "used ") + " " + SEP.join(out)
-    usage = read_usage(now)
-    if usage is not None:
-        age = now - int(num(usage.get("generated_at")) or now)
-        if age > STALE_NOTE_S:
-            line += style.paint("2", f" · {age_label(age)} old")
+    note = used_note(now)
+    if note:
+        line += style.paint("2", f" · {note}")
     return line
 
 
@@ -479,21 +676,43 @@ def render_used(style, now, resets=True, drop_agy_3p=False, cells=BAR_WIDTH):
 def job_summary(now):
     """Pharos's own counts (`pharos runs --summary`), when they are from today."""
     data = read_json(os.path.join(pharos_home(), "summary.json"))
-    if not isinstance(data, dict) or not isinstance(data.get("today"), dict):
+    if not isinstance(data, dict):
         return None
-    generated = num(data.get("generated_at")) or 0
-    if datetime.fromtimestamp(generated).date() != datetime.fromtimestamp(now).date():
+    version = format_version(data)
+    if version is None:
+        return None
+    if version > FORMAT:
+        return {"too_new": version}
+    if not isinstance(data.get("today"), dict):
+        return None
+    kind, _age = freshness(data.get("generated_at"), now)
+    if kind not in ("fresh", "old"):  # no time, or from the future: not today's
+        return None
+    if datetime.fromtimestamp(num(data.get("generated_at"))).date() != datetime.fromtimestamp(now).date():
         return None
     return data
 
 
-def job_cells(style, bucket, only_nonzero):
+# When a job line is too wide, counts drop in this order (the first goes first).
+JOB_DROP = ("retried", "done", "waiting_limit", "running", "failed", "need_you")
+
+
+def count_of(bucket, key):
+    """A job count, or None when Pharos's value is missing or not a whole, non-negative number."""
+    value = num(bucket.get(key))
+    return int(value) if value is not None and value >= 0 and value == int(value) else None
+
+
+def job_cells(style, bucket, only_nonzero, drop=0):
     cells = []
+    dropped = set(JOB_DROP[:drop])
     for key in KEYS:
-        count = int(num(bucket.get(key)) or 0)
+        count = count_of(bucket, key)
         if only_nonzero and not count:
             continue
-        text = f"{style.mark(key)}{count} {LABELS[key]}"
+        if key in dropped:
+            continue
+        text = f"{style.mark(key)}{'—' if count is None else count} {LABELS[key]}"
         if not count:
             text = style.paint("2", text)
         elif key in ("need_you", "failed"):
@@ -530,20 +749,20 @@ def spinner(style, now, running):
 def latest_event(now, show_s=EVENT_SHOW_S):
     """The newest event worth a glance, from the tail of today's Pharos event file."""
     path = os.path.join(pharos_home(), "events", datetime.fromtimestamp(now).strftime("%Y-%m-%d") + ".jsonl")
-    try:
-        with open(path, "rb") as handle:
-            handle.seek(0, os.SEEK_END)
-            size = handle.tell()
-            handle.seek(max(0, size - 16384))
-            tail = handle.read().decode("utf-8", "replace").splitlines()
-    except OSError:
+    state, raw, _mtime = read_raw(path, tail=16384)
+    if state != "ok":
         return None
-    for line in reversed(tail):
+    for line in reversed(raw.decode("utf-8", "replace").splitlines()):
         try:
             event = json.loads(line)
         except ValueError:
             continue
-        if not isinstance(event, dict) or now - (num(event.get("ts")) or 0) > show_s:
+        if not isinstance(event, dict):
+            continue
+        kind, age = freshness(event.get("ts"), now)
+        if kind == "future":  # a clock ahead of ours: not new, and not shown
+            continue
+        if age is None or age > show_s:
             return None
         text = event_text(event)
         if text:
@@ -573,11 +792,13 @@ def event_text(event):
     return None
 
 
-def render_today(style, summary, now=None, with_event=True):
+def render_today(style, summary, now=None, with_event=True, only_nonzero=False, drop=0):
     now = now_epoch() if now is None else now
-    cells = job_cells(style, summary["today"], False)
-    turn = spinner(style, now, int(num(summary["today"].get("running")) or 0))
-    if turn and cells:
+    if summary.get("too_new"):
+        return style.paint("2", "today") + " " + style.paint("2", "— " + too_new_note("summary ", summary["too_new"]))
+    cells = job_cells(style, summary["today"], only_nonzero, drop)
+    turn = spinner(style, now, count_of(summary["today"], "running") or 0)
+    if turn and cells:  # a no-op when the running count was dropped for width
         cells[0] = cells[0].replace(style.marks.get("running", "▶"), turn, 1)
     line = style.paint("2", "today") + " " + join_jobs(cells)
     note = latest_event(now) if with_event else None
@@ -586,13 +807,16 @@ def render_today(style, summary, now=None, with_event=True):
     return line
 
 
-def render_older(style, summary, with_oldest=True):
-    cells = job_cells(style, summary.get("older") or {}, True)
+def render_older(style, summary, with_oldest=True, drop=0):
+    older = summary.get("older")
+    if not isinstance(older, dict):
+        return ""
+    cells = job_cells(style, older, True, drop)
     if not cells:
         return ""
     line = style.paint("2", "older") + " " + join_jobs(cells)
     oldest = summary.get("oldest_open") if with_oldest else None
-    if oldest:
+    if isinstance(oldest, dict):
         hours = num(oldest.get("age_hours")) or 0
         age = f"{int(hours // 24)}d" if hours >= 24 else f"{int(hours)}h"
         line += SEP + style.paint("2", f"oldest {age} ({oldest.get('repo') or oldest.get('id')})")
@@ -602,14 +826,25 @@ def render_older(style, summary, with_oldest=True):
 # ---- line 5: hosts ---------------------------------------------------------------------
 
 
-def render_hosts(style, now, with_cpu=True):
+def host_count(now):
+    block = (read_usage(now) or {}).get("hosts")
+    hosts = block.get("hosts") if isinstance(block, dict) else None
+    return len(hosts) if isinstance(hosts, list) else 0
+
+
+def render_hosts(style, now, with_cpu=True, keep=None):
+    """`keep` limits how many hosts are drawn, from the left (the first is this Mac)."""
     usage = read_usage(now)
     block = (usage or {}).get("hosts")
     hosts = block.get("hosts") if isinstance(block, dict) else None
     if not isinstance(hosts, list) or not hosts:
         return ""
+    hold = held(usage, block, now)
+    if hold is not None:  # old host numbers are not shown as current
+        age = "" if hold == HELD_NO_AGE else f" {age_label(hold)} ago"
+        return style.paint("2", "hosts") + " " + style.paint("2", "—" + age)
     cells = []
-    for i, host in enumerate(hosts):
+    for i, host in enumerate(hosts[:keep]):
         if not isinstance(host, dict):
             continue
         name = str(host.get("name") or "host")
@@ -640,36 +875,74 @@ def narrow_style(style):
 
 
 def fit(variants, columns):
-    """The first variant that fits, else the last one."""
+    """The first variant that fits, else the last one. Variants are functions, drawn only
+    as far as needed: a wide terminal draws each line once."""
     if columns <= 0:
-        return variants[0]
-    for line in variants:
+        return variants[0]()
+    line = ""
+    for variant in variants:
+        line = variant()
         if width(line) <= columns:
             return line
-    return variants[-1]
+    return line
+
+
+def used_variants(style, now):
+    """The used line, widest first, in the documented order: drop refill times, then the agy
+    claude+gpt bucket, then 3-cell bars (trend and cap become gauges), then whole plans from
+    the right: agy, cursor+grok, codex. Claude is never dropped."""
+    small = narrow_style(style) if style.view in ("trend", "cap") else style
+    out = [
+        lambda: render_used(style, now),
+        lambda: render_used(style, now, resets=False),
+        lambda: render_used(style, now, resets=False, drop_agy_3p=True),
+        lambda: render_used(style, now, resets=False, drop_agy_3p=True, cells=3),
+    ]
+    if small is not style:
+        out.append(lambda: render_used(small, now, resets=False, drop_agy_3p=True))
+    for keep in (3, 2, 1):
+        out.append(lambda keep=keep: render_used(small, now, resets=False, drop_agy_3p=True, cells=3, keep=keep))
+    return out
+
+
+def safe(draw):
+    """One line's text, or "" if drawing it failed: a bad field never blanks the other lines."""
+    try:
+        return draw()
+    except Exception:
+        return ""
 
 
 def build(now=None, columns=None):
+    global _memo
     now = now_epoch() if now is None else now
     if columns is None:
         columns = int(num(env("LL_COLUMNS")) or 0)
     style = Style()
-    lines = [fit([
-        render_used(style, now),
-        render_used(style, now, resets=False),
-        render_used(style, now, resets=False, drop_agy_3p=True),
-        render_used(style, now, resets=False, drop_agy_3p=True, cells=3),
-    ] + ([render_used(narrow_style(style), now, resets=False, drop_agy_3p=True)] if style.view in ("trend", "cap") else []), columns)]
-    summary = job_summary(now)
+    _memo = {}
+    try:
+        return _build(style, now, columns)
+    finally:
+        _memo = None
+
+
+def _build(style, now, columns):
+    drops = range(1, len(JOB_DROP))
+    lines = [safe(lambda: fit(used_variants(style, now), columns))]
+    summary = safe(lambda: job_summary(now))
     if summary:
-        lines.append(fit([render_today(style, summary, now), render_today(style, summary, now, with_event=False)], columns))
-        older = fit([render_older(style, summary), render_older(style, summary, with_oldest=False)], columns)
-        if older:
-            lines.append(older)
-    hosts = fit([render_hosts(style, now), render_hosts(style, now, with_cpu=False)], columns)
-    if hosts:
-        lines.append(hosts)
-    return lines
+        lines.append(safe(lambda: fit(
+            [lambda: render_today(style, summary, now), lambda: render_today(style, summary, now, with_event=False),
+             lambda: render_today(style, summary, now, with_event=False, only_nonzero=True)]
+            + [lambda d=d: render_today(style, summary, now, with_event=False, only_nonzero=True, drop=d) for d in drops], columns)))
+        lines.append(safe(lambda: fit(
+            [lambda: render_older(style, summary), lambda: render_older(style, summary, with_oldest=False)]
+            + [lambda d=d: render_older(style, summary, with_oldest=False, drop=d) for d in drops], columns)))
+    hosts = safe(lambda: host_count(now)) or 0
+    lines.append(safe(lambda: fit(
+        [lambda: render_hosts(style, now), lambda: render_hosts(style, now, with_cpu=False)]
+        + [lambda k=k: render_hosts(style, now, with_cpu=False, keep=k) for k in range(max(0, hosts - 1), 0, -1)], columns)))
+    return [line for line in lines if line]
 
 
 def main():

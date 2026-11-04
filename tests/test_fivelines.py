@@ -44,6 +44,7 @@ class FiveLines(unittest.TestCase):
             "LL_CODEX7": "69", "LL_CODEX7_RESET": str(NOW + 4 * 86400),
         })
         (self.cache / "grok.line").write_text("cursor+grok 81% · Thu 23:22 · grok 7d 39.8M tok\n81 0 live\n")
+        os.utime(self.cache / "grok.line", (NOW - 60, NOW - 60))  # written a minute before NOW
         # What Pharos measured (`pharos usage`). limitline only draws it.
         self.usage = {"version": 1, "generated_at": NOW - 60, "plans": [
             {"provider": "antigravity", "observed_at": NOW - 60, "stale": False, "windows": [
@@ -209,10 +210,12 @@ class FiveLines(unittest.TestCase):
         self.assertIn("◎ codex 7d —", left)
         self.assertIn("✦ agy gemini —", left)
 
-    def test_expired_window_is_not_shown(self):
+    def test_expired_window_says_it_reset(self):
+        # 0.14.0: the old 99% is never shown, and the gap is named instead of hidden.
         os.environ["LL_CODEX5_RESET"] = str(NOW - 10)
         line = plain(fivelines.build(now=NOW))[0]
-        self.assertNotIn("5h", line)
+        self.assertIn("codex 5h reset, no newer reading", line)
+        self.assertNotIn("█████ →18:00", line)
 
     def test_marks_none(self):
         os.environ["LL_MARKS"] = "none"
@@ -240,7 +243,9 @@ class FiveLines(unittest.TestCase):
         self.assertFalse(any(line.startswith("today") for line in lines))
 
     def test_without_pharos_only_claude(self):
-        (self.pharos / "usage.json").unlink()
+        # Pharos not installed (no home). With a home but no usage.json, see test_hardening.
+        import shutil
+        shutil.rmtree(self.pharos)
         lines = plain(fivelines.build(now=NOW))
         self.assertEqual(lines, ["used  ✻ claude 7d ███▌░"])
 

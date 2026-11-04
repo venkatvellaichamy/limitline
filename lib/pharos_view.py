@@ -10,9 +10,12 @@ reader.
 Claude Code gives its limits only to the status-line program, so the status line
 relays that reading, as-is, to ~/.pharos/inbox/claude.json for Pharos (`relay`).
 """
-import json, os, sys, time
+import json, os, stat, sys, time
 
 STALE_AFTER = 15 * 60  # Pharos refreshes every 2 minutes; older than this is shown as stale.
+SKEW_S = 120           # further in the future than this is a skewed clock, not a fresh reading
+FORMAT = 1             # the newest usage.json version this display understands
+MAX_BYTES = 4 << 20
 
 
 def pharos_home():
@@ -30,20 +33,36 @@ def now_epoch():
         return int(time.time())
 
 
-def read_usage(now=None):
-    """usage.json with `age`, or None when Pharos is not installed or the file is unreadable."""
-    now = now_epoch() if now is None else now
+def load_json(path):
+    """A regular file's JSON, or None. Opened non-blocking, so a FIFO in its place cannot hang."""
     try:
-        with open(usage_path(), encoding="utf-8") as handle:
-            data = json.load(handle)
+        info = os.stat(path)
+        if not stat.S_ISREG(info.st_mode) or info.st_size > MAX_BYTES:
+            return None
+        with open(os.open(path, os.O_RDONLY | getattr(os, "O_NONBLOCK", 0)), encoding="utf-8") as handle:
+            return json.load(handle)
     except (OSError, ValueError):
         return None
+
+
+def read_usage(now=None):
+    """usage.json with `age`, or None when Pharos is not installed, the file is unreadable,
+    or its format is newer than this display understands (nothing from it is drawn).
+    A reading from the future (beyond SKEW_S) has no age and is stale, never fresh."""
+    now = now_epoch() if now is None else now
+    data = load_json(usage_path())
     if not isinstance(data, dict) or not isinstance(data.get("plans"), list):
         return None
+    version = data.get("version", 1)
+    if isinstance(version, bool) or not isinstance(version, (int, float)) or not 1 <= version <= FORMAT:
+        return None
     try:
-        data["age"] = max(0, now - int(data.get("generated_at") or 0))
+        generated = int(data.get("generated_at") or 0)
     except (TypeError, ValueError):
-        data["age"] = None
+        generated = 0
+    age = now - generated if generated > 0 else None
+    data["skew"] = age is not None and age < -SKEW_S
+    data["age"] = None if age is None or data["skew"] else max(0, age)
     data["stale"] = data["age"] is None or data["age"] > STALE_AFTER
     return data
 
@@ -51,11 +70,7 @@ def read_usage(now=None):
 def _own_claude():
     base = os.environ.get("XDG_CACHE_HOME") or os.path.join(os.path.expanduser("~"), ".cache")
     path = os.environ.get("LIMITLINE_CLAUDE_SNAPSHOT") or os.path.join(base, "limitline", "claude.json")
-    try:
-        with open(path, encoding="utf-8") as handle:
-            data = json.load(handle)
-    except (OSError, ValueError):
-        return None
+    data = load_json(path)
     return data if isinstance(data, dict) else None
 
 

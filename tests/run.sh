@@ -1223,6 +1223,7 @@ fi
 # Five lines: line 1 is the session only; lines 2-5 come from lib/fivelines.py.
 five_cache="$TEST_HOME/five-cache"; mkdir -p "$five_cache/limitline" "$TEST_HOME/five-pharos/runs"
 printf 'cursor+grok 81%% · Thu 23:22 · grok 7d 1M tok\n81 0 live\n' > "$five_cache/limitline/grok.line"
+touch -t 202511020359 "$five_cache/limitline/grok.line"  # a minute before LIMITLINE_NOW (TZ=UTC)
 printf '%s' '{"version":1,"generated_at":1762056000,"plans":[],"hosts":{"hosts":[{"name":"studio","free_pct":82,"load_pct":22,"reachable":true}]}}' > "$TEST_HOME/five-pharos/usage.json"
 five_in='{"model":{"display_name":"Opus"},"context_window":{"used_percentage":40},"rate_limits":{"seven_day":{"used_percentage":70,"resets_at":1762100000}}}'
 five_out=$(printf '%s' "$five_in" | NO_COLOR=1 XDG_CACHE_HOME="$five_cache" LIMITLINE_PHAROS_HOME="$TEST_HOME/five-pharos" LIMITLINE_LINES=5 LIMITLINE_REFRESH=0 "$BIN")
@@ -1233,11 +1234,26 @@ check "five-line2-used" "$([[ "$five_l2" == "used  ✻ claude 7d ███▌░
 five_pct=$(printf '%s' "$five_in" | NO_COLOR=1 XDG_CACHE_HOME="$five_cache" LIMITLINE_PHAROS_HOME="$TEST_HOME/five-pharos" LIMITLINE_LINES=5 LIMITLINE_REFRESH=0 LIMITLINE_PLAN_NUMBERS=on "$BIN" | sed -n 2p)
 check "five-line2-both" "$([[ "$five_pct" == *"claude 7d ███▌░ 70%"* ]] && echo yes || echo no)" "yes"
 check "five-hosts-line" "$(printf '%s\n' "$five_out" | tail -1)" "hosts studio 82% mem free · 22% cpu"
+# Hardening, end to end: Pharos installed but not running, and a Codex window that reset.
+mkdir -p "$TEST_HOME/five-down"
+five_down=$(printf '%s' "$five_in" | NO_COLOR=1 XDG_CACHE_HOME="$five_cache" LIMITLINE_PHAROS_HOME="$TEST_HOME/five-down" LIMITLINE_LINES=5 LIMITLINE_REFRESH=0 "$BIN")
+check "five-pharos-not-running" "$five_down" "$(printf '%s\n' "$five_l1" 'used  ✻ claude 7d ███▌░ · pharos not running')"
+printf '%s' '{"version":1,"generated_at":1762056000,"plans":[{"provider":"codex","observed_at":1762055900,"windows":[{"name":"5h","used_pct":90,"resets_at":1762055000},{"name":"7d","used_pct":40,"resets_at":1762400000}]}]}' > "$TEST_HOME/five-pharos/usage.json"
+five_reset=$(printf '%s' "$five_in" | NO_COLOR=1 LIMITLINE_CODEX=1 XDG_CACHE_HOME="$five_cache" LIMITLINE_PHAROS_HOME="$TEST_HOME/five-pharos" LIMITLINE_LINES=5 LIMITLINE_REFRESH=0 "$BIN" | sed -n 2p)
+check "five-codex-reset-passed" "$([[ "$five_reset" == *"codex 5h reset, no newer reading · 7d ██░░░"* ]] && echo yes || echo "$five_reset")" "yes"
 check "two-lines-unchanged" "$(printf '%s' "$five_in" | NO_COLOR=1 XDG_CACHE_HOME="$five_cache" LIMITLINE_LINES=2 LIMITLINE_REFRESH=0 "$BIN" | grep -c 'left ')" "0"
-if python3 -m unittest -q "$ROOT/tests/test_fivelines.py" >/dev/null 2>&1; then
+if five_unit=$(python3 -m unittest -q "$ROOT/tests/test_fivelines.py" 2>&1); then
   check "fivelines-unit" "ok" "ok"
 else
   check "fivelines-unit" "failed" "ok"
+  printf '%s\n' "$five_unit" | grep -E '^(FAIL|ERROR):|Error: |^Ran|^FAILED' >&2
+fi
+# 0.14.0: the display stays honest when Pharos's files are bad (synthetic files only).
+if hard_out=$(python3 -m unittest -q "$ROOT/tests/test_hardening.py" 2>&1); then
+  check "hardening-unit" "ok" "ok"
+else
+  check "hardening-unit" "failed" "ok"
+  printf '%s\n' "$hard_out" | grep -E '^(FAIL|ERROR):|Error: |^Ran|^FAILED' >&2
 fi
 if python3 -m unittest -q "$ROOT/tests/test_release.py" >/dev/null 2>&1; then
   check "release-unit" "ok" "ok"

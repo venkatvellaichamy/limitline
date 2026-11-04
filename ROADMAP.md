@@ -38,7 +38,7 @@ If a feature measures, stores, or decides, it belongs in Pharos.
 | **0.12.0** | Finish the split | Merged (PR #13), **needs tag** |
 | **0.13.0** | Plan views (used or left), CI, releases, channels, update | Released |
 | **0.13.1** | Refill time on every window, behind `plan_resets = "always"` | This PR |
-| **0.14.0** | Display hardening | Planned |
+| **0.14.0** | Display hardening | Built, unreleased |
 | **0.15.0** | Every surface shows the same thing | Planned |
 | **0.16.0** | A settings menu, and an icon on every line | Planned |
 | **1.0.0** | Stable display of a versioned Pharos contract | Planned |
@@ -103,20 +103,20 @@ Still open, because it depends on Pharos 0.8.0 (`pharos statusline`):
 
 ### 0.14.0 — Display hardening
 
-- **Linux becomes a required CI check.** The first CI run (2026-11-04) passed 215 of 226 checks on Ubuntu; the 11 failures are the Grok/plan segment, the hot fleet and machines segment, jobs on line 1 and 2, and the two-line fit, all of which drop their segment on Linux. Fix them, then make the Linux job required.
+- [x] **Linux becomes a required CI check.** The first CI run (2026-11-04) passed 215 of 226 checks on Ubuntu; the 11 failures are the Grok/plan segment, the hot fleet and machines segment, jobs on line 1 and 2, and the two-line fit, all of which drop their segment on Linux. Fixed (GNU `stat -f` read a cache's mtime as text; see CHANGELOG), `gnu-*` checks in `tests/run.sh`, and the Linux job is required.
 
-Prove the display stays honest when Pharos's files are bad. Synthetic files and a disposable cache only.
+Prove the display stays honest when Pharos's files are bad. Synthetic files and a disposable cache only. Tests: `tests/test_hardening.py` (`hardening-unit` in `tests/run.sh`), plus `five-pharos-not-running` and `five-codex-reset-passed` end to end.
 
-| Case | Expected display |
-|---|---|
-| Pharos files missing | Says Pharos is not running; Claude's own line still works |
-| Old reading | Shows the age; never shows an old percent as current |
-| Reset time already passed | Says the window reset and there is no newer reading |
-| Partial or invalid JSON | Shows `—` for that field; never crashes, never guesses |
-| Unknown fields or a newer format | Ignores unknown fields; says when the format is too new |
-| Clock skew | No negative ages, no future readings shown as fresh |
-| Narrow terminal | Drops the lowest-priority segment first, as documented |
-| Slow disk | Render stays under 50 ms |
+| Case | Expected display | Done |
+|---|---|---|
+| Pharos files missing | Says Pharos is not running; Claude's own line still works | ✓ `· pharos not running` |
+| Old reading | Shows the age; never shows an old percent as current | ✓ `— 1h ago`, `· 1h old` |
+| Reset time already passed | Says the window reset and there is no newer reading | ✓ `5h reset, no newer reading` |
+| Partial or invalid JSON | Shows `—` for that field; never crashes, never guesses | ✓ per field and per line |
+| Unknown fields or a newer format | Ignores unknown fields; says when the format is too new | ✓ `pharos format v2 is newer than this limitline` |
+| Clock skew | No negative ages, no future readings shown as fresh | ✓ `· pharos clock ahead` (over 2 minutes ahead) |
+| Narrow terminal | Drops the lowest-priority segment first, as documented | ✓ whole plans, job counts, hosts from the right |
+| Slow disk | Render stays under 50 ms | ✓ each file read once, non-blocking, regular files only |
 
 ### 0.15.0 — Every surface shows the same thing
 
