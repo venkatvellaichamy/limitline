@@ -1,17 +1,46 @@
 # Roadmap
 
-limitline makes no network calls of its own and never reads tokens or auth files. Every number comes from a file on this machine, or from the vendor's own CLI asked to refresh its usage (for example Grok's `/usage show`). A number that isn't live is labelled `estimate` or `manual`.
+## What limitline is
+
+limitline is a **display**. It shows, in the terminal, what Pharos has measured: what is left on each plan, today's and older jobs, and the hosts. It does not measure, fetch, schedule, cap or decide anything.
+
+It runs in one of two modes:
+
+| Mode | Where every number comes from |
+|---|---|
+| **With Pharos** (`~/.pharos/usage.json` exists) | Pharos only, including the Claude row. limitline reads Pharos's files and writes nothing into `~/.pharos`. |
+| **Without Pharos** | Only the tool it runs in. In Claude Code, the Claude 5h and 7d numbers come from the status line input. Other plans, jobs and hosts are not shown. |
+
+| limitline (display) | Pharos (manages) |
+|---|---|
+| Draws the Claude Code status line, `status`, `watch` and the menu bar | Measures every plan and host, writes `~/.pharos/usage.json` and `summary.json` |
+| Reads Pharos's files, or the status line input when Pharos is absent | Captures Claude Code's own limits, fetches vendor usage (agy, Grok, Codex, Cursor), probes hosts over ssh |
+| Labels missing or old data as such, never guesses | Caps, the 75% → 80% → full ramp, forecasts, routing advice, admission |
+| | History, reports, alerts, sync between machines, the Console |
+
+If a feature measures, stores, or decides, it belongs in Pharos.
 
 ## How versions work
 
-- **The version number is set when a release ships, never earlier.** Planned work below has no version until it ships.
-- **Minor version (0.x.0):** new features or behaviour. **Patch version (0.x.y):** bug fixes only.
-- **One merge to `main` is one release:** bump `bin/limitline`, `.claude-plugin/plugin.json` and `.claude-plugin/marketplace.json` together, add a CHANGELOG entry, and tag `vX.Y.Z` on the merge commit.
-- Planned work and branches do not reserve version numbers. Retired numbers stay retired, including 0.6.0 and the unmerged 0.8.2/0.8.3 labels.
-- Every repository change goes through a PR. All model work goes through Pharos.
-- **No 0.6.0:** releases went 0.5.0 → 0.7.0 because the planned "0.6" was deferred. The number is retired so the sequence stays monotonic.
+- Every piece of planned work has a **target version**. If plans change, the work moves to another version; the table below is updated in the same PR.
+- **Minor (0.x.0):** features or behaviour. **Patch (0.x.y):** bug fixes only.
+- Each release bumps `bin/limitline`, `.claude-plugin/plugin.json` and `.claude-plugin/marketplace.json` together, adds a CHANGELOG entry, and is tagged `vX.Y.Z` on the merge commit. Nothing on `main` stays untagged.
+- Shipped or retired numbers are never reused. 0.6.0 is retired.
+- Every change goes through a PR. All model work goes through Pharos.
 
-## Shipped
+## Versions
+
+| Version | Theme | Status |
+|---|---|---|
+| 0.1.0 – 0.9.0 | Status line, themes, fleet, watch, history, live Cursor+Grok | Shipped |
+| **0.10.0** | Display only: the five-line view, Pharos as the source | Merged, **needs tag** |
+| **0.11.0** | Live, but quiet | Built on a branch |
+| **0.12.0** | Finish the split | Planned |
+| **0.13.0** | Display hardening | Planned |
+| **0.14.0** | Every surface shows the same thing | Planned |
+| **1.0.0** | Stable display of a versioned Pharos contract | Planned |
+
+### Shipped
 
 | Version | Date | What |
 |---|---|---|
@@ -27,60 +56,88 @@ limitline makes no network calls of its own and never reads tokens or auth files
 | 0.8.1 | 2026-11-03 | Fix: Codex windows hidden by empty "premium" events |
 | 0.9.0 | 2026-11-03 | Live Cursor+Grok plan, scheduled refresh, safer job process checks |
 
-Each version has a `vX.Y.Z` git tag. Dates follow the tagged commits; release details come from CHANGELOG.md and git history, including merged PRs #1–4 and #7. The GitHub merged-PR query could not be completed during this update because the API was unreachable.
+### 0.10.0 — Display only (merged, needs tag)
 
-## Now
+Already on `main` (PRs #9 and #10) but still labelled 0.9.0. Release it as-is.
 
-1. **Break limitline, then fix what breaks.** Run the test plan below, record failures, and fix and retest them before adding providers.
-2. **Pharos admission:** add `limitline status --json` with stable fields for plan usage, source, freshness, reset time, and unavailable readings. Pharos 0.5.4 reads provider scripts directly today; test the JSON contract before switching admission to it.
-3. **Keep operations local:** use only the MacBook, Mac mini, and silver-line. No VPS for now. Stability comes before more sources or features.
+- Five-line status line: session, `left` per plan, `today` and `older` jobs, `hosts`.
+- Plans, hosts and job counts come from Pharos (`usage.json`, `summary.json`).
+- agy `/usage`, the Grok plan fetch, the hosts ssh probe and the cross-tool readers moved to `pharos usage`.
+- Review fixes F1–F5 and the owner items O1–O3 from the 2026-11-03 whole-repo review.
 
-### Break limitline test plan
+### 0.11.0 — Live, but quiet (branch `feat/live-events`)
 
-Use synthetic logs, a disposable cache, and fake CLIs on the existing machines. Do not read credentials or private data. Record the command, expected result, actual result, and regression check for each failure. This is planned work, not a claim that these checks have passed.
+- The `▶` turns while jobs run and stands still when nothing runs.
+- A new Pharos event (run merged or failed, a plan crossing 75/90/100%, a host offline) shows dimmed for 30 seconds.
+- A plan number that just moved is bold for 20 seconds.
+- The `left` line shows the age of Pharos's reading when it is over 5 minutes old.
+- `animate = "off"` keeps the information and drops the motion.
 
-| Case | Check |
+### 0.12.0 — Finish the split
+
+Remove what still measures or decides, after Pharos has an equivalent. Each item is either moved to Pharos or deleted; nothing is removed before Pharos covers it.
+
+**The two modes, exactly.** Today, with Pharos present, the Claude row still comes from the status line input (`lib/fivelines.py` `claude_cells`), and limitline copies that reading into `~/.pharos/inbox/claude.json` (`bin/limitline`, "Relay them, as-is, to Pharos"). Both change:
+
+- With Pharos, the Claude row comes from `usage.json` like every other plan.
+- limitline stops writing to `~/.pharos/inbox`. Claude Code gives its limits only to the status line command, so Pharos captures them itself: **depends on Pharos** providing a `pharos statusline` command that saves Claude's reading and then hands the same input to limitline to draw. `pharos install` sets the status line to it.
+- Without Pharos, nothing changes: the Claude row comes from the status line input.
+- Tests cover both modes, and the switch between them when Pharos is installed or removed.
+
+- Providers (`providers/claude`, `codex`, `cursor`, `grok`, `spend`, `xai-plan`): keep only what the stand-alone "the tool I run in" mode needs.
+- Background refresher and its schedule: Pharos owns refresh.
+- History and the weekly report: Pharos stores history; limitline draws it.
+- Nudges and the value meter: advice comes from Pharos.
+- Sync between machines (`sync_dir`): Pharos owns it.
+- Machine probes and the jobs registry: read from Pharos.
+- `watch` actions (stop, verify, retry): call Pharos commands instead of acting on runs directly.
+- Drop config keys that no longer do anything, with a one-line notice when an old key is found.
+
+### 0.13.0 — Display hardening
+
+Prove the display stays honest when Pharos's files are bad. Synthetic files and a disposable cache only.
+
+| Case | Expected display |
 |---|---|
-| Stale logs | Age readings past freshness, reset, and expiry boundaries. Label stale data, drop expired percentages, and keep stale data out of history and admission decisions. |
-| Missing CLI | Remove the vendor CLI from the test PATH. Refresh finishes with a clear reason and preserves the last reading with its actual age. |
-| Clock skew | Put observations and resets ahead of and behind the local clock. Flag suspect timestamps; never turn future data into fresh headroom or a negative age. |
-| Vendor log format changes | Rename fields, change types, and add malformed lines. Skip bad records without crashing or inventing a percentage; report unavailable data if none remain valid. |
-| Two machines | Refresh on the MacBook and Mac mini with overlapping and delayed snapshots. Avoid double-counting shared plans, retain source and age, and never signal another machine's PID. |
-| Pty fetch timeout | Make a fake CLI hang during the fetch. Enforce the timeout, stop the child process group, release the lock, preserve the last reading, and let the next refresh run. |
-| Full cache directory | Simulate no space and failed writes in a disposable cache. Report the write failure, preserve valid files, and recover after space returns. |
-| Partial JSON file | Interrupt a cache write and supply truncated JSON. Readers do not crash or accept partial values; a later valid refresh recovers. |
+| Pharos files missing | Says Pharos is not running; Claude's own line still works |
+| Old reading | Shows the age; never shows an old percent as current |
+| Reset time already passed | Says the window reset and there is no newer reading |
+| Partial or invalid JSON | Shows `—` for that field; never crashes, never guesses |
+| Unknown fields or a newer format | Ignores unknown fields; says when the format is too new |
+| Clock skew | No negative ages, no future readings shown as fresh |
+| Narrow terminal | Drops the lowest-priority segment first, as documented |
+| Slow disk | Render stays under 50 ms |
 
-For every case, check status rendering and the planned JSON output. Unknown, stale, or invalid data must remain distinguishable from measured headroom for Pharos admission. Hardening is done when failures have fixes and repeatable regression checks, fetches leave no child processes or stuck locks, and valid cache data survives failed writes.
+### 0.14.0 — Every surface shows the same thing
 
-## Next
-
-- Per-plan caps following the owner's ramp: 75% → 80% → full.
-- A per-plan “runs out at” forecast from the burn rate.
-- `limitline advise`: suggest the provider and machine to use now.
-- Console feed: publish the status snapshot through `sync_dir` for the Pharos Console on the Mac mini.
-
-## Later
-
-- More live sources, after hardening; label estimates clearly.
+- `status`, `watch`, the menu bar and the status line read one shared view, so they never disagree.
 - Menu bar parity for every segment.
-- Sync across machines through the existing `sync_dir`.
-- Self-hosted ntfy server — **needs VPS**.
-- Public endpoints — **needs VPS**. Revisit only if the owner changes the no-VPS decision.
 
-## Parked
+### 1.0.0 — Stable
 
-- **0.8 API-provider work: parked.** API model providers are deferred until Pharos and limitline are stable and robust. The old planning label does not reserve a release number or change the shipped 0.8.0 history release.
+- Pharos's files carry a schema version; limitline states which versions it reads.
+- The 0.13.0 checks pass on every release.
+- Install and upgrade through the plugin with no manual steps.
 
-## Open questions for the owner
+## Moved to Pharos
 
-- What evidence should allow the cap to move from 75% to 80%, then full?
-- When admission data is unavailable or stale, should Pharos wait or choose another measured plan?
+These were on the limitline roadmap before the split. They are tracked in the Pharos roadmap now.
+
+- Per-plan caps and the 75% → 80% → full ramp.
+- "Runs out at" forecasts from the burn rate.
+- `advise`: which provider and machine to use now.
+- `status --json` for admission (Pharos measures directly).
+- The feed for the Pharos Console.
+- More live usage sources.
+- Self-hosted ntfy and public endpoints (both need a VPS).
+- API model providers (parked).
 
 ## Skills
 
-Build these only when token budget allows. Once built, each lives at `skills/<name>/SKILL.md` in this repository.
+Built when token budget allows; each lives at `skills/<name>/SKILL.md`.
 
-| Name | What it does | When an agent should use it | Status |
-|---|---|---|---|
-| `/limits` | Show a live table of every plan, including source, freshness, usage, and reset. | Before admitting or routing work, or when the owner asks about remaining limits. | planned — to be built when token budget allows |
-| `/ramp` | Show and apply the owner's per-plan cap ramp: 75% → 80% → full. | When checking a cap or applying an owner-approved ramp change. | planned — to be built when token budget allows |
+| Name | What it does | Target |
+|---|---|---|
+| `/limits` | Show what is left on every plan, with source, age and reset, as Pharos measured it | 0.14.0 |
+
+The `/ramp` skill applies caps, so it moved to Pharos.
