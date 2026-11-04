@@ -1246,6 +1246,15 @@ printf '%s' '{"version":1,"generated_at":1762056000,"plans":[{"provider":"codex"
 five_old_obs=$(printf '%s' "$five_in" | NO_COLOR=1 LIMITLINE_CODEX=1 XDG_CACHE_HOME="$five_cache" LIMITLINE_PHAROS_HOME="$TEST_HOME/five-pharos" LIMITLINE_LINES=5 LIMITLINE_REFRESH=0 "$BIN" | sed -n 2p)
 check "five-codex-observed-30m" "$([[ "$five_old_obs" == *"codex 7d ██░░░"* ]] && echo yes || echo "$five_old_obs")" "yes"
 check "two-lines-unchanged" "$(printf '%s' "$five_in" | NO_COLOR=1 XDG_CACHE_HOME="$five_cache" LIMITLINE_LINES=2 LIMITLINE_REFRESH=0 "$BIN" | grep -c 'left ')" "0"
+make_summary "$TEST_HOME/five-pharos/summary.json" '{"running":0,"done":0,"need_you":1,"failed":0,"retried":0,"waiting_limit":0,"working":2,"blocked":1}' '[{"state":"blocked","owner":"you","reason":"ready to merge (PR #40)","next":"merge","kind":"run"}]'
+printf 'jobs_detail = "counts"\n' > "$TEST_HOME/attention.toml"
+five_attention() {
+  printf '%s' "$five_in" | NO_COLOR=1 LIMITLINE_ANIMATE=off XDG_CACHE_HOME="$five_cache" LIMITLINE_PHAROS_HOME="$TEST_HOME/five-pharos" LIMITLINE_LINES=5 LIMITLINE_COLUMNS=500 LIMITLINE_REFRESH=0 "$BIN" | sed -n 3p
+}
+check "five-attention-reason" "$(five_attention)" 'today ▶ 0 running │ ⚙ 2 working │ ✓ 0 done │ ⛔ 1 blocked: ready to merge (PR #40) │ ✋ 1 need you │ ✗ 0 failed · ↻ 0 retried │ ⏸ 0 waiting on limit'
+check "five-attention-config-counts" "$(LIMITLINE_CONFIG="$TEST_HOME/attention.toml" five_attention)" 'today ▶ 0 running │ ⚙ 2 working │ ✓ 0 done │ ⛔ 1 blocked │ ✋ 1 need you │ ✗ 0 failed · ↻ 0 retried │ ⏸ 0 waiting on limit'
+make_summary "$TEST_HOME/five-pharos/summary.json" '{"running":0,"done":0,"need_you":1,"failed":0,"retried":0,"waiting_limit":0}'
+check "five-attention-legacy" "$(five_attention)" 'today ▶ 0 running │ ✓ 0 done │ ✋ 1 need you │ ✗ 0 failed · ↻ 0 retried │ ⏸ 0 waiting on limit'
 if five_unit=$(python3 -m unittest -q "$ROOT/tests/test_fivelines.py" 2>&1); then
   check "fivelines-unit" "ok" "ok"
 else

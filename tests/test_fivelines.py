@@ -64,8 +64,8 @@ class FiveLines(unittest.TestCase):
         (self.pharos / "usage.json").write_text(json.dumps(self.usage))
 
     def summary(self, today=None, older=None, oldest=None, generated=NOW):
-        data = {"generated_at": generated, "today": dict(dict.fromkeys(fivelines.KEYS, 0), **(today or {})),
-                "older": dict(dict.fromkeys(fivelines.KEYS, 0), **(older or {})), "oldest_open": oldest}
+        data = {"generated_at": generated, "today": dict(dict.fromkeys(("running", "done", "need_you", "failed", "retried", "waiting_limit"), 0), **(today or {})),
+                "older": dict(dict.fromkeys(("running", "done", "need_you", "failed", "retried", "waiting_limit"), 0), **(older or {})), "oldest_open": oldest}
         (self.pharos / "summary.json").write_text(json.dumps(data))
 
     def tearDown(self):
@@ -230,6 +230,38 @@ class FiveLines(unittest.TestCase):
         lines = plain(fivelines.build(now=NOW))
         self.assertEqual(lines[1], "today ▶ 2 running │ ✓ 2 done │ ✋ 1 need you │ ✗ 0 failed · ↻ 1 retried │ ⏸ 1 waiting on limit")
         self.assertEqual(lines[2], "older ✋ 1 need you │ oldest 1d (pharos)")
+
+    def test_attention_counts_and_reason(self):
+        self.summary(today={"working": 2, "blocked": 1, "need_you": 1})
+        path = self.pharos / "summary.json"
+        data = json.loads(path.read_text())
+        data["recent"] = [{"state": "working", "owner": "agent", "reason": "busy"},
+                          {"state": "blocked", "owner": "you", "reason": "ready to merge (PR #40)"}]
+        path.write_text(json.dumps(data))
+        line = plain(fivelines.build(now=NOW))[1]
+        self.assertIn("⚙ 2 working", line)
+        self.assertIn("⛔ 1 blocked: ready to merge (PR #40)", line)
+        os.environ["LL_JOBS_DETAIL"] = "counts"
+        self.assertNotIn("ready to merge", plain(fivelines.build(now=NOW))[1])
+        os.environ["LL_JOBS_DETAIL"] = "reason"
+        self.assertNotIn("ready to merge", plain(fivelines.build(now=NOW, columns=len(line) - 1))[1])
+        os.environ["LL_COLOR"] = "1"
+        self.assertIn("\x1b[33m⛔ 1 blocked", fivelines.build(now=NOW)[1])
+
+    def test_attention_reason_is_bounded_and_handles_bad_rows(self):
+        self.summary(today={"need_you": 1}, older={"blocked": 1})
+        path = self.pharos / "summary.json"
+        data = json.loads(path.read_text())
+        data["recent"] = [None, {"owner": "agent", "state": "working", "reason": "busy"},
+                          {"owner": "you", "state": "need_you", "reason": "x" * 100},
+                          {"owner": "you", "state": "blocked", "reason": "approve access"}]
+        path.write_text(json.dumps(data))
+        lines = plain(fivelines.build(now=NOW))
+        self.assertIn("✋ 1 need you: " + "x" * 79 + "…", lines[1])
+        self.assertIn("⛔ 1 blocked: approve access", lines[2])
+        data["recent"] = "invalid"
+        path.write_text(json.dumps(data))
+        self.assertNotIn(":", plain(fivelines.build(now=NOW))[1])
 
     def test_older_hidden_when_empty(self):
         self.summary(today={"running": 1})
