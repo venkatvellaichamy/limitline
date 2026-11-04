@@ -2,8 +2,14 @@
 
 ## Unreleased
 
+- **limitline shows usage; Pharos measures it.** The status line, `status`, `watch`, `report`, host lines, and the five-line view read Pharos's `~/.pharos/usage.json` (every plan and host) and `summary.json` (job counts). limitline no longer runs agy (`/usage`), the Grok plan fetch, the hosts ssh probe, or any reader for a tool it is not running in. Those moved to `pharos usage`, with their tests.
+- On its own, limitline shows only the tool it runs in: Claude Code's limits from the status-line input, or with `LIMITLINE_TOOL=codex|grok|cursor` that tool's own local files.
+- The status line relays Claude's reading, as-is, to `~/.pharos/inbox/claude.json` when `~/.pharos` exists. Claude Code gives these numbers only to the status-line program, so this is how Pharos sees them.
+- Removed: `providers/antigravity`, `providers/gemini`, `lib/xai_fetch.py`, the hosts probe in `limitline refresh`, and the sync-folder fleet and machine snapshots. The Gemini app row is gone.
+- `limitline doctor` reports whether Pharos's usage file is present and how old it is, and when the Claude relay last wrote.
+
 - Five lines (`lines = 5`), the layout approved on 2026-11-03. Line 1 is this session only (model, context, time, cost, lines). Line 2, `left`, shows what is **left** on every plan in a fixed order with a mark per company: ✻ claude, ◎ codex, ⬡ cursor+grok, ✦ agy (gemini, claude+gpt, argon). A reset time is shown only at 25% or less left; red at 10% or less, yellow at 25% or less; a missing reading is `—`, never a guess. Line 3, `today`, counts Pharos jobs started today: running, done, need you, failed, retried, waiting on limit. Line 4, `older`, counts jobs from the last 7 days that are still open, and hides itself when there are none. Line 5, `hosts`, shows each computer by its nickname with free memory and CPU load. `marks = "none"` drops the marks. `lines = 1` and `lines = 2` are unchanged.
-- Job counts come from Pharos's `~/.pharos/summary.json` when it is under 10 minutes old, otherwise from the run states. limitline never writes Pharos files.
+- Job counts come from Pharos's `~/.pharos/summary.json` (today's only).
 - The Gemini app is no longer shown; no tool can read it.
 - Machine readings fall back to `/proc` on Linux and WSL.
 - `/limitline:install` asks for a nickname for this computer and any others, and turns on five lines.

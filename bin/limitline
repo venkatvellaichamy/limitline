@@ -429,7 +429,7 @@ codex_cache_file() {
 }
 
 cache_hit=0
-if [[ "$CODEX_ENABLED" -eq 1 && -z "${LIMITLINE_CODEX_DIR:-}" && "${LIMITLINE_NOCACHE:-}" != "1" ]]; then
+if [[ "$CODEX_ENABLED" -eq 1 && -z "${LIMITLINE_PHAROS_USAGE:-}" && "${LIMITLINE_NOCACHE:-}" != "1" ]]; then
   cache_file=$(codex_cache_file)
   if [[ -f "$cache_file" ]]; then
     wall=$(date +%s)
@@ -559,11 +559,12 @@ parse_fields() {
   done < <(printf '%s\n' "$blob")
 }
 
-# One scan for every path: the codex provider walks all recent session files.
+# Codex numbers come from Pharos (~/.pharos/usage.json). The Claude Code status line
+# never reads another tool's files; without Pharos there is no codex segment.
 scan_codex() {
   local parsed
   command -v python3 >/dev/null 2>&1 || return 1
-  parsed=$(LIMITLINE_NOW="$NOW" python3 "$LIMITLINE_ROOT/providers/codex" --fields 2>/dev/null) || return 1
+  parsed=$(LIMITLINE_NOW="$NOW" python3 "$LIMITLINE_ROOT/lib/pharos_view.py" --codex-fields 2>/dev/null) || return 1
   codex5=""
   codex5_raw=""
   codex7=""
@@ -575,7 +576,7 @@ scan_codex() {
 
 write_codex_cache() {
   local ok="$1" dest tmp dash
-  [[ -z "${LIMITLINE_CODEX_DIR:-}" && "${LIMITLINE_NOCACHE:-}" != "1" ]] || return 0
+  [[ -z "${LIMITLINE_PHAROS_USAGE:-}" && "${LIMITLINE_NOCACHE:-}" != "1" ]] || return 0
   dest=$(codex_cache_file)
   tmp="${dest}.$$"
   dash() {
@@ -841,6 +842,13 @@ write_snapshot() {
   ;; esac
   printf '{"observed_at":%s,"provider":"claude","source":"statusline","stale":false,%s"windows":[%s]}\n' \
     "$NOW" "$spend_json" "$windows" > "$dest" 2>/dev/null || true
+  # Claude Code gives these numbers only to the status line. Relay them, as-is, to Pharos.
+  local ph="${LIMITLINE_PHAROS_HOME:-$HOME/.pharos}"
+  if [[ -d "$ph" && -s "$dest" ]]; then
+    mkdir -p "$ph/inbox" 2>/dev/null \
+      && cp "$dest" "$ph/inbox/.claude.$$" 2>/dev/null \
+      && mv -f "$ph/inbox/.claude.$$" "$ph/inbox/claude.json" 2>/dev/null || true
+  fi
 }
 write_snapshot
 

@@ -3,7 +3,10 @@
 import json, os, shutil, subprocess, sys
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-PROVIDERS = ("claude", "codex", "cursor", "grok", "antigravity", "gemini", "xai-plan")
+# Without Pharos, limitline reads only Claude (the status-line snapshot) and the tool it
+# runs in (LIMITLINE_TOOL=codex|grok|cursor). Every other number comes from Pharos.
+# Cursor and Grok share one plan, so either tool reads all three of its local sources.
+OWN_TOOLS = {"codex": ("codex",), "grok": ("cursor", "grok", "xai-plan"), "cursor": ("cursor", "grok", "xai-plan")}
 
 
 def provider_cmd(path):
@@ -170,13 +173,23 @@ def status_brief(data):
     return text
 
 
+def own_providers():
+    tool = (os.environ.get("LIMITLINE_TOOL") or "").strip().lower()
+    return ("claude",) + OWN_TOOLS.get(tool, ())
+
+
 def load_all():
-    rows = [run_provider(name) for name in PROVIDERS]
-    rows = load_lib("xaiplan").merge(rows)
-    extra = run_provider("spend")
-    if extra.get("source") not in (None, "none") and extra.get("windows"):
-        rows.append(extra)
-    return sort_rows(rows)
+    view = load_lib("pharos_view")
+    usage = view.read_usage()
+    if usage is not None:
+        rows = view.plan_rows(usage)
+        spend = [r for r in rows if r.get("provider") == "api"]
+        rows = [r for r in rows if r.get("provider") != "api"]
+        rows = load_lib("xaiplan").merge(rows)
+        rows += [r for r in spend if r.get("windows")]
+        return sort_rows(rows)
+    rows = [run_provider(name) for name in own_providers()]
+    return sort_rows(load_lib("xaiplan").merge(rows))
 
 
 OLDER_LIMIT = 12
@@ -417,35 +430,17 @@ def fleet_doctor():
             bits.append("%s %s" % (row.get("name"), state))
         lines.append("machines cache: %ds old, ttl %ds%s; %s" % (mage, mach_ttl, "" if mage <= mach_ttl else " (stale, hidden)", ", ".join(bits) or "no hosts"))
 
-    xai = load_lib("xaiplan")
-    live = xai.read_log()
-    if live is None:
-        lines.append("cursor+grok live: no reading in %s (limitline refresh runs grok /usage show)" % xai.log_path())
+    view = load_lib("pharos_view")
+    usage = view.read_usage()
+    if usage is None:
+        lines.append("pharos usage: not found at %s; only Claude%s is shown (install Pharos for every plan and host)"
+                     % (view.usage_path(), (" and " + os.environ["LIMITLINE_TOOL"]) if os.environ.get("LIMITLINE_TOOL") else ""))
     else:
-        lines.append("cursor+grok live: %ds old, from the Grok log" % max(0, now_epoch() - int(live["observed_at"])))
-    fetch = xai.fetch_state()
-    if fetch.get("last_attempt"):
-        lines.append("cursor+grok fetch: last try %ds ago, %s" % (max(0, now_epoch() - int(fetch["last_attempt"])), ("failed: " + str(fetch.get("error"))) if fetch.get("error") else "ok"))
-    plan_age = cache_age(xai.cache_path())
-    if plan_age is not None:
-        lines.append("cursor+grok manual override: %ds old (limitline set xai-plan); used only when newer than live" % plan_age)
-    row = xai.read()
-    if xai.present(row):
-        lines.append("cursor+grok shown: source %s, %s" % (row.get("source"), "stale" if row.get("stale") else "fresh"))
-    else:
-        lines.append("cursor+grok shown: none; Cursor shows a token estimate")
-    agy = load_lib("antigravity")
-    found = agy.agy_bin()
-    lines.append("antigravity binary: %s" % (found or "not found (set agy = \"/path/to/agy\")"))
-    live = agy.read_live()
-    if live is None:
-        lines.append("antigravity live: no reading in %s (limitline refresh runs agy -p /usage)" % agy.usage_path())
-    else:
-        lines.append("antigravity live: %ds old, %d buckets" % (max(0, now_epoch() - live[0]), len(live[1])))
-    fetch = agy.fetch_state()
-    if fetch.get("last_attempt"):
-        lines.append("antigravity fetch: last try %ds ago, %s" % (max(0, now_epoch() - int(fetch["last_attempt"])), ("failed: " + str(fetch.get("error"))) if fetch.get("error") else "ok"))
-    lines.append("gemini app: not measured (see gemini.google.com/usage)")
+        names = ", ".join(str(p.get("label") or p.get("provider")) for p in usage.get("plans") or [])
+        lines.append("pharos usage: %ss old%s; %s" % (usage.get("age"), " (stale)" if usage.get("stale") else "", names or "no plans"))
+    relay = os.path.join(view.pharos_home(), "inbox", "claude.json")
+    age = cache_age(relay)
+    lines.append("claude relay to pharos: %s" % ("%ds old" % age if age is not None else "not written yet"))
     jobs = load_lib("jobs")
     if os.path.isdir(jobs.jobs_dir()):
         every = jobs.load(every=True)
@@ -754,12 +749,7 @@ def main(argv):
             result = refresh.main(argv[1:])
         except Exception:
             return
-        # Say what the Grok plan fetch did, unless it is switched off.
-        if result and not result.endswith("LIMITLINE_XAI_FETCH=0"):
-            print("xai plan: %s" % result)
-        agy = getattr(refresh, "AGY_RESULT", "")
-        if agy and agy != "off":
-            print("antigravity: %s" % agy)
+
     elif cmd == "schedule":
         sys.exit(load_lib("schedule").main(argv[1:]) or 0)
     else:

@@ -1,6 +1,12 @@
 # limitline
 
-Local usage limits for Claude Code, Codex, Cursor, Grok, and Gemini, plus Pharos runs, background jobs, and machine health. The status line is one compact row. Nothing in this tool opens a network connection.
+A status line for AI plan limits. limitline **shows** usage; it does not measure other tools.
+
+- **On its own,** it shows the tool it runs in: Claude Code's limits, model, context, and cost from the status-line input, or, inside Codex, Grok, or Cursor (`LIMITLINE_TOOL=codex|grok|cursor`), that tool's own local files.
+- **With [Pharos](https://github.com/venkatvellaichamy/pharos),** it shows everything Pharos measured: every plan (Claude, Codex, Cursor + Grok, Antigravity), every host, and the job counts. Pharos writes `~/.pharos/usage.json` and `~/.pharos/summary.json`; limitline reads them.
+- Claude Code hands its limits only to the status-line program, so limitline relays that one reading, as-is, to `~/.pharos/inbox/claude.json` when Pharos is installed.
+
+Nothing in this tool opens a network connection, runs ssh, or starts another tool's CLI.
 
 ```
 Opus 5.5 │ ctx ▓▓░░░ ·41% │ 5h ▓▓▓░░ +62% ↻1h42m │ 7d ▓▓░░░ ·38% ↻Thu 09:00 │ $1.25 │ codex 5h ·12% · 7d +55%
@@ -244,13 +250,9 @@ Only recent runs are counted. A run that is `starting`, `running`, or `paused-qu
 
 ## Machines and local models
 
-`machines` is off on the Claude Code line until it is named or `machines = "on"`. `limitline refresh` collects each host with `ssh`, `BatchMode`, and `ConnectTimeout` (default 2 seconds). The status line only reads the cache, which stays fresh for 180 seconds (`machines_ttl`). A host that does not answer is `mini ∅`.
+`machines` is off on the Claude Code line until it is named or `machines = "on"`. The rows come from Pharos (`usage.json` → `hosts`), which probes each host; limitline never runs ssh. `limitline refresh` copies them into `machines.line`. Without Pharos there is no machines segment.
 
-Each row is free memory, then the Ollama model that is loaded: `mini 29% free · qwen3:14b / laptop 62% free`. The percent is the `System-wide memory free percentage` that `memory_pressure` prints on that host, so you can check it there. When a host has no `memory_pressure` (not macOS), the row falls back to labelled CPU load, `worker-1 load 13%`. `limitline status` adds CPU load (1-minute load average over CPU count) and the installed count: `mini 29% free · qwen3:14b · load 27% · 2 installed`. Before 0.4.1 the line showed that CPU load with no label, which read like memory. If a loaded model leaves under `mem_free_warn` percent of memory free (default 15), either because free memory is already under that line or because the model itself is that large, the row gains `⚠`.
-
-The probe adds `/opt/homebrew/bin` and `/usr/local/bin` to `PATH` before it runs `ollama`, because a non-interactive ssh session and launchd both start without them.
-
-Hosts come from `hosts` or `LIMITLINE_HOSTS` (`mini` or `mini=user@host`). When that list is empty, limitline reads `~/.pharos/machines.json` if the file exists. It does not require Pharos. `name=local` runs the same probe on this Mac and does not use ssh. There is no network on the status-line path.
+Each row is free memory, then the Ollama model that is loaded: `mini 29% free · qwen3:14b / laptop 62% free`. A host Pharos could not reach is `mini ∅`. `limitline status` adds CPU load and the installed count. If a loaded model leaves under `mem_free_warn` percent of memory free (default 15), the row gains `⚠`. Host nicknames and the ssh targets are Pharos settings (`hosts = [...]` in `~/.pharos/usage.toml`).
 
 ## Shared Cursor + Grok plan
 
@@ -266,16 +268,9 @@ The Grok CLI fetches that number from xAI whenever its interactive `/usage show`
 
 limitline reads the newest such line: `creditUsagePercent` is the percent, `currentPeriod.end` is the reset, `subscriptionTier` is the plan, and `ts` is when it was observed. The log is several megabytes and grows, so it is read backwards from the end in 512 KB chunks; a line that does not parse is skipped and the search goes further back.
 
-`limitline refresh` keeps that line fresh. It opens `~/.grok/bin/grok` (`LIMITLINE_GROK_BIN`; `PATH` is not searched) in a pseudo-terminal, from an empty folder in limitline's cache, types `/usage show`, waits for the new log line, and exits. `grok -p "/usage show"` would not work: headless mode sends the text to the model. `/usage show` is a local command, so it uses no model tokens; it calls only xAI's billing API, with the Grok CLI's own login. limitline never reads `~/.grok/auth.json` or any token, and it opens no network connection itself.
+Pharos keeps that line fresh (`pharos usage --refresh`). It opens `~/.grok/bin/grok` (`LIMITLINE_GROK_BIN`; `PATH` is not searched) in a pseudo-terminal, from an empty folder in limitline's cache, types `/usage show`, waits for the new log line, and exits. `grok -p "/usage show"` would not work: headless mode sends the text to the model. `/usage show` is a local command, so it uses no model tokens; it calls only xAI's billing API, with the Grok CLI's own login. limitline never reads `~/.grok/auth.json` or any token, and it opens no network connection itself.
 
-- The fetch runs at most every `xai_ttl` minutes (default 30, `LIMITLINE_XAI_TTL`), counted from the last attempt or the newest log line, whichever is later. So a `/usage show` you run by hand counts too. `limitline refresh --force` ignores the TTL.
-- A lock (`~/.cache/limitline/xai-fetch.lock`) lets only one fetch run at a time; a second one skips instead of waiting.
-- It has a 45-second limit (`LIMITLINE_XAI_TIMEOUT`). Grok and everything it started are always stopped afterwards: Ctrl-C, then SIGTERM, then SIGKILL to its process group.
-- If the grok binary is missing or the fetch fails, the last reading stays, and it is marked stale (dimmed, with its age and `refresh failed: ...` in `limitline status`) until a fetch succeeds. `limitline doctor` shows the last attempt.
-- It never runs inside the status-line render. When the status line finds its cache old, it starts `refresh.py --no-fetch`, which only re-reads the log.
-- `LIMITLINE_XAI_FETCH=0` turns the fetch off.
-
-`limitline refresh` prints what the fetch did, such as `xai plan: fetched` or `xai plan: skipped: fetched 300s ago, xai_ttl 1800s`. To refresh on a schedule, see [Scheduled refresh](#scheduled-refresh).
+limitline itself never starts grok. It reads the log only when it runs inside Grok or Cursor without Pharos (`LIMITLINE_TOOL=grok`); otherwise the reading comes from Pharos.
 
 ### Manual override
 
@@ -321,19 +316,13 @@ The Claude Code line shows `jobs mining 62/1842 ✗3 · backup ok 08:36`: runnin
 
 ## Antigravity and the Gemini app
 
-Google AI Pro has two separate allowances, and limitline shows them as two rows.
-
-**Antigravity** (the agy CLI and IDE) is live and exact. `limitline refresh` runs `agy -p "/usage" --output-format json`, which is a local command: no agent turn, no tokens, no quota spent. From `command.data.groups[].buckets[]` it keeps each bucket's `id`, group name, `window` (5h or weekly), and `reset_time`, with `used_pct = round((1 - remaining_fraction) * 100)`, in `~/.cache/limitline/antigravity.json` (`LIMITLINE_AGY_USAGE`). Nothing else from the output is stored. The row is plan `antigravity`, with one window per bucket, named by its id:
+Antigravity's buckets (Gemini models, Claude and GPT models, Gemini 4 Argon) come from Pharos, which runs agy's read-only `agy -p "/usage" --output-format json` (no agent turn, no tokens). limitline shows each bucket by name, with the reset when a bucket is low:
 
 ```
 antigravity gemini-5h 0% · gemini-weekly 0% · 3p-5h 7% · 3p-weekly 5% · argon-weekly 100% resets Thu 21:35
 ```
 
-Today the groups are "Gemini Models" (Flash and Pro, 5h and weekly), "Claude and GPT models" (Claude and GPT-OSS inside agy, 5h and weekly), and "Gemini 4 Argon" (weekly only). `limitline --host json` keeps each window's `id`, `group`, and `window`, so Pharos can pick the bucket for the model it runs. The fetch runs at most every `agy_ttl` minutes (default 15), one at a time (a lock), with a 30-second timeout (`LIMITLINE_AGY_TIMEOUT`). It runs only from `limitline refresh` and the background agents that run it, never from the status line. `agy_fetch = "off"` or `LIMITLINE_AGY_FETCH=0` turns it off. The binary is `agy = "/path/to/agy"` in the config (or `LIMITLINE_AGY_BIN`), else `agy` on `PATH`, else `~/.local/bin`, `/opt/homebrew/bin`, `/usr/local/bin`, or `~/bin`, because launchd starts the background refresher with a bare `PATH`. `limitline doctor` prints the binary it found. A reading older than an hour is marked stale, and a bucket whose reset has passed is dropped, because it has refilled. `limitline doctor` prints the reading's age and the last fetch result.
-
-A `quota reached … Resets in 4h0m` line in `~/.gemini/antigravity-cli/cli.log`, or a Pharos agy run paused on quota, is an event, not a measurement. It is never shown as a live 100%. Without a live reading the row says `unknown`, and the event is added with its age and source: `antigravity unknown · last limit hit 2h ago (cli.log)`. The event is stale after 5 hours, or once a live reading or a finished Pharos agy run that started later appears (`… (cli.log, stale)`). No cli.log line that marks a successful agy request has been identified yet (the log's contents were not inspected when this was written), so those two later signals and the 5-hour bound are what clear it. The log's glog stamps are local wall-clock time. Pharos treats `unknown` as no room (fail closed), and nudges never call Antigravity `ok`.
-
-**The Gemini app** (gemini.google.com and the Mac app) has its own "Current usage" and "Weekly limit", shown only at <https://gemini.google.com/usage>. No CLI command or plain local file exposes them, and limitline never opens cookies, keychains, token or credential stores, or LevelDB/IndexedDB blobs. So that row always says `gemini      not measured (see gemini.google.com/usage)`, with no window and never a guessed number.
+The Gemini app's allowance (gemini.google.com) is not shown: no tool can read it.
 
 ## Reset moments
 
@@ -405,22 +394,13 @@ Set `sync_dir` or `LIMITLINE_SYNC_DIR` to a folder you already sync, such as an 
 
 ## Background refresh
 
-The status line never runs ssh or scans runs. It reads `fleet.line`, `machines.json`, and `grok.line` from `~/.cache/limitline/`, and when they are older than their TTL it starts one `limitline refresh` in the background and shows nothing for that segment until the next render. If nothing renders for a while, the segment can sit empty.
+The status line never runs ssh, a provider, or another tool's CLI. It reads `fleet.line`, `machines.line`, and `grok.line` from `~/.cache/limitline/`, and when they are old it starts one `limitline refresh` in the background. That refresh only re-reads Pharos's files (`usage.json`, run states) and `limitline job` reports. Measuring is Pharos's job: its `com.venkat.pharos.usage` launchd agent runs `pharos usage --refresh` every 2 minutes.
 
-On macOS, `limitline install-refresher` installs a launchd agent (`~/Library/LaunchAgents/dev.limitline.refresh.plist`) that runs `limitline refresh` every 60 seconds with `ProcessType Background`, low-priority IO, and `Nice 10`. The agent runs a small launcher in `~/.local/share/limitline/`, which follows `claude plugin update` to the newest installed copy, so the agent keeps working after an update. `limitline uninstall-refresher` stops it and removes both files. `limitline doctor` reports whether it is installed and loaded. On Linux, run `limitline refresh` from cron instead; `install-refresher` prints the line.
-
-### Scheduled refresh
-
-`limitline schedule install` writes a lighter launchd agent, `~/Library/LaunchAgents/com.limitline.refresh.plist`, that runs `limitline refresh` every 15 minutes at low priority. That is cheap: a refresh reads local files, and the Grok plan fetch inside it keeps its own `xai_ttl` (30 minutes by default) and lock, so grok starts at most twice an hour. Without either agent, the live plan reading only moves when you run `limitline refresh` or `/usage show` in Grok yourself. The agent uses the same plugin-update-proof launcher as `install-refresher` (`~/.local/share/limitline/schedule-launcher.py`). `limitline schedule uninstall` stops it and removes both files, and `limitline schedule status` (or `doctor`) says whether it is installed and loaded. Both agents can be installed at once; the lock keeps their fetches apart. Elsewhere, `schedule install` prints a cron line.
+On macOS, `limitline install-refresher` installs a launchd agent (`~/Library/LaunchAgents/dev.limitline.refresh.plist`) that runs `limitline refresh` every 60 seconds, so idle terminals stay current. `limitline uninstall-refresher` removes it.
 
 ## Fleet and machines from another machine or session
 
-Every Claude Code session on the same Mac shares one cache, so a second session needs nothing extra. A session on a different machine sees only what that machine can collect. There are two ways to give it fleet and machine data.
-
-1. Collect directly. On that machine, set `fleet = "on"` and `machines = "on"`, list the workers in `hosts` (such as `["mini=user@mini.local", "laptop=local"]`), and make sure `ssh -o BatchMode=yes user@mini.local true` works with a key and a known host entry, because refresh never prompts. Then run `limitline install-refresher`. Fleet counts there come from that machine's own Pharos runs or process list.
-2. Share snapshots. Set the same `sync_dir` on each machine to a folder you already sync. Every `limitline refresh` writes `<sync_dir>/<host>/cockpit/fleet.json` and `machines.json`. When refresh runs elsewhere, it adds run counts from other machines' snapshots (each machine publishes only its own runs, so nothing is counted twice) and adds hosts it does not collect itself. Snapshots older than 15 minutes are ignored. The machine that publishes needs the refresher, or snapshots go stale.
-
-A cloud-hosted Claude Code session (for example, one started from claude.ai) runs on a remote container. It cannot ssh to your Macs or read their Pharos runs. It can only show fleet and machine data from `sync_dir` snapshots, and only if that folder is reachable from inside the container, such as a mounted volume or a checked-out repository that a local machine commits snapshots to. Most desktop sync folders are not available there. `limitline doctor` says `session: cloud-hosted` when it detects this.
+Every Claude Code session on the same Mac shares one cache, so a second session needs nothing extra. Other machines appear because Pharos probes them (`hosts` in `~/.pharos/usage.toml`). A cloud-hosted session cannot reach your Macs or their Pharos files, so it shows only Claude's own line. `limitline doctor` says `session: cloud-hosted` when it detects this.
 
 ## Doctor
 
