@@ -10,7 +10,7 @@ its `/usage show` command fetches the plan from xAI:
              "subscriptionTier": "SuperGrok Plus"}}
 
 The newest such line is the live reading (source "live"). `limitline refresh`
-makes Grok write a fresh one (lib/xai_fetch.py); this module only reads.
+has Pharos make Grok write a fresh one (`pharos usage --refresh`); this module only reads.
 
 Manual override: ~/.cache/limitline/xai-plan.json, written by
 `limitline set xai-plan`. It is always labelled source "manual" and shown
@@ -135,7 +135,7 @@ def read_log(path=None):
 
 
 def fetch_state():
-    """What lib/xai_fetch.py recorded about its last attempt."""
+    """What the last Grok plan fetch recorded (Pharos now runs it)."""
     try:
         data = json.load(open(os.path.join(cache_dir(), "xai-fetch.json")))
     except (OSError, ValueError):

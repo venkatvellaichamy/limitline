@@ -1,32 +1,19 @@
 #!/usr/bin/env python3
-"""Background cache writer. SSH runs here, never on the status-line hot path."""
-import json, os, subprocess, sys, time
+"""Rebuild the status line's small caches from what Pharos measured. Measures nothing.
+
+grok.line and machines.line come from ~/.pharos/usage.json, fleet.line from Pharos's run
+states, jobs.line from `limitline job` reports. No provider command, no ssh, no network:
+Pharos does that (`pharos usage --refresh`).
+"""
+import json, os, sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import fleet
 import grokline
 import jobs
 import machines
+import pharos_view
 import xaiplan
-import sync
-from config import setting
-
-# Snapshots from other machines older than this are ignored.
-SYNC_FRESH = 900
-
-# Non-interactive ssh and launchd both start with PATH=/usr/bin:/bin:/usr/sbin:/sbin,
-# which hides a Homebrew `ollama`. Add the usual install folders first.
-SCRIPT = (
-    "PATH=/opt/homebrew/bin:/usr/local/bin:$PATH; export PATH; "
-    # macOS first; Linux (and WSL) fall back to /proc. A field that cannot be read stays empty.
-    "echo '## load'; sysctl -n vm.loadavg 2>/dev/null || cat /proc/loadavg 2>/dev/null; "
-    "echo '## ncpu'; sysctl -n hw.ncpu 2>/dev/null || nproc 2>/dev/null; "
-    "echo '## mem'; sysctl -n hw.memsize 2>/dev/null || awk '/^MemTotal:/{print $2*1024}' /proc/meminfo 2>/dev/null; "
-    "echo '## pressure'; memory_pressure 2>/dev/null || awk '/^MemTotal:/{t=$2} /^MemAvailable:/{a=$2} "
-    "END{if (t) printf \"System-wide memory free percentage: %d%%\\n\", a*100/t}' /proc/meminfo 2>/dev/null; "
-    "echo '## ps'; ollama ps; "
-    "echo '## list'; ollama list"
-)
 
 
 def write_text(path, text):
@@ -41,222 +28,65 @@ def write_text(path, text):
     os.replace(tmp, path)
 
 
-def capture_host(host, timeout):
-    fixture = os.environ.get("LIMITLINE_MACHINE_DIR")
-    if fixture:
-        path = os.path.join(fixture, host["name"] + ".txt")
-        if not os.path.isfile(path):
-            return ""
-        try:
-            return open(path).read()
-        except OSError:
-            return ""
-    target = host.get("ssh") or ""
-    if host["name"] in ("local", "localhost") or target in ("local", "localhost"):
-        try:
-            proc = subprocess.run(["sh", "-c", SCRIPT], capture_output=True, text=True, timeout=timeout + 1)
-        except (OSError, subprocess.TimeoutExpired):
-            return ""
-        return proc.stdout or ""
-    cmd = [
-        "ssh", "-o", "BatchMode=yes",
-        "-o", "ConnectTimeout=%d" % timeout,
-        "-o", "StrictHostKeyChecking=yes",
-        target, SCRIPT,
-    ]
-    try:
-        proc = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout + 1)
-    except (OSError, subprocess.TimeoutExpired):
-        return ""
-    if proc.returncode != 0 and not (proc.stdout or "").strip():
-        return ""
-    return proc.stdout or ""
-
-
-def sync_folder():
-    return setting("sync_dir", "LIMITLINE_SYNC_DIR", "")
-
-
-def now_epoch():
-    return fleet.now_epoch()
-
-
-def publish_cockpit(kind, payload):
-    """Write <sync_dir>/<host>/cockpit/<kind>.json. The subfolder keeps these
-    out of the provider snapshots that sit beside it."""
-    folder = sync_folder()
-    if not folder or not os.path.isdir(folder):
-        return
-    dest = os.path.join(folder, sync.host_name(), "cockpit")
-    try:
-        os.makedirs(dest, exist_ok=True)
-        write_text(os.path.join(dest, kind + ".json"), json.dumps(payload, sort_keys=True))
-    except OSError:
-        return
-
-
-def remote_cockpit(kind):
-    """Fresh snapshots of one kind from every other machine in the sync folder."""
-    folder = sync_folder()
-    found = []
-    if not folder or not os.path.isdir(folder):
-        return found
-    me = sync.host_name()
-    now = now_epoch()
-    try:
-        names = sorted(os.listdir(folder))
-    except OSError:
-        return found
-    for name in names:
-        if sync.clean_host(name) == me:
-            continue
-        path = os.path.join(folder, name, "cockpit", kind + ".json")
-        try:
-            data = json.load(open(path))
-        except (OSError, ValueError):
-            continue
-        if not isinstance(data, dict):
-            continue
-        stamp = data.get("observed_at")
-        if isinstance(stamp, bool) or not isinstance(stamp, (int, float)) or now - stamp > SYNC_FRESH:
-            continue
-        found.append((sync.clean_host(name), data))
-    return found
-
-
 def write_fleet():
     states = fleet.collect()
     recent, _ = fleet.split_recent(states)
-    counts = fleet.summarize(recent)
-    publish_cockpit("fleet", {"observed_at": now_epoch(), "counts": counts})
-    for _, data in remote_cockpit("fleet"):
-        other = data.get("counts")
-        if not isinstance(other, dict):
-            continue
-        for key in ("run", "verify", "failed", "warn", "stopped"):
-            value = other.get(key)
-            if isinstance(value, int) and not isinstance(value, bool) and value > 0:
-                counts[key] = counts.get(key, 0) + value
-    text = fleet.format_segment(counts)
+    text = fleet.format_segment(fleet.summarize(recent))
     path = os.environ.get("LIMITLINE_FLEET_LINE") or os.path.join(machines.cache_dir(), "fleet.line")
     write_text(path, text)
 
 
-def write_machines():
-    hosts = machines.resolve_hosts()
-    timeout = machines.ssh_timeout()
-    threshold = machines.warn_threshold()
-    rows = []
-    for host in hosts:
-        text = capture_host(host, timeout)
-        rows.append(machines.parse_snapshot(host["name"], text, threshold))
-    if rows:
-        publish_cockpit("machines", {"observed_at": now_epoch(), "hosts": rows})
-    seen = set(row.get("name") for row in rows)
-    for origin, data in remote_cockpit("machines"):
-        for row in data.get("hosts") or []:
-            if not isinstance(row, dict) or row.get("name") in seen:
-                continue
-            item = dict(row)
-            item["via"] = origin
-            rows.append(item)
-            seen.add(item.get("name"))
-    payload = {"hosts": rows, "observed_at": now_epoch()}
+def write_machines(usage):
+    rows = pharos_view.hosts(usage) if usage else []
     path = os.environ.get("LIMITLINE_MACHINES_JSON") or os.path.join(machines.cache_dir(), "machines.json")
-    # A caller-supplied JSON path is an input for readers. Refresh writes the cache copy
-    # unless that env var is the destination the tests set on purpose.
-    write_text(path, json.dumps(payload, sort_keys=True))
-    line = machines.format_hosts(rows, long=False)
+    write_text(path, json.dumps({"hosts": rows, "observed_at": (usage or {}).get("generated_at")}, sort_keys=True))
     line_dest = os.environ.get("LIMITLINE_MACHINES_LINE") or os.path.join(machines.cache_dir(), "machines.line")
-    write_text(line_dest, line)
+    write_text(line_dest, machines.format_hosts(rows, long=False))
 
 
-def write_grok():
-    """grok.line: with a plan reading, `cursor+grok 74% · Thu 23:22 · grok 7d
-    1.2M tok` and a second line of `pct dim source` flags for the renderer. Without
-    it, Grok's plan and 7-day tokens, never a percent. Written even when empty,
-    so a stale line does not outlive the files it came from."""
-    plan = xaiplan.read()
-    flags = ""
-    if xaiplan.present(plan):
-        grok = grokline.provider_data()
-        if isinstance(grok.get("week"), dict):
-            plan["grok_week"] = grok["week"]
-        text, flags = xaiplan.line_fields(plan)
-    else:
-        text = grokline.segment()
-    path = os.environ.get("LIMITLINE_GROK_LINE") or os.path.join(machines.cache_dir(), "grok.line")
-    write_text(path, text + ("\n" + flags if flags else ""))
-
-
-def write_jobs():
-    """jobs.line, with dead pids found here rather than on the status-line path.
-    Skipped when no job was ever reported, so nothing appears for users without jobs."""
-    if not os.path.isdir(jobs.jobs_dir()):
-        return
-    jobs.write_line()
-
-
-def write_history():
-    """One plan sample per 10 minutes, from the same rows limitline status reads."""
+def _cli():
     import importlib.util
     path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "cli.py")
     spec = importlib.util.spec_from_file_location("limitline_cli", path)
     cli = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(cli)
+    return cli
+
+
+def write_grok(usage=None):
+    """grok.line: `cursor+grok 74% · Thu 23:22 · grok 7d 1.2M tok`, then `pct dim source`.
+    The rows come from Pharos, or, inside Grok or Cursor without Pharos, from that
+    tool's own files. Written even when empty, so a stale line does not outlive them."""
+    text, flags = "", ""
+    rows = _cli().load_all()
+    for row in rows:
+        if row.get("provider") == xaiplan.PROVIDER:
+            text, flags = xaiplan.line_fields(row)
+    if not text:
+        grok = next((r for r in rows if r.get("provider") == "grok"), None)
+        text = grokline.segment(grok) if grok else ""
+    path = os.environ.get("LIMITLINE_GROK_LINE") or os.path.join(machines.cache_dir(), "grok.line")
+    write_text(path, text + ("\n" + flags if flags else ""))
+
+
+def write_jobs():
+    if os.path.isdir(jobs.jobs_dir()):
+        jobs.write_line()
+
+
+def write_history():
     import history
-    history.record(cli.load_all())
-
-
-def fetch_xai(force=False):
-    """Have the Grok CLI fetch the xAI plan into its log, at most every xai_ttl
-    minutes and one at a time. Slow (a pty session), so it runs after the fast
-    steps, and never when the status line launched this refresh."""
-    import xai_fetch
-    return xai_fetch.fetch(force=force)
-
-
-def fetch_agy(force=False):
-    """Have agy print its usage (`agy -p "/usage"`: no agent turn, no tokens) at
-    most every agy_ttl minutes, with a timeout. Never from the status line."""
-    import antigravity
-    return antigravity.fetch(force=force)
-
-
-# The last Antigravity fetch result, for `limitline refresh` to print.
-AGY_RESULT = ""
+    history.record(_cli().load_all())
 
 
 def main(argv=None):
-    global AGY_RESULT
-    argv = list(sys.argv[1:] if argv is None else argv)
-    for step in (write_grok, write_jobs, write_fleet, write_machines, write_history):
+    usage = pharos_view.read_usage()
+    for step in (lambda: write_grok(usage), write_jobs, write_fleet, lambda: write_machines(usage), write_history):
         try:
             step()
         except Exception:
             continue
-    result = ""
-    if "--no-fetch" not in argv:
-        try:
-            AGY_RESULT = fetch_agy(force="--force" in argv)
-        except Exception:
-            AGY_RESULT = "failed"
-        if AGY_RESULT == "fetched":
-            try:
-                write_history()
-            except Exception:
-                pass
-        try:
-            result = fetch_xai(force="--force" in argv)
-        except Exception:
-            result = "failed"
-        if result == "fetched" or result.startswith("failed"):
-            for step in (write_grok, write_history):
-                try:
-                    step()
-                except Exception:
-                    continue
-    return result
+    return ""
 
 
 if __name__ == "__main__":

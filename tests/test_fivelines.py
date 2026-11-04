@@ -44,17 +44,28 @@ class FiveLines(unittest.TestCase):
             "LL_CODEX7": "69", "LL_CODEX7_RESET": str(NOW + 4 * 86400),
         })
         (self.cache / "grok.line").write_text("cursor+grok 81% · Thu 23:22 · grok 7d 39.8M tok\n81 0 live\n")
-        (self.cache / "antigravity.json").write_text(json.dumps({"observed_at": NOW - 60, "buckets": [
-            {"group": "Gemini Models", "resets_at": NOW + 3 * 86400, "used_pct": 0, "window": "weekly"},
-            {"group": "Gemini Models", "resets_at": NOW + 3600, "used_pct": 0, "window": "5h"},
-            {"group": "Claude and GPT models", "resets_at": NOW + 3 * 86400, "used_pct": 7, "window": "weekly"},
-            {"group": "Gemini 4 Argon", "resets_at": NOW + 3 * 86400, "used_pct": 100, "window": "weekly"},
-        ]}))
-        (self.cache / "machines.json").write_text(json.dumps({"hosts": [
-            {"name": "studio", "free_pct": 82, "load_pct": 22, "reachable": True},
-            {"name": "laptop", "free_pct": 49, "load_pct": 45, "reachable": True},
-            {"name": "backup", "reachable": False},
-        ]}))
+        # What Pharos measured (`pharos usage`). limitline only draws it.
+        self.usage = {"version": 1, "generated_at": NOW - 60, "plans": [
+            {"provider": "antigravity", "observed_at": NOW - 60, "stale": False, "windows": [
+                {"group": "Gemini Models", "resets_at": NOW + 3 * 86400, "used_pct": 0, "window": "weekly"},
+                {"group": "Gemini Models", "resets_at": NOW + 3600, "used_pct": 0, "window": "5h"},
+                {"group": "Claude and GPT models", "resets_at": NOW + 3 * 86400, "used_pct": 7, "window": "weekly"},
+                {"group": "Gemini 4 Argon", "resets_at": NOW + 3 * 86400, "used_pct": 100, "window": "weekly"},
+            ]}],
+            "hosts": {"observed_at": NOW - 60, "hosts": [
+                {"name": "studio", "free_pct": 82, "load_pct": 22, "reachable": True},
+                {"name": "laptop", "free_pct": 49, "load_pct": 45, "reachable": True},
+                {"name": "backup", "reachable": False},
+            ]}}
+        self.write_usage()
+
+    def write_usage(self):
+        (self.pharos / "usage.json").write_text(json.dumps(self.usage))
+
+    def summary(self, today=None, older=None, oldest=None, generated=NOW):
+        data = {"generated_at": generated, "today": dict(dict.fromkeys(fivelines.KEYS, 0), **(today or {})),
+                "older": dict(dict.fromkeys(fivelines.KEYS, 0), **(older or {})), "oldest_open": oldest}
+        (self.pharos / "summary.json").write_text(json.dumps(data))
 
     def tearDown(self):
         os.environ.clear()
@@ -95,7 +106,8 @@ class FiveLines(unittest.TestCase):
         for key in ("LL_CODEX5", "LL_CODEX5_RESET", "LL_CODEX7", "LL_CODEX7_RESET"):
             del os.environ[key]
         os.environ["LL_CODEX_CACHE"] = str(Path(self.tmp.name) / "none")
-        (self.cache / "antigravity.json").unlink()
+        self.usage["plans"] = []
+        self.write_usage()
         left = plain(fivelines.build(now=NOW))[0]
         self.assertIn("◎ codex 7d —", left)
         self.assertIn("✦ agy gemini —", left)
@@ -111,37 +123,33 @@ class FiveLines(unittest.TestCase):
         self.assertNotIn("✻", left)
         self.assertTrue(left.startswith("left  claude 7d 30%"))
 
-    def test_today_and_older_from_states(self):
-        self.state("a", "running", TODAY)
-        self.state("b", "merged", TODAY)
-        self.state("c", "awaiting-verify", TODAY, commits=["x"])
-        self.state("d", "awaiting-verify", TODAY, commits=[])
-        self.state("e", "failed", TODAY, retried_by="f")
-        self.state("f", "running", TODAY, retry_of="e")
-        self.state("g", "paused-quota", TODAY)
-        self.state("h", "verify-failed", YESTERDAY, commits=["x"])
-        self.state("i", "done", YESTERDAY)
+    def test_today_and_older_from_pharos_summary(self):
+        self.summary(today={"running": 2, "done": 2, "need_you": 1, "retried": 1, "waiting_limit": 1},
+                     older={"need_you": 1}, oldest={"id": "h", "repo": "pharos", "age_hours": 32})
         lines = plain(fivelines.build(now=NOW))
         self.assertEqual(lines[1], "today ▶ 2 running │ ✓ 2 done │ ✋ 1 need you │ ✗ 0 failed · ↻ 1 retried │ ⏸ 1 waiting on limit")
         self.assertEqual(lines[2], "older ✋ 1 need you │ oldest 1d (pharos)")
 
     def test_older_hidden_when_empty(self):
-        self.state("a", "done", YESTERDAY)
-        self.state("b", "running", TODAY)
+        self.summary(today={"running": 1})
         lines = plain(fivelines.build(now=NOW))
         self.assertTrue(lines[1].startswith("today"))
         self.assertTrue(lines[2].startswith("hosts"))
 
-    def test_summary_json_preferred_when_fresh(self):
-        self.state("a", "running", TODAY)
-        summary = {"generated_at": NOW, "today": dict.fromkeys(fivelines.KEYS, 0), "older": dict.fromkeys(fivelines.KEYS, 0), "oldest_open": None}
-        summary["today"]["done"] = 9
-        path = self.pharos / "summary.json"
-        path.write_text(json.dumps(summary))
-        os.utime(path, (NOW, NOW))
-        self.assertIn("✓ 9 done", plain(fivelines.build(now=NOW))[1])
-        os.utime(path, (NOW - 3600, NOW - 3600))
-        self.assertIn("▶ 1 running", plain(fivelines.build(now=NOW))[1])
+    def test_yesterdays_summary_is_not_shown_as_today(self):
+        self.summary(today={"done": 9}, generated=NOW - 86400)
+        lines = plain(fivelines.build(now=NOW))
+        self.assertFalse(any(line.startswith("today") for line in lines))
+
+    def test_without_pharos_only_claude(self):
+        (self.pharos / "usage.json").unlink()
+        lines = plain(fivelines.build(now=NOW))
+        self.assertEqual(lines, ["left  ✻ claude 7d 30%"])
+
+    def test_stale_pharos_usage_shows_dashes_for_agy(self):
+        self.usage["generated_at"] = NOW - 3600
+        self.write_usage()
+        self.assertIn("✦ agy gemini —", plain(fivelines.build(now=NOW))[0])
 
     def test_hosts_use_nicknames_and_offline(self):
         hosts = plain(fivelines.build(now=NOW))[-1]
@@ -156,10 +164,8 @@ class FiveLines(unittest.TestCase):
         self.assertNotIn("claude+gpt", narrow)
 
     def test_never_fails(self):
-        (self.cache / "machines.json").write_text("{not json")
-        (self.cache / "antigravity.json").write_text("[]")
-        (self.pharos / "runs" / "bad").mkdir()
-        (self.pharos / "runs" / "bad" / "state.json").write_text("{")
+        (self.pharos / "usage.json").write_text("{not json")
+        (self.pharos / "summary.json").write_text("[]")
         lines = fivelines.build(now=NOW)
         self.assertTrue(lines[0])
 

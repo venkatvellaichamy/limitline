@@ -58,6 +58,31 @@ export LIMITLINE_AGY_FETCH=0
 
 fail=0
 pass=0
+# Stand in for `pharos usage`: what Pharos would write to usage.json, made from limitline's
+# own readers with the current environment. limitline itself never runs them for the status line.
+pharos_usage() {
+  local out
+  out=$(mktemp "$TEST_HOME/usage.XXXXXX")
+  python3 - "$ROOT" "$out" "$@" << 'PY'
+import json, os, subprocess, sys
+root, out, names = sys.argv[1], sys.argv[2], sys.argv[3:]
+usage = {"version": 1, "generated_at": int(os.environ.get("LIMITLINE_NOW") or 0), "plans": [], "hosts": {"hosts": []}}
+for name in names:
+    proc = subprocess.run([sys.executable, os.path.join(root, "providers", name)], capture_output=True, text=True)
+    try:
+        data = json.loads(proc.stdout or "{}")
+    except ValueError:
+        data = {}
+    data.setdefault("provider", name)
+    data.setdefault("windows", [])
+    if name in ("grok", "spend"):
+        usage[name] = data
+    else:
+        usage["plans"].append(data)
+json.dump(usage, open(out, "w"))
+PY
+  printf '%s' "$out"
+}
 
 strip_ansi() {
   sed $'s/\033\\[[0-9;]*m//g'
@@ -157,7 +182,7 @@ printf '%s\n' '{"timestamp":"2025-11-02T03:40:00.000Z","type":"event_msg","paylo
 touch -t 202511020300 "$fresh_dir/old.jsonl"
 touch -t 202511020350 "$fresh_dir/sub/session.jsonl"
 
-example_got=$(LIMITLINE_CODEX=1 LIMITLINE_CODEX_DIR="$fresh_dir" LIMITLINE_NOCACHE=1 "$BIN" < "$FIX/full.json" | strip_ansi)
+example_got=$(LIMITLINE_CODEX=1 LIMITLINE_PHAROS_USAGE="$(LIMITLINE_CODEX_DIR="$fresh_dir" pharos_usage codex)" LIMITLINE_NOCACHE=1 "$BIN" < "$FIX/full.json" | strip_ansi)
 example_got=${example_got%$'\n'}
 example_want=$(cat "$FIX/example.expected")
 example_want=${example_want%$'\n'}
@@ -227,7 +252,8 @@ for f in "$FIX"/*.json; do
   no_jq=$(PATH="$nojq" LIMITLINE_CODEX=0 "$BIN" < "$f" | strip_ansi)
   check "python-fallback-$base" "$no_jq" "$with_jq"
 done
-py_codex=$(PATH="$nojq" LIMITLINE_CODEX=1 LIMITLINE_CODEX_DIR="$fresh_dir" LIMITLINE_NOCACHE=1 "$BIN" < "$FIX/full.json" | strip_ansi)
+fresh_usage=$(LIMITLINE_CODEX_DIR="$fresh_dir" pharos_usage codex)
+py_codex=$(PATH="$nojq" LIMITLINE_CODEX=1 LIMITLINE_PHAROS_USAGE="$fresh_usage" LIMITLINE_NOCACHE=1 "$BIN" < "$FIX/full.json" | strip_ansi)
 py_codex=${py_codex%$'\n'}
 check "python-fallback-codex" "$py_codex" "$example_want"
 
@@ -320,12 +346,13 @@ touch -t 202511020340 "$many/2025/11/02/rollout-c.jsonl"
 touch -t 202510200301 "$many/2025/10/20/rollout-old.jsonl"
 many_got=$(LIMITLINE_CODEX_DIR="$many" "$ROOT/providers/codex")
 check "provider-codex-many-files" "$many_got" '{"observed_at":1762053600,"plan":"plus","provider":"codex","source":"session","stale":false,"windows":[{"name":"5h","resets_at":1762062120,"used_pct":30},{"name":"7d","resets_at":1762419600,"used_pct":40}]}'
-many_line=$(LIMITLINE_CODEX=1 LIMITLINE_CODEX_DIR="$many" LIMITLINE_NOCACHE=1 "$BIN" < "$FIX/no_rate_limits.json" | strip_ansi)
+many_usage=$(LIMITLINE_CODEX_DIR="$many" pharos_usage codex)
+many_line=$(LIMITLINE_CODEX=1 LIMITLINE_PHAROS_USAGE="$many_usage" LIMITLINE_NOCACHE=1 "$BIN" < "$FIX/no_rate_limits.json" | strip_ansi)
 check "codex-many-files-jq" "$many_line" 'Opus 5.5 │ ctx ▓▓░░░ ·41% │ $0.12 │ codex 5h ·30% · 7d ·40%'
-many_py=$(PATH="$nojq" LIMITLINE_CODEX=1 LIMITLINE_CODEX_DIR="$many" LIMITLINE_NOCACHE=1 "$BIN" < "$FIX/no_rate_limits.json" | strip_ansi)
+many_py=$(PATH="$nojq" LIMITLINE_CODEX=1 LIMITLINE_PHAROS_USAGE="$many_usage" LIMITLINE_NOCACHE=1 "$BIN" < "$FIX/no_rate_limits.json" | strip_ansi)
 check "codex-many-files-nojq" "$many_py" "$many_line"
-many_status=$(LIMITLINE_CODEX_DIR="$many" "$BIN" status | grep '^codex')
-check "codex-many-files-status" "$many_status" 'codex       5h 30% · 7d 40%'
+many_status=$(LIMITLINE_TOOL=codex LIMITLINE_CODEX_DIR="$many" "$BIN" status | grep '^codex')
+check "codex-many-files-status" "$(printf '%s' "$many_status" | tr -s ' ')" 'codex 5h 30% · 7d 40%'
 
 # Real-world shape (2026-11): the newest file holds only a "premium" event whose windows
 # are null. It must not hide the older "codex" event that carries the windows.
@@ -345,7 +372,7 @@ printf '%s\n' '{"timestamp":"2025-11-01T00:00:00Z","payload":{"rate_limits":{"pr
 touch -t 202511010001 "$week_dir/r.jsonl"
 week_got=$(LIMITLINE_CODEX_DIR="$week_dir" "$ROOT/providers/codex")
 check "provider-codex-7d-only" "$week_got" '{"observed_at":1761955200,"provider":"codex","source":"session","stale":false,"windows":[{"name":"7d","resets_at":1762419600,"used_pct":41}]}'
-week_line=$(LIMITLINE_CODEX=1 LIMITLINE_CODEX_DIR="$week_dir" LIMITLINE_NOCACHE=1 "$BIN" < "$FIX/no_rate_limits.json" | strip_ansi)
+week_line=$(LIMITLINE_CODEX=1 LIMITLINE_PHAROS_USAGE="$(LIMITLINE_CODEX_DIR="$week_dir" pharos_usage codex)" LIMITLINE_NOCACHE=1 "$BIN" < "$FIX/no_rate_limits.json" | strip_ansi)
 check "codex-7d-only-line" "$week_line" 'Opus 5.5 │ ctx ▓▓░░░ ·41% │ $0.12 │ codex 7d ·41%'
 
 # No resets_at: the 5h reading lasts five hours from the event, the 7d reading seven days.
@@ -367,26 +394,33 @@ grok_got=$(LIMITLINE_GROK_DIR="$TEST_HOME/grok" "$ROOT/providers/grok")
 grok_got=${grok_got%$'\n'}
 check "provider-grok" "$grok_got" '{"observed_at":1762055400,"provider":"grok","source":"usage.json","stale":false,"week":{"cost_usd":0.0,"sessions":1,"tokens":14},"windows":[]}'
 
-# The Gemini app's allowance has no local source: no window, never a guessed number.
-gem_got=$(LIMITLINE_GEMINI_LOG="$FIX/providers/gemini-cli.txt" python3 "$ROOT/providers/gemini")
-check "provider-gemini-app" "$gem_got" '{"note":"not measured (see gemini.google.com/usage)","observed_at":null,"provider":"gemini","source":"none","stale":false,"windows":[]}'
-# A "quota reached" line in agy's cli.log is an event, not a live 100%.
-agy_event=$(LIMITLINE_GEMINI_LOG="$FIX/providers/gemini-cli.txt" python3 "$ROOT/providers/antigravity")
-check "provider-antigravity-event" "$agy_event" '{"event":{"at":1762052400,"kind":"limit hit","source":"cli.log","stale":false},"label":"antigravity","observed_at":null,"plan":"antigravity","provider":"antigravity","source":"none","stale":false,"windows":[]}'
-
 export LIMITLINE_CLAUDE_SNAPSHOT="$TEST_HOME/claude-snapshot.json"
 export LIMITLINE_CODEX_DIR="$codex_prov"
 export LIMITLINE_GROK_DIR="$TEST_HOME/grok"
-export LIMITLINE_GEMINI_LOG="$FIX/providers/gemini-cli.txt"
+export LIMITLINE_TOOL=codex
+# Without Pharos, limitline inside Codex shows Claude and Codex only.
 status_got=$("$BIN" status)
-check "status-table" "$status_got" "$(printf '%s\n' 'tool        limits' 'claude      5h 62% · 7d 38%' 'codex       5h 12% · 7d 55%' 'antigravity unknown · last limit hit 1h ago (cli.log)' 'cursor      no local quota' 'gemini      not measured (see gemini.google.com/usage)' 'grok        7d 14 tok · $0.00 at API rates · not a quota')"
+check "status-table" "$status_got" "$(printf '%s\n' 'tool     limits' 'claude   5h 62% · 7d 38%' 'codex    5h 12% · 7d 55%')"
+# With Pharos, every plan Pharos measured, in the same table. Antigravity comes from Pharos only.
+all_usage=$(pharos_usage claude codex cursor grok)
+python3 - "$all_usage" << 'PY'
+import json, sys
+path = sys.argv[1]
+data = json.load(open(path))
+data["plans"].append({"provider": "antigravity", "label": "antigravity", "source": "live", "observed_at": 1762056000, "stale": False,
+                      "windows": [{"group": "Gemini 4 Argon", "id": "argon-weekly", "name": "argon-weekly", "used_pct": 100, "resets_at": 1762464900}]})
+json.dump(data, open(path, "w"))
+PY
+pharos_status=$(env -u LIMITLINE_TOOL LIMITLINE_PHAROS_USAGE="$all_usage" "$BIN" status)
+check "status-table-pharos" "$pharos_status" "$(printf '%s\n' 'tool        limits' 'antigravity argon-weekly 100% resets Thu 21:35' 'claude      5h 62% · 7d 38%' 'codex       5h 12% · 7d 55%' 'cursor      no local quota' 'grok        7d 14 tok · $0.00 at API rates · not a quota')"
+! printf '%s' "$pharos_status" | grep -q -F 'gemini ' && check "no-gemini-app-row" "yes" "yes" || check "no-gemini-app-row" "$pharos_status" "no gemini app row"
 
 host_got=$("$BIN" --host prompt)
 check "host-prompt" "$host_got" 'claude 5h 62% · 7d 38% | codex 5h 12% · 7d 55%'
 
 swift_got=$("$BIN" --host swiftbar)
 printf '%s' "$swift_got" | grep -q -F '5h 62%' && printf '%s' "$swift_got" | grep -q -F -- '---' \
-  && printf '%s' "$swift_got" | grep -q -F 'cursor  no local quota' \
+  && printf '%s' "$swift_got" | grep -q -F 'codex  5h 12%' \
   && check "host-swiftbar" "yes" "yes" || check "host-swiftbar" "$swift_got" "swiftbar menu"
 
 preview_got=$("$BIN" preview)
@@ -406,14 +440,14 @@ snap_got=$(LIMITLINE_CLAUDE_SNAPSHOT="$XDG_CACHE_HOME/limitline/claude.json" "$R
 printf '%s' "$snap_got" | grep -q -F '"source":"statusline"' && printf '%s' "$snap_got" | grep -q -F '"used_pct":62' \
   && check "claude-snapshot" "yes" "yes" || check "claude-snapshot" "$snap_got" "snapshot"
 
-unset LIMITLINE_CLAUDE_SNAPSHOT LIMITLINE_CODEX_DIR LIMITLINE_GROK_DIR LIMITLINE_GEMINI_LOG
+unset LIMITLINE_CLAUDE_SNAPSHOT LIMITLINE_CODEX_DIR LIMITLINE_GROK_DIR LIMITLINE_TOOL
 
 # Grok: plan from settings_cache.json and 7-day session tokens. Never a window or a percent.
 grok_fix="$TEST_HOME/grok-fix"
 cp -R "$FIX/grok" "$grok_fix"
 touch -t 202601010000 "$grok_fix"/sessions/*/*/usage.json
 touch -t 202601020000 "$grok_fix/sessions/proj-a/s1/usage.json"
-grok_env=(LIMITLINE_GROK_DIR="$grok_fix/sessions" LIMITLINE_GROK_SETTINGS="$grok_fix/settings_cache.json")
+grok_env=(LIMITLINE_TOOL=grok LIMITLINE_GROK_DIR="$grok_fix/sessions" LIMITLINE_GROK_SETTINGS="$grok_fix/settings_cache.json")
 grok_week=$(env "${grok_env[@]}" "$ROOT/providers/grok")
 grok_week=${grok_week%$'\n'}
 check "provider-grok-week" "$grok_week" '{"observed_at":1762055400,"plan":"SuperGrok Plus","plan_fetched_at":1762045200,"provider":"grok","source":"usage.json","stale":false,"week":{"cost_usd":3.0,"sessions":2,"tokens":1200000},"windows":[]}'
@@ -428,8 +462,8 @@ check "provider-grok-broken-plan" "$grok_broken" '{"observed_at":null,"provider"
 grok_nocost=$(LIMITLINE_GROK_DIR="$FIX/grok-nocost" "$ROOT/providers/grok")
 grok_nocost=${grok_nocost%$'\n'}
 check "provider-grok-no-cost" "$grok_nocost" '{"observed_at":1762055400,"provider":"grok","source":"usage.json","stale":false,"week":{"sessions":1,"tokens":300000},"windows":[]}'
-grok_status=$(env "${grok_env[@]}" "$BIN" status)
-printf '%s' "$grok_status" | grep -q -F 'grok        SuperGrok Plus · 7d 1.2M tok · $3.00 at API rates · not a quota' \
+grok_status=$(env "${grok_env[@]}" "$BIN" status | tr -s " ")
+printf '%s' "$grok_status" | grep -q -F 'grok SuperGrok Plus · 7d 1.2M tok · $3.00 at API rates · not a quota' \
   && check "grok-status" "yes" "yes" || check "grok-status" "$grok_status" "plan, tokens, cost, not a quota"
 grok_host=$(env "${grok_env[@]}" "$BIN" --host prompt)
 ! printf '%s' "$grok_host" | grep -q -F 'grok' \
@@ -439,7 +473,7 @@ printf '%s' "$grok_watch" | grep -q -F '7d 1.2M tok' \
   && printf '%s' "$grok_watch" | grep -q -F 'SuperGrok Plus · 7d 1.2M tok · $3.00 at API rates · not a quota' \
   && check "grok-watch" "yes" "yes" || check "grok-watch" "$grok_watch" "grok column and block"
 grok_cache="$TEST_HOME/grok-cache"
-env "${grok_env[@]}" XDG_CACHE_HOME="$grok_cache" "$BIN" refresh
+env "${grok_env[@]}" XDG_CACHE_HOME="$grok_cache" LIMITLINE_PHAROS_USAGE="$(env "${grok_env[@]}" pharos_usage grok)" "$BIN" refresh
 check "grok-refresh-line" "$(cat "$grok_cache/limitline/grok.line")" 'grok SuperGrok Plus · 7d 1.2M tok'
 grok_off=$(XDG_CACHE_HOME="$grok_cache" NO_COLOR=1 "$BIN" < "$FIX/no_rate_limits.json" | strip_ansi)
 check "grok-segment-off-by-default" "$grok_off" 'Opus 5.5 │ ctx ▓▓░░░ ·41% │ $0.12'
@@ -639,7 +673,7 @@ printf '%s' "$report_got" | grep -q -F '62%' && printf '%s' "$report_got" | grep
 md_got=$(LIMITLINE_CLAUDE_SNAPSHOT="$TEST_HOME/claude-snapshot.json" LIMITLINE_CODEX_DIR="$codex_prov" "$BIN" report --md)
 printf '%s' "$md_got" | grep -q -F '# limitline report' && printf '%s' "$md_got" | grep -q -F 'demo' \
   && ! printf '%s' "$md_got" | grep -q -F '/Users' && check "report-md" "yes" "yes" || check "report-md" "$md_got" "markdown"
-watch_got=$(LIMITLINE_WATCH_ONCE=1 LIMITLINE_CLAUDE_SNAPSHOT="$TEST_HOME/claude-snapshot.json" LIMITLINE_CODEX_DIR="$codex_prov" LIMITLINE_GROK_DIR="$TEST_HOME/grok" LIMITLINE_GEMINI_LOG="$FIX/providers/gemini-cli.txt" "$BIN" watch)
+watch_got=$(LIMITLINE_TOOL=codex LIMITLINE_WATCH_ONCE=1 LIMITLINE_CLAUDE_SNAPSHOT="$TEST_HOME/claude-snapshot.json" LIMITLINE_CODEX_DIR="$codex_prov" LIMITLINE_GROK_DIR="$TEST_HOME/grok" LIMITLINE_GEMINI_LOG="$FIX/providers/gemini-cli.txt" "$BIN" watch)
 printf '%s' "$watch_got" | grep -q -F 'claude' && printf '%s' "$watch_got" | grep -q -F 'codex' \
   && printf '%s' "$watch_got" | grep -q -F '62%' && check "watch" "yes" "yes" || check "watch" "$watch_got" "side by side"
 
@@ -777,45 +811,20 @@ printf '%s' "$fleet_status" | grep -q -F '⚙ 3 run · 1 ✗' \
   && ! printf '%s' "$fleet_status" | grep -q -F '/var' \
   && check "fleet-status" "yes" "yes" || check "fleet-status" "$fleet_status" "runs section"
 
-# Machines come from a cache. Refresh reads fixtures and does not open ssh.
+# Machines come from Pharos's usage.json; refresh copies them into the cache and never opens ssh.
 ssh_dir="$TEST_HOME/sshbin"
 mkdir -p "$ssh_dir"
 printf '%s\n' '#!/bin/sh' 'echo called > "$HOME/ssh.flag"' 'exit 1' > "$ssh_dir/ssh"
 chmod +x "$ssh_dir/ssh"
 rm -f "$TEST_HOME/ssh.flag"
-PATH="$ssh_dir:$PATH" LIMITLINE_HOSTS=mini,worker-1 LIMITLINE_MACHINE_DIR="$FIX/machines" "$BIN" refresh
-if [[ -f "$TEST_HOME/ssh.flag" ]]; then
-  check "machines-no-ssh" "called" "quiet"
-else
-  check "machines-no-ssh" "quiet" "quiet"
-fi
-machines_line=$(cat "$XDG_CACHE_HOME/limitline/machines.line")
-machines_line=${machines_line%$'\n'}
-check "machines-segment" "$machines_line" 'mini 41% free · qwen3:14b / worker-1 ∅'
-LIMITLINE_HOSTS=laptop LIMITLINE_MACHINE_DIR="$FIX/machines" "$BIN" refresh
-laptop_line=$(cat "$XDG_CACHE_HOME/limitline/machines.line")
-laptop_line=${laptop_line%$'\n'}
-check "machines-mem-warn" "$laptop_line" 'laptop 10% free · qwen3:14b ⚠'
-machine_status=$(LIMITLINE_HOSTS=mini LIMITLINE_MACHINE_DIR="$FIX/machines" "$BIN" refresh >/dev/null; "$BIN" status)
-printf '%s' "$machine_status" | grep -q -F 'mini 41% free · qwen3:14b · load 27% · 2 installed' \
-  && check "machines-installed" "yes" "yes" || check "machines-installed" "$machine_status" "installed"
-mkdir -p "$TEST_HOME/.pharos"
-cp "$FIX/fleet/pharos-machines.json" "$TEST_HOME/.pharos/machines.json"
-env -u LIMITLINE_HOSTS LIMITLINE_MACHINE_DIR="$FIX/machines" "$BIN" refresh
-pharos_hosts=$(cat "$XDG_CACHE_HOME/limitline/machines.line")
-pharos_hosts=${pharos_hosts%$'\n'}
-check "machines-pharos-list" "$pharos_hosts" 'mini 41% free · qwen3:14b / worker-1 ∅'
-
-# Warm caches stay on the hot path: one line each, no python and no ssh.
-LIMITLINE_PHAROS_RUNS="$FIX/fleet/runs" LIMITLINE_HOSTS=mini LIMITLINE_MACHINE_DIR="$FIX/machines" "$BIN" refresh
-hot_payload='{"model":{"display_name":"Opus"}}'
+hosts_usage="$TEST_HOME/hosts-usage.json"
+printf '%s\n' '{"version":1,"generated_at":1762056000,"plans":[],"hosts":{"hosts":[{"name":"mini","reachable":true,"free_pct":41,"load_pct":12,"loaded":"qwen3:14b"},{"name":"worker-1","reachable":false}]}}' > "$hosts_usage"
+PATH="$ssh_dir:$PATH" LIMITLINE_PHAROS_USAGE="$hosts_usage" LIMITLINE_PHAROS_RUNS="$FIX/fleet/runs" "$BIN" refresh
+[[ -f "$TEST_HOME/ssh.flag" ]] && check "machines-no-ssh" "called" "quiet" || check "machines-no-ssh" "quiet" "quiet"
+check "machines-from-pharos" "$(cat "$XDG_CACHE_HOME/limitline/machines.line")" 'mini 41% free · qwen3:14b / worker-1 ∅'
+hot_payload='{"model":{"display_name":"Claude Opus 5.5"}}'
 hot_got=$(printf '%s' "$hot_payload" | NO_COLOR=1 LIMITLINE_SEGMENTS=machines,fleet,model "$BIN" | strip_ansi)
-hot_got=${hot_got%$'\n'}
-check "hot-fleet-machines" "$hot_got" 'mini 41% free · qwen3:14b │ ⚙ 3 run · 1 ✗ │ Opus'
-touch -t 202001010000 "$XDG_CACHE_HOME/limitline/fleet.line" "$XDG_CACHE_HOME/limitline/machines.line"
-stale_got=$(printf '%s' "$hot_payload" | NO_COLOR=1 LIMITLINE_SEGMENTS=machines,fleet,model "$BIN" | strip_ansi)
-printf '%s' "$stale_got" | grep -q -F '⚙' && check "hot-cache-stale" "shown" "hidden" || check "hot-cache-stale" "hidden" "hidden"
-LIMITLINE_PHAROS_RUNS="$FIX/fleet/runs" LIMITLINE_HOSTS=mini LIMITLINE_MACHINE_DIR="$FIX/machines" "$BIN" refresh
+check "hot-fleet-machines" "$hot_got" 'mini 41% free · qwen3:14b / worker-1 ∅ │ ⚙ 3 run · 1 ✗ │ Opus 5.5'
 
 sb_root="$TEST_HOME/sb-runs"
 mkdir -p "$sb_root/run-a"
@@ -829,77 +838,12 @@ printf '%s' "$swift_runs" | grep -q -F 'Fleet' && printf '%s' "$swift_runs" | gr
 cursor_got=$(LIMITLINE_CURSOR_LOG="$FIX/providers/cursor-usage.jsonl" "$ROOT/providers/cursor")
 cursor_got=${cursor_got%$'\n'}
 check "provider-cursor-estimate" "$cursor_got" '{"observed_at":1762056000,"provider":"cursor","source":"estimate","stale":false,"windows":[{"budget":1000000,"estimate":true,"name":"7d","tokens":110000,"used_pct":11}]}'
-agy_root="$TEST_HOME/agy-runs"
-mkdir -p "$agy_root/run-agy"
-cp "$FIX/providers/agy-state.json" "$agy_root/run-agy/state.json"
-# A Pharos run paused on quota is the same kind of event: no window, never 100%.
-agy_got=$(LIMITLINE_GEMINI_LOG="$TEST_HOME/missing-gemini-log" LIMITLINE_PHAROS_RUNS="$agy_root" python3 "$ROOT/providers/antigravity")
-check "provider-agy-paused-run" "$agy_got" '{"event":{"at":1762052400,"kind":"limit hit","source":"pharos","stale":false},"label":"antigravity","observed_at":null,"plan":"antigravity","provider":"antigravity","source":"none","stale":false,"windows":[]}'
-# The event goes stale after 5 hours...
-agy_late=$(LIMITLINE_NOW=1762070401 LIMITLINE_GEMINI_LOG="$FIX/providers/gemini-cli.txt" python3 "$ROOT/providers/antigravity" | python3 -c 'import json,sys; d=json.load(sys.stdin); print(d["event"]["stale"], d["windows"])')
-check "agy-event-stale-5h" "$agy_late" 'True []'
-# ...or as soon as a later agy run finished.
-mkdir -p "$agy_root/run-agy-ok"
-printf '%s\n' '{"id":"run-agy-ok","status":"done","tool":"agy","started_at":"2025-11-02T03:30:00Z"}' > "$agy_root/run-agy-ok/state.json"
-agy_after=$(LIMITLINE_GEMINI_LOG="$FIX/providers/gemini-cli.txt" LIMITLINE_PHAROS_RUNS="$agy_root" "$BIN" status | grep '^antigravity')
-check "agy-event-stale-after-success" "$agy_after" 'antigravity unknown · last limit hit 1h ago (cli.log, stale)'
-rm -rf "$agy_root/run-agy-ok"
-
-# Antigravity is live from `agy -p "/usage" --output-format json`, run by limitline refresh.
-agy_home="$TEST_HOME/agy"
-mkdir -p "$agy_home"
-cat > "$agy_home/agy" << EOF
-#!/usr/bin/env bash
-printf '%s\n' "\$*" >> "$agy_home/calls"
-if [[ -n "\${FAKE_AGY_SLEEP:-}" ]]; then sleep "\$FAKE_AGY_SLEEP"; fi
-if [[ -n "\${FAKE_AGY_JUNK:-}" ]]; then echo "not json"; exit 0; fi
-if [[ -n "\${FAKE_AGY_PREAMBLE:-}" ]]; then echo 'Notice: a newer agy is available {see release notes}'; echo '{"type":"init"}'; fi
-cat "$FIX/agy/usage.json"
-EOF
-chmod +x "$agy_home/agy"
-export LIMITLINE_AGY_BIN="$agy_home/agy"
-export LIMITLINE_AGY_USAGE="$agy_home/antigravity.json"
-agy_off=$("$BIN" refresh)
-[[ ! -e "$agy_home/calls" && -z "$agy_off" ]] && check "agy-fetch-off" "yes" "yes" || check "agy-fetch-off" "$agy_off" "agy not run while LIMITLINE_AGY_FETCH=0"
-agy_nofetch=$(LIMITLINE_AGY_FETCH=1 python3 "$ROOT/lib/refresh.py" --no-fetch)
-[[ ! -e "$agy_home/calls" ]] && check "agy-no-fetch-from-status-line" "yes" "yes" || check "agy-no-fetch-from-status-line" "ran" "not run"
-agy_run=$(LIMITLINE_AGY_FETCH=1 "$BIN" refresh)
-check "agy-fetch-runs" "$agy_run" 'antigravity: fetched'
-check "agy-fetch-args" "$(cat "$agy_home/calls")" '-p /usage --output-format json'
-check "agy-fetch-cache" "$(cat "$LIMITLINE_AGY_USAGE")" '{"buckets": [{"group": "Gemini Models", "id": "gemini-5h", "resets_at": 1762068300, "used_pct": 0, "window": "5h"}, {"group": "Gemini Models", "id": "gemini-weekly", "resets_at": 1762464900, "used_pct": 0, "window": "weekly"}, {"group": "Claude and GPT models", "id": "3p-5h", "resets_at": 1762068300, "used_pct": 7, "window": "5h"}, {"group": "Claude and GPT models", "id": "3p-weekly", "resets_at": 1762464900, "used_pct": 5, "window": "weekly"}, {"group": "Gemini 4 Argon", "id": "argon-weekly", "resets_at": 1762464900, "used_pct": 100, "window": "weekly"}], "observed_at": 1762056000}'
-check "agy-fetch-ttl" "$(LIMITLINE_AGY_FETCH=1 "$BIN" refresh)" 'antigravity: fresh'
-check "agy-fetch-once" "$(wc -l < "$agy_home/calls" | tr -d ' ')" '1'
-agy_live=$(python3 "$ROOT/providers/antigravity")
-check "provider-antigravity-live" "$agy_live" '{"age":0,"label":"antigravity","observed_at":1762056000,"plan":"antigravity","provider":"antigravity","source":"live","stale":false,"windows":[{"group":"Gemini Models","id":"gemini-5h","name":"gemini-5h","resets_at":1762068300,"used_pct":0,"window":"5h"},{"group":"Gemini Models","id":"gemini-weekly","name":"gemini-weekly","resets_at":1762464900,"used_pct":0,"window":"weekly"},{"group":"Claude and GPT models","id":"3p-5h","name":"3p-5h","resets_at":1762068300,"used_pct":7,"window":"5h"},{"group":"Claude and GPT models","id":"3p-weekly","name":"3p-weekly","resets_at":1762464900,"used_pct":5,"window":"weekly"},{"group":"Gemini 4 Argon","id":"argon-weekly","name":"argon-weekly","resets_at":1762464900,"used_pct":100,"window":"weekly"}]}'
-agy_status=$("$BIN" status | grep '^antigravity')
-check "agy-status-live" "$agy_status" 'antigravity gemini-5h 0% · gemini-weekly 0% · 3p-5h 7% · 3p-weekly 5% · argon-weekly 100% resets Thu 21:35'
-# A bucket whose reset passed has refilled, so its old percent is dropped.
-check "agy-reset-passed" "$(LIMITLINE_NOW=1762070000 python3 "$ROOT/providers/antigravity" | python3 -c 'import json,sys; print(" ".join(w["id"] for w in json.load(sys.stdin)["windows"]))')" 'gemini-weekly 3p-weekly argon-weekly'
-# A live reading made after a logged limit hit replaces the event.
-check "agy-live-beats-event" "$(python3 "$ROOT/providers/antigravity" | python3 -c 'import json,sys; print("event" in json.load(sys.stdin))')" 'False'
-# Failures and timeouts are recorded and leave the last reading in place.
-check "agy-fetch-junk" "$(FAKE_AGY_JUNK=1 LIMITLINE_AGY_FETCH=1 "$BIN" refresh --force)" 'antigravity: failed: no usage in output'
-check "agy-fetch-timeout" "$(FAKE_AGY_SLEEP=5 LIMITLINE_AGY_TIMEOUT=1 LIMITLINE_AGY_FETCH=1 "$BIN" refresh --force)" 'antigravity: failed: timeout'
-check "agy-cache-kept-after-failure" "$(python3 "$ROOT/providers/antigravity" | python3 -c 'import json,sys; print(json.load(sys.stdin)["source"])')" 'live'
-# A notice line or another JSON object before the usage object does not hide it.
-rm -f "$LIMITLINE_AGY_USAGE"
-check "agy-fetch-preamble" "$(FAKE_AGY_PREAMBLE=1 LIMITLINE_AGY_FETCH=1 "$BIN" refresh --force)" 'antigravity: fetched'
-check "agy-preamble-buckets" "$(python3 -c 'import json,sys; print(len(json.load(open(sys.argv[1]))["buckets"]))' "$LIMITLINE_AGY_USAGE")" '5'
-unset LIMITLINE_AGY_BIN
-# launchd starts the refresher with a bare PATH, so ~/.local/bin and Homebrew are checked too.
-mkdir -p "$HOME/.local/bin"
-cp "$agy_home/agy" "$HOME/.local/bin/agy"
-rm -f "$LIMITLINE_AGY_USAGE"
-check "agy-found-off-path" "$(PATH="$nojq" LIMITLINE_AGY_FETCH=1 "$BIN" refresh --force)" 'antigravity: fetched'
-check "agy-doctor-binary" "$(PATH="$nojq" "$BIN" doctor < /dev/null | grep '^antigravity binary')" "antigravity binary: $HOME/.local/bin/agy"
-rm -f "$HOME/.local/bin/agy"
-unset LIMITLINE_AGY_USAGE
 spend_got=$(LIMITLINE_LEDGER="$FIX/providers/ledger.jsonl" "$ROOT/providers/spend")
 spend_got=${spend_got%$'\n'}
 check "provider-spend" "$spend_got" '{"observed_at":1762056000,"provider":"api","source":"ledger","stale":false,"windows":[{"name":"spend","usd":0.25}]}'
-spend_status=$(LIMITLINE_LEDGER="$FIX/providers/ledger.jsonl" LIMITLINE_CLAUDE_SNAPSHOT="$TEST_HOME/claude-snapshot.json" LIMITLINE_CODEX_DIR="$codex_prov" LIMITLINE_GROK_DIR="$TEST_HOME/grok" LIMITLINE_GEMINI_LOG="$FIX/providers/gemini-cli.txt" "$BIN" status)
+spend_status=$(LIMITLINE_PHAROS_USAGE="$(LIMITLINE_LEDGER="$FIX/providers/ledger.jsonl" LIMITLINE_CLAUDE_SNAPSHOT="$TEST_HOME/claude-snapshot.json" LIMITLINE_CODEX_DIR="$codex_prov" LIMITLINE_GROK_DIR="$TEST_HOME/grok" pharos_usage claude codex grok spend)" "$BIN" status | tr -s " ")
 printf '%s' "$spend_status" | sed -n 2p | grep -q -F 'claude' \
-  && printf '%s' "$spend_status" | grep -q -F 'api         spend $0.25' \
+  && printf '%s' "$spend_status" | grep -q -F 'api spend $0.25' \
   && check "provider-order" "yes" "yes" || check "provider-order" "$spend_status" "constrained first"
 
 nudge_v2=$(NO_COLOR=1 LIMITLINE_NUDGES=1 LIMITLINE_CODEX_DIR="$many" LIMITLINE_MACHINES_JSON="$FIX/machines/idle.json" "$BIN" < "$FIX/over_80.json" | strip_ansi)
@@ -952,15 +896,9 @@ tz_status=$(TZ=Asia/Kolkata LIMITLINE_PHAROS_RUNS="$TEST_HOME/tz-runs" "$BIN" st
 printf '%s' "$tz_status" | grep -q -F 'run-tz  codex  demo  running  30m' \
   && check "fleet-local-time" "yes" "yes" || check "fleet-local-time" "$tz_status" "30m in local time"
 
-# Machines: memory is "N% free" as memory_pressure prints it. No pressure output falls back to labelled load.
-probe_line=$(LIMITLINE_HOSTS=noprobe LIMITLINE_MACHINE_DIR="$FIX/machines" "$BIN" refresh; cat "$XDG_CACHE_HOME/limitline/machines.line")
-check "machines-load-label" "$probe_line" 'noprobe load 13%'
-path_ok=$(cd "$ROOT/lib" && python3 -c 'import refresh; print(refresh.SCRIPT.startswith("PATH=/opt/homebrew/bin:/usr/local/bin:$PATH"))')
-check "machines-probe-path" "$path_ok" "True"
-
 # Two lines: each line is fitted to the width on its own, so line 2 does not
 # push context off line 1. Payload shape from Claude Code 2.1.317 (7d only).
-LIMITLINE_PHAROS_RUNS="$FIX/fleet/runs" LIMITLINE_HOSTS=mini LIMITLINE_MACHINE_DIR="$FIX/machines" "$BIN" refresh
+LIMITLINE_PHAROS_USAGE="$hosts_usage" LIMITLINE_PHAROS_RUNS="$FIX/fleet/runs" "$BIN" refresh
 two_fit=$(NO_COLOR=1 LIMITLINE_LINES=2 LIMITLINE_COLUMNS=80 LIMITLINE_FLEET=1 LIMITLINE_MACHINES=1 LIMITLINE_THEME=emoji "$BIN" < "$FIX/seven_day_only.json" | strip_ansi)
 line_one=$(printf '%s\n' "$two_fit" | sed -n 1p)
 line_two=$(printf '%s\n' "$two_fit" | sed -n 2p)
@@ -1017,30 +955,14 @@ doc_cloud=$(CLAUDE_CODE_REMOTE=true LIMITLINE_LAUNCHCTL="$lc_stub" "$BIN" doctor
 printf '%s' "$doc_cloud" | grep -q -F 'session: cloud-hosted' \
   && check "doctor-cloud" "yes" "yes" || check "doctor-cloud" "$doc_cloud" "cloud session"
 
-# sync_dir carries fleet and machine snapshots between machines.
-shared="$TEST_HOME/shared"
-mkdir -p "$shared/worker-2/cockpit" "$shared/old-host/cockpit"
-printf '%s\n' '{"observed_at": 1762055940, "counts": {"run": 1, "verify": 2, "failed": 0, "warn": 0, "stopped": 0}}' > "$shared/worker-2/cockpit/fleet.json"
-printf '%s\n' '{"observed_at": 1762055940, "hosts": [{"name": "worker-2", "reachable": true, "free_pct": 33, "load_pct": 5, "loaded": "qwen3:14b"}]}' > "$shared/worker-2/cockpit/machines.json"
-printf '%s\n' '{"observed_at": 1761900000, "counts": {"run": 9}}' > "$shared/old-host/cockpit/fleet.json"
-LIMITLINE_SYNC_DIR="$shared" LIMITLINE_HOST=laptop LIMITLINE_HOSTS=mini LIMITLINE_MACHINE_DIR="$FIX/machines" \
-  LIMITLINE_PHAROS_RUNS="$FIX/fleet/window" "$BIN" refresh
-check "sync-fleet-merge" "$(cat "$XDG_CACHE_HOME/limitline/fleet.line")" '⚙ 2 run · 3 verify'
-check "sync-machines-merge" "$(cat "$XDG_CACHE_HOME/limitline/machines.line")" 'mini 41% free · qwen3:14b / worker-2 33% free · qwen3:14b'
-[[ -f "$shared/laptop/cockpit/fleet.json" && -f "$shared/laptop/cockpit/machines.json" ]] \
-  && check "sync-publish-cockpit" "yes" "yes" || check "sync-publish-cockpit" "missing" "published"
-# A machine with no Pharos runs and no hosts (a cloud session with the folder) still sees the others.
-LIMITLINE_SYNC_DIR="$shared" LIMITLINE_HOST=cloud LIMITLINE_HOSTS= LIMITLINE_PHAROS_RUNS="$TEST_HOME/no-runs" "$BIN" refresh
-check "sync-consumer-only" "$(cat "$XDG_CACHE_HOME/limitline/fleet.line") | $(cat "$XDG_CACHE_HOME/limitline/machines.line")" '⚙ 2 run · 3 verify | mini 41% free · qwen3:14b / worker-2 33% free · qwen3:14b'
-
 # Cursor is an estimate: "~" everywhere, tokens and budget in status, ranked after measured windows.
-cur_status=$(LIMITLINE_CURSOR_LOG="$FIX/providers/cursor-usage.jsonl" LIMITLINE_CLAUDE_SNAPSHOT="$TEST_HOME/claude-snapshot.json" "$BIN" status)
-printf '%s' "$cur_status" | grep -q -F 'cursor      7d ~11% estimate (110k of 1.0M tokens)' \
+cur_status=$(LIMITLINE_TOOL=cursor LIMITLINE_CURSOR_LOG="$FIX/providers/cursor-usage.jsonl" LIMITLINE_CLAUDE_SNAPSHOT="$TEST_HOME/claude-snapshot.json" "$BIN" status | tr -s " ")
+printf '%s' "$cur_status" | grep -q -F 'cursor 7d ~11% estimate (110k of 1.0M tokens)' \
   && check "cursor-estimate-status" "yes" "yes" || check "cursor-estimate-status" "$cur_status" "~ and tokens"
-cur_host=$(LIMITLINE_CURSOR_LOG="$FIX/providers/cursor-usage.jsonl" "$BIN" --host prompt)
+cur_host=$(LIMITLINE_TOOL=cursor LIMITLINE_CURSOR_LOG="$FIX/providers/cursor-usage.jsonl" "$BIN" --host prompt)
 printf '%s' "$cur_host" | grep -q -F 'cursor 7d ~11%' \
   && check "cursor-estimate-host" "yes" "yes" || check "cursor-estimate-host" "$cur_host" "cursor 7d ~11%"
-cur_report=$(LIMITLINE_CURSOR_LOG="$FIX/providers/cursor-usage.jsonl" "$BIN" report)
+cur_report=$(LIMITLINE_TOOL=cursor LIMITLINE_CURSOR_LOG="$FIX/providers/cursor-usage.jsonl" "$BIN" report)
 printf '%s' "$cur_report" | grep -q -F '~11% estimate' \
   && check "cursor-estimate-report" "yes" "yes" || check "cursor-estimate-report" "$cur_report" "~11% estimate"
 cur_nudge=$(NO_COLOR=1 LIMITLINE_NUDGES=1 LIMITLINE_CURSOR_LOG="$FIX/providers/cursor-usage.jsonl" LIMITLINE_CODEX_DIR="$TEST_HOME/no-codex" "$BIN" < "$FIX/over_80.json" | strip_ansi)
@@ -1055,15 +977,17 @@ mkdir -p "$plan_home"
 export LIMITLINE_XAI_PLAN="$plan_home/xai-plan.json"
 export LIMITLINE_GROK_LINE="$plan_home/grok.line"
 export LIMITLINE_GROK_LOG="$plan_home/unified.jsonl"
+# These plan checks run as limitline inside Grok (own-tool readers, no Pharos).
+export LIMITLINE_TOOL=grok
 export LIMITLINE_CURSOR_LOG="$FIX/providers/cursor-usage.jsonl"
 export LIMITLINE_GROK_DIR="$TEST_HOME/grok"
 rm -f "$XDG_CACHE_HOME/limitline/xai-fetch.json"
 
 # Missing log and no manual cache: no plan row, the Cursor estimate stays.
 check "xai-log-missing" "$("$ROOT/providers/xai-plan")" '{"label":"cursor+grok","observed_at":null,"provider":"xai-plan","source":"none","stale":false,"windows":[]}'
-noplan_status=$("$BIN" status)
-printf '%s' "$noplan_status" | grep -q -F 'cursor      7d ~11% estimate (110k of 1.0M tokens)' \
-  && printf '%s' "$noplan_status" | grep -q -F 'grok        7d 14 tok' \
+noplan_status=$("$BIN" status | tr -s " ")
+printf '%s' "$noplan_status" | grep -q -F 'cursor 7d ~11% estimate (110k of 1.0M tokens)' \
+  && printf '%s' "$noplan_status" | grep -q -F 'grok 7d 14 tok' \
   && ! printf '%s' "$noplan_status" | grep -q -F 'cursor+grok' \
   && check "plan-absent-estimate" "yes" "yes" || check "plan-absent-estimate" "$noplan_status" "cursor estimate and grok rows"
 noplan_host=$("$BIN" --host prompt)
@@ -1154,19 +1078,6 @@ stale_line=$(LIMITLINE_GROK=1 "$BIN" < "$FIX/no_rate_limits.json")
 printf '%s' "$stale_line" | grep -q -F $'\033[2mcursor+grok 74% · Fri 05:22 · grok 7d 14 tok · 9h old' \
   && check "plan-stale-dim" "yes" "yes" || check "plan-stale-dim" "$(printf '%s' "$stale_line" | cat -v)" "dimmed segment"
 
-# A fetch that failed after the reading: keep the reading, mark it stale.
-cp "$FIX/xai/unified.jsonl" "$LIMITLINE_GROK_LOG"
-printf '%s\n' '{"last_attempt": 1762055000, "error": "grok not found at /nowhere/grok"}' > "$XDG_CACHE_HOME/limitline/xai-fetch.json"
-failed_status=$("$BIN" status)
-printf '%s' "$failed_status" | grep -q -F 'cursor+grok 74% · resets Fri 05:22 · SuperGrok Plus · live · grok 7d 14 tok · 30m old · refresh failed: grok not found at /nowhere/grok' \
-  && check "plan-fetch-failed-stale" "yes" "yes" || check "plan-fetch-failed-stale" "$failed_status" "74% kept, 30m old, refresh failed"
-python3 "$ROOT/lib/refresh.py" --no-fetch
-check "plan-fetch-failed-flags" "$(sed -n 2p "$LIMITLINE_GROK_LINE")" '74 1 live'
-# A failure older than the reading does not mark it stale.
-printf '%s\n' '{"last_attempt": 1762050000, "error": "grok not found"}' > "$XDG_CACHE_HOME/limitline/xai-fetch.json"
-check "plan-old-failure-ignored" "$("$ROOT/providers/xai-plan" | python3 -c 'import json,sys; print(json.load(sys.stdin)["stale"])')" 'False'
-rm -f "$XDG_CACHE_HOME/limitline/xai-fetch.json"
-
 # The window reset after the reading: no percent.
 printf '%s\n' '{"ts":"2025-11-01T17:00:00.000Z","msg":"billing: fetched credits config","ctx":{"config":{"creditUsagePercent":74.0,"currentPeriod":{"end":"2025-11-01T18:00:00.000+00:00"}}}}' > "$LIMITLINE_GROK_LOG"
 reset_status=$("$BIN" status)
@@ -1175,67 +1086,13 @@ printf '%s' "$reset_status" | grep -q -F 'cursor+grok reset Sat 18:00, no newer 
 
 # Older than 7 days: hidden, and the labelled estimate comes back.
 printf '%s\n' '{"ts":"2025-10-25T00:00:00.000Z","msg":"billing: fetched credits config","ctx":{"config":{"creditUsagePercent":74.0,"currentPeriod":{"end":"2025-11-07T05:22:35.070+00:00"}}}}' > "$LIMITLINE_GROK_LOG"
-old_status=$("$BIN" status)
-printf '%s' "$old_status" | grep -q -F 'cursor      7d ~11% estimate' && ! printf '%s' "$old_status" | grep -q -F 'cursor+grok' \
+old_status=$("$BIN" status | tr -s " ")
+printf '%s' "$old_status" | grep -q -F 'cursor 7d ~11% estimate' && ! printf '%s' "$old_status" | grep -q -F 'cursor+grok' \
   && check "plan-hidden-after-7d" "yes" "yes" || check "plan-hidden-after-7d" "$old_status" "estimate back"
 
 if "$BIN" set xai-plan 150 >/dev/null 2>&1; then check "set-xai-plan-range" "accepted" "refused"; else check "set-xai-plan-range" "refused" "refused"; fi
 if "$BIN" set xai-plan 50 --resets "next week" >/dev/null 2>&1; then check "set-xai-plan-date" "accepted" "refused"; else check "set-xai-plan-date" "refused" "refused"; fi
 rm -f "$LIMITLINE_XAI_PLAN"
-
-# Refresher: a fake grok in a pty. TTL, lock, failure, cleanup, and no fetch from the status line.
-: > "$LIMITLINE_GROK_LOG"
-fake_count="$plan_home/fake-count"
-fake_pid="$plan_home/fake-pid"
-: > "$fake_count"
-fetch_env=(LIMITLINE_XAI_FETCH=1 LIMITLINE_GROK_BIN="$FIX/xai/fake-grok" FAKE_COUNT="$fake_count" FAKE_PID_FILE="$fake_pid"
-  LIMITLINE_XAI_BOOT=3 LIMITLINE_XAI_QUIET=0.3 LIMITLINE_XAI_TYPE_PAUSE=0.1 LIMITLINE_XAI_TIMEOUT=10)
-fetch_runs() { grep -c '^start' "$fake_count"; }
-fetch_out=$(env "${fetch_env[@]}" FAKE_PCT=81 "$BIN" refresh)
-check "xai-fetch-runs" "$fetch_out" 'xai plan: fetched'
-check "xai-fetch-count" "$(fetch_runs) $(grep -c '^usage' "$fake_count")" '1 1'
-fetched_status=$("$BIN" status)
-printf '%s' "$fetched_status" | grep -q -F 'cursor+grok 81% · resets Fri 05:22 · SuperGrok Plus · live' \
-  && check "xai-fetch-live-status" "yes" "yes" || check "xai-fetch-live-status" "$fetched_status" "81% live"
-check "xai-fetch-grok-line" "$(sed -n 2p "$LIMITLINE_GROK_LINE")" '81 0 live'
-read -r child_pid child_cwd < "$fake_pid"
-kill -0 "$child_pid" 2>/dev/null && check "xai-fetch-child-gone" "alive" "gone" || check "xai-fetch-child-gone" "gone" "gone"
-check "xai-fetch-neutral-cwd" "$child_cwd" "$(cd "$XDG_CACHE_HOME/limitline/grok-cwd" && pwd -P)"
-# Within xai_ttl (30 minutes): no second grok.
-ttl_out=$(env "${fetch_env[@]}" LIMITLINE_NOW=$((LIMITLINE_NOW + 1700)) "$BIN" refresh)
-check "xai-fetch-ttl-skip" "$ttl_out $(fetch_runs)" 'xai plan: skipped: fetched 1700s ago, xai_ttl 1800s 1'
-ttl_cfg=$(env "${fetch_env[@]}" LIMITLINE_XAI_TTL=5 LIMITLINE_NOW=$((LIMITLINE_NOW + 299)) "$BIN" refresh)
-check "xai-fetch-ttl-config" "$ttl_cfg" 'xai plan: skipped: fetched 299s ago, xai_ttl 300s'
-# The status-line path (--no-fetch) never starts grok, even when due.
-env "${fetch_env[@]}" LIMITLINE_NOW=$((LIMITLINE_NOW + 4000)) python3 "$ROOT/lib/refresh.py" --no-fetch
-check "xai-no-fetch-from-statusline" "$(fetch_runs)" '1'
-grep -q 'lib/refresh.py" --no-fetch' "$BIN" \
-  && check "xai-kick-refresh-no-fetch" "yes" "yes" || check "xai-kick-refresh-no-fetch" "no" "yes"
-# Another fetch holds the lock: skip, do not wait.
-python3 -c 'import fcntl,sys,time; f=open(sys.argv[1],"a"); fcntl.flock(f, fcntl.LOCK_EX); print("held", flush=True); time.sleep(20)' "$XDG_CACHE_HOME/limitline/xai-fetch.lock" > "$plan_home/holder.out" &
-holder=$!
-for _ in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20; do grep -q held "$plan_home/holder.out" 2>/dev/null && break; python3 -c 'import time; time.sleep(0.1)'; done
-lock_out=$(env "${fetch_env[@]}" LIMITLINE_NOW=$((LIMITLINE_NOW + 4000)) "$BIN" refresh)
-kill "$holder" 2>/dev/null; wait "$holder" 2>/dev/null
-check "xai-fetch-lock" "$lock_out $(fetch_runs)" 'xai plan: skipped: another fetch is running 1'
-# After the TTL a new fetch runs.
-again_out=$(env "${fetch_env[@]}" FAKE_PCT=83 FAKE_TS=2025-11-02T05:10:00.000Z LIMITLINE_NOW=$((LIMITLINE_NOW + 4200)) "$BIN" refresh)
-check "xai-fetch-after-ttl" "$again_out $(fetch_runs)" 'xai plan: fetched 2'
-# A grok that ignores Ctrl-C and SIGTERM is killed; one that never logs is a failure.
-stub_out=$(env "${fetch_env[@]}" FAKE_STUBBORN=1 FAKE_SILENT=1 LIMITLINE_XAI_TIMEOUT=3 "$BIN" refresh --force)
-check "xai-fetch-no-reading" "$stub_out" 'xai plan: failed: no new reading in the grok log within 3s'
-read -r child_pid _ < "$fake_pid"
-kill -0 "$child_pid" 2>/dev/null && { check "xai-fetch-stubborn-killed" "alive" "killed"; kill -9 "$child_pid"; } || check "xai-fetch-stubborn-killed" "killed" "killed"
-# Missing grok binary: the last reading stays, marked stale.
-miss_out=$(env "${fetch_env[@]}" LIMITLINE_GROK_BIN="$plan_home/no-grok" LIMITLINE_NOW=$((LIMITLINE_NOW + 4300)) "$BIN" refresh --force)
-check "xai-fetch-missing-grok" "$miss_out" "xai plan: failed: grok not found at $plan_home/no-grok"
-miss_status=$(LIMITLINE_NOW=$((LIMITLINE_NOW + 4300)) "$BIN" status)
-printf '%s' "$miss_status" | grep -q -F 'cursor+grok 83% · resets Fri 05:22 · SuperGrok Plus · live · grok 7d 14 tok · 1m old · refresh failed: grok not found' \
-  && check "xai-fetch-missing-keeps-stale" "yes" "yes" || check "xai-fetch-missing-keeps-stale" "$miss_status" "83% kept, stale"
-check "xai-fetch-missing-flags" "$(sed -n 2p "$LIMITLINE_GROK_LINE")" '83 1 live'
-off_out=$(env "${fetch_env[@]}" LIMITLINE_XAI_FETCH=0 "$BIN" refresh --force)
-check "xai-fetch-disabled" "$off_out|$(fetch_runs)" '|3'
-rm -f "$XDG_CACHE_HOME/limitline/xai-fetch.json"
 
 # limitline schedule: com.limitline.refresh every 15 minutes, launchd stubbed.
 sched_out=$(LIMITLINE_LAUNCHCTL="$lc_stub" "$BIN" schedule install)
@@ -1258,6 +1115,7 @@ LIMITLINE_LAUNCHCTL="$lc_stub" "$BIN" schedule uninstall >/dev/null
 check "schedule-status-missing" "$(LIMITLINE_LAUNCHCTL="$lc_stub" "$BIN" schedule status)" 'missing: not installed (limitline schedule install)'
 
 rm -rf "$plan_home"
+unset LIMITLINE_TOOL
 unset LIMITLINE_XAI_PLAN LIMITLINE_GROK_LINE LIMITLINE_CURSOR_LOG LIMITLINE_GROK_DIR LIMITLINE_GROK_LOG
 
 # Background jobs (0.5): one JSON per job, reported by any script.
@@ -1439,12 +1297,12 @@ hist_home="$TEST_HOME/hist"
 mkdir -p "$hist_home/plans"
 export LIMITLINE_HISTORY_DIR="$hist_home/plans" LIMITLINE_JOBS_HISTORY="$hist_home/jobs-history.jsonl"
 export LIMITLINE_JOBS_DIR="$hist_home/jobs" LIMITLINE_JOBS_LINE="$hist_home/jobs.line" LIMITLINE_HOST=mini
-LIMITLINE_CLAUDE_SNAPSHOT="$TEST_HOME/claude-snapshot.json" LIMITLINE_CODEX_DIR="$codex_prov" LIMITLINE_CURSOR_LOG="$FIX/providers/cursor-usage.jsonl" "$BIN" status >/dev/null
+LIMITLINE_TOOL=codex LIMITLINE_CLAUDE_SNAPSHOT="$TEST_HOME/claude-snapshot.json" LIMITLINE_CODEX_DIR="$codex_prov" LIMITLINE_CURSOR_LOG="$FIX/providers/cursor-usage.jsonl" "$BIN" status >/dev/null
 check "history-record-plans" "$(ls "$hist_home/plans" | tr '\n' ' ')" 'claude-5h.tsv claude-7d.tsv codex-5h.tsv codex-7d.tsv '
 check "history-record-line" "$(cat "$hist_home/plans/codex-7d.tsv")" '1762056000 55 1762419600'
-LIMITLINE_NOW=1762056300 LIMITLINE_CLAUDE_SNAPSHOT="$TEST_HOME/claude-snapshot.json" LIMITLINE_CODEX_DIR="$codex_prov" "$BIN" status >/dev/null
+LIMITLINE_NOW=1762056300 LIMITLINE_TOOL=codex LIMITLINE_CLAUDE_SNAPSHOT="$TEST_HOME/claude-snapshot.json" LIMITLINE_CODEX_DIR="$codex_prov" "$BIN" status >/dev/null
 check "history-ten-minute-gap" "$(wc -l < "$hist_home/plans/codex-7d.tsv" | tr -d ' ')" '1'
-LIMITLINE_NOW=1762056700 LIMITLINE_CLAUDE_SNAPSHOT="$TEST_HOME/claude-snapshot.json" LIMITLINE_CODEX_DIR="$codex_prov" "$BIN" status >/dev/null
+LIMITLINE_NOW=1762056700 LIMITLINE_TOOL=codex LIMITLINE_CLAUDE_SNAPSHOT="$TEST_HOME/claude-snapshot.json" LIMITLINE_CODEX_DIR="$codex_prov" "$BIN" status >/dev/null
 check "history-second-sample" "$(wc -l < "$hist_home/plans/codex-7d.tsv" | tr -d ' ')" '2'
 rm -f "$hist_home/plans/"*.tsv
 printf '%s\n' '1758000000 99 -' '1761645600 92 1761850000' '1761649200 70 1761850000' '1761818400 40 1761850000' \
@@ -1559,7 +1417,7 @@ fi
 # Five lines: line 1 is the session only; lines 2-5 come from lib/fivelines.py.
 five_cache="$TEST_HOME/five-cache"; mkdir -p "$five_cache/limitline" "$TEST_HOME/five-pharos/runs"
 printf 'cursor+grok 81%% · Thu 23:22 · grok 7d 1M tok\n81 0 live\n' > "$five_cache/limitline/grok.line"
-printf '{"hosts":[{"name":"studio","free_pct":82,"load_pct":22,"reachable":true}]}' > "$five_cache/limitline/machines.json"
+printf '%s' '{"version":1,"generated_at":1762056000,"plans":[],"hosts":{"hosts":[{"name":"studio","free_pct":82,"load_pct":22,"reachable":true}]}}' > "$TEST_HOME/five-pharos/usage.json"
 five_in='{"model":{"display_name":"Opus"},"context_window":{"used_percentage":40},"rate_limits":{"seven_day":{"used_percentage":70,"resets_at":1762100000}}}'
 five_out=$(printf '%s' "$five_in" | NO_COLOR=1 XDG_CACHE_HOME="$five_cache" LIMITLINE_PHAROS_HOME="$TEST_HOME/five-pharos" LIMITLINE_LINES=5 LIMITLINE_REFRESH=0 "$BIN")
 five_l1=$(printf '%s\n' "$five_out" | sed -n 1p)
@@ -1573,6 +1431,26 @@ if python3 -m unittest -q "$ROOT/tests/test_fivelines.py" >/dev/null 2>&1; then
 else
   check "fivelines-unit" "failed" "ok"
 fi
+
+# Display only (2026-11-03): the status line relays Claude's reading to Pharos and
+# refresh never starts agy, grok, or ssh. Pharos measures; limitline draws.
+relay_home="$TEST_HOME/relay"
+mkdir -p "$relay_home/.pharos"
+printf '%s' '{"model":{"display_name":"Opus"},"rate_limits":{"seven_day":{"used_percentage":44,"resets_at":1762100000}}}' \
+  | HOME="$relay_home" XDG_CACHE_HOME="$relay_home/.cache" LIMITLINE_REFRESH=0 "$BIN" >/dev/null
+check "relay-claude-to-pharos" "$(python3 -c 'import json,sys; d=json.load(open(sys.argv[1])); print(d["source"], d["windows"][0]["used_pct"])' "$relay_home/.pharos/inbox/claude.json" 2>/dev/null)" "statusline 44"
+no_pharos="$TEST_HOME/no-pharos"
+mkdir -p "$no_pharos"
+printf '%s' '{"model":{"display_name":"Opus"},"rate_limits":{"seven_day":{"used_percentage":44,"resets_at":1762100000}}}' \
+  | HOME="$no_pharos" XDG_CACHE_HOME="$no_pharos/.cache" LIMITLINE_REFRESH=0 "$BIN" >/dev/null
+[[ ! -e "$no_pharos/.pharos" ]] && check "relay-needs-pharos" "yes" "yes" || check "relay-needs-pharos" "created" "no ~/.pharos made"
+spy="$TEST_HOME/spybin"
+mkdir -p "$spy"
+for tool in agy grok ssh codex; do printf '#!/bin/sh\necho %s >> "%s/calls"\n' "$tool" "$spy" > "$spy/$tool"; chmod +x "$spy/$tool"; done
+PATH="$spy:$PATH" "$BIN" refresh >/dev/null 2>&1
+[[ ! -s "$spy/calls" ]] && check "refresh-measures-nothing" "yes" "yes" || check "refresh-measures-nothing" "$(cat "$spy/calls")" "no agy, grok, ssh, or codex"
+[[ ! -e "$ROOT/providers/antigravity" && ! -e "$ROOT/providers/gemini" && ! -e "$ROOT/lib/xai_fetch.py" ]] \
+  && check "cross-tool-readers-gone" "yes" "yes" || check "cross-tool-readers-gone" "still there" "moved to Pharos"
 
 printf '\n%d passed, %d failed\n' "$pass" "$fail"
 [[ "$fail" -eq 0 ]]

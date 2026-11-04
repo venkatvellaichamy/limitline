@@ -6,14 +6,13 @@
     older ✋ 4 need you │ ✗ 1 failed │ oldest 6d (pharos-reviews)
     hosts studio 82% free · 22% cpu │ laptop 49% · 45% │ backup 73% · 16%
 
-Every plan number is the amount LEFT (100 - used). Only caches are read: the codex
-cache the status line writes, grok.line, antigravity.json, machines.json from
-`limitline refresh`, and ~/.pharos/summary.json (or Pharos run states). Nothing here
-runs a model CLI, ssh, or the network. Inputs from the status line come in as
-LL_* environment variables. Always prints something sane and exits 0.
+Every plan number is the amount LEFT (100 - used). Pharos measures; this only draws:
+plans and hosts come from ~/.pharos/usage.json and job counts from ~/.pharos/summary.json.
+Without Pharos only Claude's own line is shown (from the status-line input) and the job
+and host lines are left out. Nothing here runs a model CLI, ssh, or the network. Inputs
+from the status line come in as LL_* environment variables. Always exits 0.
 """
 
-import glob
 import json
 import os
 import re
@@ -221,13 +220,31 @@ def next_weekday(day, hour, minute, now):
     return None
 
 
-def agy_cells(now):
-    data = read_json(env("LIMITLINE_AGY_USAGE") or os.path.join(cache_dir(), "antigravity.json"))
-    if not isinstance(data, dict) or not isinstance(data.get("buckets"), list):
-        return [Cell("gemini", None)]
-    observed = int(num(data.get("observed_at")) or 0)
-    if now - observed > 7 * 86400:
+def usage_file():
+    return env("LIMITLINE_PHAROS_USAGE") or os.path.join(pharos_home(), "usage.json")
+
+
+def read_usage(now):
+    data = read_json(usage_file())
+    if not isinstance(data, dict) or not isinstance(data.get("plans"), list):
+        return None
+    data["stale"] = now - int(num(data.get("generated_at")) or 0) > 15 * 60
+    return data
+
+
+def plan_of(usage, provider):
+    for plan in (usage or {}).get("plans") or []:
+        if isinstance(plan, dict) and plan.get("provider") == provider:
+            return plan
+    return None
+
+
+def agy_cells(now, usage=None):
+    plan = plan_of(usage, "antigravity")
+    if not plan or plan.get("stale") or (usage or {}).get("stale"):
+        observed = int(num((plan or {}).get("observed_at")) or 0)
         return [Cell("gemini", None, age=now - observed if observed else None)]
+    data = {"buckets": [w for w in plan.get("windows") or [] if isinstance(w, dict)]}
     cells = []
     for group, name in AGY_NAMES:
         best = None
@@ -243,12 +260,16 @@ def agy_cells(now):
 
 
 def left_parts(now):
-    """[(mark key, label, [cells])] in the fixed order."""
-    parts = [("claude", "claude", claude_cells(now)), ("codex", "codex", codex_cells(now))]
+    """[(mark key, label, [cells])] in the fixed order. Without Pharos, Claude only."""
+    parts = [("claude", "claude", claude_cells(now))]
+    usage = read_usage(now)
+    if usage is None:
+        return parts
+    parts.append(("codex", "codex", codex_cells(now)))
     cursor = cursor_cell(now)
     if cursor:
         parts.append(("cursor", "", [cursor]))
-    parts.append(("agy", "agy", agy_cells(now)))
+    parts.append(("agy", "agy", agy_cells(now, usage)))
     return parts
 
 
@@ -265,88 +286,15 @@ def render_left(style, now, resets=True, drop_agy_3p=False):
 # ---- lines 3 and 4: jobs ---------------------------------------------------------------
 
 
-def classify(state, retried):
-    status = state.get("status") or ""
-    if str(state.get("id")) in retried and status not in ("done", "merged", "no-changes"):
-        return "retried"
-    if status in ("starting", "running", "stalled"):
-        return "running"
-    if status in ("done", "merged", "no-changes"):
-        return "done"
-    if status == "awaiting-verify":
-        commits = state.get("commits")
-        count = len(commits) if isinstance(commits, list) else int(num(commits) or 0)
-        return "need_you" if count else "done"
-    if status == "verify-failed":
-        return "need_you"
-    if status == "paused-quota":
-        return "waiting_limit"
-    if status == "failed":
-        return "failed"
-    if status == "stopped" and state.get("exit_code") not in (None, 0, -15, 143):
-        return "failed"
-    return None
-
-
-def started_at(state):
-    value = num(state.get("started_at"))
-    if value:
-        return value
-    try:
-        return datetime.strptime(str(state.get("id") or "")[:15], "%Y%m%d-%H%M%S").timestamp()
-    except ValueError:
-        return None
-
-
-def summarize_states(states, now, window_days=7.0):
-    midnight = datetime.fromtimestamp(now).replace(hour=0, minute=0, second=0, microsecond=0).timestamp()
-    floor = now - window_days * 86400
-    retried = set()
-    for s in states:
-        for key in ("retried_by", "handoff_to"):
-            if s.get(key):
-                retried.add(str(s.get("id")))
-        for key in ("retry_of", "continued_from"):
-            if s.get(key):
-                retried.add(str(s.get(key)))
-    today, older, oldest = dict.fromkeys(KEYS, 0), dict.fromkeys(KEYS, 0), None
-    for s in states:
-        bucket, start = classify(s, retried), started_at(s)
-        if bucket is None or start is None:
-            continue
-        if start >= midnight:
-            today[bucket] += 1
-        elif bucket in OPEN and start >= floor:
-            older[bucket] += 1
-            if oldest is None or start < oldest[0]:
-                oldest = (start, s.get("id"), os.path.basename(str(s.get("repo") or "").rstrip("/")))
-    oldest_open = None
-    if oldest:
-        oldest_open = {"id": oldest[1], "repo": oldest[2], "age_hours": round((now - oldest[0]) / 3600, 1)}
-    return {"today": today, "older": older, "oldest_open": oldest_open}
-
-
 def job_summary(now):
-    home = pharos_home()
-    path = os.path.join(home, "summary.json")
-    data = read_json(path)
-    try:
-        fresh = now - os.path.getmtime(path) < 600
-    except OSError:
-        fresh = False
-    if isinstance(data, dict) and fresh and isinstance(data.get("today"), dict):
-        generated = num(data.get("generated_at")) or now
-        same_day = datetime.fromtimestamp(generated).date() == datetime.fromtimestamp(now).date()
-        if same_day:
-            return data
-    states = []
-    for name in glob.glob(os.path.join(home, "runs", "*", "state.json")):
-        state = read_json(name)
-        if isinstance(state, dict):
-            states.append(state)
-    if not states:
+    """Pharos's own counts (`pharos runs --summary`), when they are from today."""
+    data = read_json(os.path.join(pharos_home(), "summary.json"))
+    if not isinstance(data, dict) or not isinstance(data.get("today"), dict):
         return None
-    return summarize_states(states, now)
+    generated = num(data.get("generated_at")) or 0
+    if datetime.fromtimestamp(generated).date() != datetime.fromtimestamp(now).date():
+        return None
+    return data
 
 
 def job_cells(style, bucket, only_nonzero):
@@ -399,8 +347,9 @@ def render_older(style, summary, with_oldest=True):
 
 
 def render_hosts(style, now, with_cpu=True):
-    data = read_json(os.path.join(cache_dir(), "machines.json"))
-    hosts = data.get("hosts") if isinstance(data, dict) else None
+    usage = read_usage(now)
+    block = (usage or {}).get("hosts")
+    hosts = block.get("hosts") if isinstance(block, dict) else None
     if not isinstance(hosts, list) or not hosts:
         return ""
     cells = []
