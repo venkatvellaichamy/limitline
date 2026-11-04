@@ -2,7 +2,7 @@
 
 ## 0.13.1 - 2026-11-04
 
-- **Every window shows when it refills** (`→04:00`, `→Thu 23:22`), not only windows at the cap. Claude at 72% and Codex at 71% sat just under the 75% threshold, so their refill times were hidden. On a narrow terminal refill times are still the first thing dropped. `plan_resets = "near-cap"` (or `LIMITLINE_PLAN_RESETS`) brings back the old rule.
+- **`plan_resets = "always"`** (or `LIMITLINE_PLAN_RESETS=always`) shows when every window refills (`→04:00`, `→Thu 23:22`), not only windows at the cap. The default stays `"near-cap"`: the refill time appears once a plan reaches its cap. On a narrow terminal refill times are still the first thing dropped.
 
 ## 0.13.0 - 2026-11-04
 

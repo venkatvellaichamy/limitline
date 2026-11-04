@@ -37,7 +37,7 @@ If a feature measures, stores, or decides, it belongs in Pharos.
 | **0.11.0** | Live, but quiet | Merged (PR #11), **needs tag** |
 | **0.12.0** | Finish the split | Merged (PR #13), **needs tag** |
 | **0.13.0** | Plan views (used or left), CI, releases, channels, update | Released |
-| **0.13.1** | Refill time on every window | This PR |
+| **0.13.1** | Refill time on every window, behind `plan_resets = "always"` | This PR |
 | **0.14.0** | Display hardening | Planned |
 | **0.15.0** | Every surface shows the same thing | Planned |
 | **0.16.0** | A settings menu, and an icon on every line | Planned |

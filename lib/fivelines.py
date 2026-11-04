@@ -87,8 +87,8 @@ class Style:
         self.view = view if view in VIEWS else "bar"
         self.numbers = self.view == "none" or env("LL_PLAN_NUMBERS", "off").strip().lower() in ("1", "on", "true", "yes")
         self.left = env("LL_PLAN_SHOW", "used").strip().lower() == "left"
-        # When to print a window's refill time: "always" (default) or "near-cap" (at the cap)
-        self.resets = "near-cap" if env("LL_PLAN_RESETS", "always").strip().lower() in ("near-cap", "cap") else "always"
+        # When to print a window's refill time: "near-cap" (default: at the plan's cap) or "always"
+        self.resets = "always" if env("LL_PLAN_RESETS", "near-cap").strip().lower() == "always" else "near-cap"
         self.ascii = env("LL_THEME") == "ascii"
 
     def paint(self, code, text):

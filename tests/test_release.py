@@ -37,7 +37,7 @@ class VersionScript(unittest.TestCase):
         self.assertEqual(newer("0.13.0", ""), 0, "no beta branch yet")
 
     def test_notes(self):
-        self.assertIn("used", ver.notes(ver.found()["bin/limitline"]))
+        self.assertTrue(ver.notes(ver.found()["bin/limitline"]), "the current version has release notes")
 
 
 class ReleaseCommands(unittest.TestCase):
