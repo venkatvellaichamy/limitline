@@ -38,7 +38,7 @@ If a feature measures, stores, or decides, it belongs in Pharos.
 | **0.12.0** | Finish the split | Merged (PR #13), **needs tag** |
 | **0.13.0** | Plan views (used or left), CI, releases, channels, update | Released |
 | **0.13.1** | Refill time on every window, behind `plan_resets = "always"` | This PR |
-| **0.14.0** | Display hardening | In progress (cases and Linux done; `/limits` skill open) |
+| **0.14.0** | Display hardening | This PR (version bump; release after merge) |
 | **0.15.0** | Every surface shows the same thing | Planned |
 | **0.16.0** | A settings menu, and an icon on every line | Planned |
 | **1.0.0** | Stable display of a versioned Pharos contract | Planned |
@@ -151,8 +151,4 @@ These were on the limitline roadmap before the split. They are tracked in the Ph
 
 Built when token budget allows; each lives at `skills/<name>/SKILL.md`.
 
-| Name | What it does | Target |
-|---|---|---|
-| `/limits` | Show what is left on every plan, with source, age and reset, as Pharos measured it | 0.14.0 |
-
-The `/ramp` skill applies caps, so it moved to Pharos.
+limitline ships only status-line commands (`/limitline:install`, `theme`, `doctor`, `config`, `preview`, `uninstall`). Skills that help an agent choose a tool belong to Pharos, which owns the numbers and the caps: `/limits` and `/ramp` are planned in Pharos 0.10.0 (decided 2026-11-04). Without Pharos, `limitline status` already shows the tool's own usage.

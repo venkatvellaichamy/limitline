@@ -1,6 +1,8 @@
 # Changelog
 
-## 0.14.0 - unreleased
+## 0.14.0 - 2026-11-04
+
+- The `/limits` skill moved to Pharos (planned for Pharos 0.10.0, next to `/ramp`). limitline ships only status-line commands; skills that help an agent pick a tool belong to Pharos, which owns the numbers and the caps.
 
 ### The display stays honest when Pharos's files are bad
 
