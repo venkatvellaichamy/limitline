@@ -9,6 +9,9 @@ on:
 permissions:
   contents: read
 
+env:
+  LIMITLINE_SPEED_MS: "200"  # shared runners are slower than a Mac; 50 ms locally
+
 jobs:
   macos:
     name: tests (macOS)

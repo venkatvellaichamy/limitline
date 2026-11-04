@@ -4,6 +4,9 @@ set -u
 
 ROOT=$(cd "$(dirname "$0")/.." && pwd)
 BIN="$ROOT/bin/limitline"
+# The status line must redraw in about 50 ms on a Mac. Shared CI runners are slower, so CI
+# raises this (LIMITLINE_SPEED_MS=200); a real slowdown still fails there.
+SPEED_MS="${LIMITLINE_SPEED_MS:-50}"
 FIX="$ROOT/tests/fixtures"
 
 if [[ ! -x "$BIN" ]]; then
@@ -1097,7 +1100,7 @@ for _ in range(runs):
     total += time.perf_counter() - start
 print(int(total / runs * 1000))
 ' )
-if [[ "$speed_ms" -le 50 ]]; then
+if [[ "$speed_ms" -le "$SPEED_MS" ]]; then
   check "speed-${speed_ms}ms" "fast" "fast"
 else
   check "speed-${speed_ms}ms" "slow" "fast"
@@ -1122,7 +1125,7 @@ for _ in range(runs):
     total += time.perf_counter() - start
 print(int(total / runs * 1000))
 ')
-if [[ "$warm_ms" -le 50 ]]; then
+if [[ "$warm_ms" -le "$SPEED_MS" ]]; then
   check "warm-cache-${warm_ms}ms" "fast" "fast"
 else
   check "warm-cache-${warm_ms}ms" "slow" "fast"
@@ -1148,7 +1151,7 @@ for _ in range(runs):
     total += time.perf_counter() - start
 print(int(total / runs * 1000))
 ')
-if [[ "$jobs_ms" -le 50 ]]; then
+if [[ "$jobs_ms" -le "$SPEED_MS" ]]; then
   check "jobs-warm-${jobs_ms}ms" "fast" "fast"
 else
   check "jobs-warm-${jobs_ms}ms" "slow" "fast"

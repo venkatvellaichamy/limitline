@@ -102,6 +102,8 @@ Still open, because it depends on Pharos 0.8.0 (`pharos statusline`):
 
 ### 0.14.0 — Display hardening
 
+- **Linux becomes a required CI check.** The first CI run (2026-11-04) passed 215 of 226 checks on Ubuntu; the 11 failures are the Grok/plan segment, the hot fleet and machines segment, jobs on line 1 and 2, and the two-line fit, all of which drop their segment on Linux. Fix them, then make the Linux job required.
+
 Prove the display stays honest when Pharos's files are bad. Synthetic files and a disposable cache only.
 
 | Case | Expected display |
