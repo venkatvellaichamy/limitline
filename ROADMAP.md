@@ -38,7 +38,7 @@ If a feature measures, stores, or decides, it belongs in Pharos.
 | **0.12.0** | Finish the split | Merged (PR #13), **needs tag** |
 | **0.13.0** | Plan views (used or left), CI, releases, channels, update | Released |
 | **0.13.1** | Refill time on every window, behind `plan_resets = "always"` | This PR |
-| **0.14.0** | Display hardening | Built, unreleased |
+| **0.14.0** | Display hardening | In progress (cases and Linux done; `/limits` skill open) |
 | **0.15.0** | Every surface shows the same thing | Planned |
 | **0.16.0** | A settings menu, and an icon on every line | Planned |
 | **1.0.0** | Stable display of a versioned Pharos contract | Planned |
@@ -110,7 +110,7 @@ Prove the display stays honest when Pharos's files are bad. Synthetic files and 
 | Case | Expected display | Done |
 |---|---|---|
 | Pharos files missing | Says Pharos is not running; Claude's own line still works | ✓ `· pharos not running` |
-| Old reading | Shows the age; never shows an old percent as current | ✓ `— 1h ago`, `· 1h old` |
+| Old reading | Shows the age; never shows an old percent as current | ✓ `— 1h ago`, `· 1h old` (Pharos's age and `stale` decide) |
 | Reset time already passed | Says the window reset and there is no newer reading | ✓ `5h reset, no newer reading` |
 | Partial or invalid JSON | Shows `—` for that field; never crashes, never guesses | ✓ per field and per line |
 | Unknown fields or a newer format | Ignores unknown fields; says when the format is too new | ✓ `pharos format v2 is newer than this limitline` |

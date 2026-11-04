@@ -77,6 +77,33 @@ class Hardening(unittest.TestCase):
         self.assertFalse(set(rest) & set("█▉▊▋▌▍▎▏"), "no bar drawn from an old reading: " + rest)
         self.assertEqual(lines[-1], "hosts — 1h ago", "old host numbers are not shown as current")
 
+    def test_pharos_decides_when_a_plan_is_stale(self):
+        """Codex's observed_at is its last rate-limit event, often hours old and still valid
+        until the window resets. With a fresh usage.json, only Pharos's `stale` holds a plan."""
+        for key in ("LL_CODEX5", "LL_CODEX5_RESET", "LL_CODEX7", "LL_CODEX7_RESET"):
+            del os.environ[key]
+        codex = {"provider": "codex", "observed_at": NOW - 1800, "stale": False, "windows": [
+            {"name": "7d", "used_pct": 69, "resets_at": NOW + 4 * 86400}]}
+        self.usage["plans"].append(codex)
+        self.usage["plans"][0]["observed_at"] = NOW - 28 * 3600  # agy, still not stale per Pharos
+        self.usage["hosts"]["observed_at"] = NOW - 1800
+        self.write_usage()
+        line = self.used()
+        self.assertIn("codex 7d ███▌░", line)
+        self.assertIn("argon █████", line)
+        self.assertTrue(plain(fivelines.build(now=NOW))[-1].startswith("hosts studio 82%"))
+        codex["stale"] = True
+        self.write_usage()
+        self.assertIn("codex 7d — 30m ago", self.used(), "Pharos says stale: a dash and the reading's age")
+
+    def test_cursor_line_follows_line_one_ttl(self):
+        self.age_grok_line(170)
+        self.assertIn("cursor+grok ████░", self.used(), "within bin's GROK_TTL (180 s)")
+        self.age_grok_line(200)
+        self.assertIn("cursor+grok — 3m ago", self.used(), "line 1 hides it after 180 s; line 2 dashes it")
+        os.environ["LL_GROK_TTL"] = "600"
+        self.assertIn("cursor+grok ████░", self.used(), "grok_ttl from the config applies to both lines")
+
     def test_old_claude_cache_is_not_current(self):
         for key in ("LL_CLAUDE7", "LL_CLAUDE7_RESET"):
             del os.environ[key]

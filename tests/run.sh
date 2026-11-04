@@ -1241,6 +1241,10 @@ check "five-pharos-not-running" "$five_down" "$(printf '%s\n' "$five_l1" 'used  
 printf '%s' '{"version":1,"generated_at":1762056000,"plans":[{"provider":"codex","observed_at":1762055900,"windows":[{"name":"5h","used_pct":90,"resets_at":1762055000},{"name":"7d","used_pct":40,"resets_at":1762400000}]}]}' > "$TEST_HOME/five-pharos/usage.json"
 five_reset=$(printf '%s' "$five_in" | NO_COLOR=1 LIMITLINE_CODEX=1 XDG_CACHE_HOME="$five_cache" LIMITLINE_PHAROS_HOME="$TEST_HOME/five-pharos" LIMITLINE_LINES=5 LIMITLINE_REFRESH=0 "$BIN" | sed -n 2p)
 check "five-codex-reset-passed" "$([[ "$five_reset" == *"codex 5h reset, no newer reading · 7d ██░░░"* ]] && echo yes || echo "$five_reset")" "yes"
+# A Codex reading from 30 minutes ago is still current when Pharos does not call it stale.
+printf '%s' '{"version":1,"generated_at":1762056000,"plans":[{"provider":"codex","observed_at":1762054200,"stale":false,"windows":[{"name":"7d","used_pct":40,"resets_at":1762400000}]}]}' > "$TEST_HOME/five-pharos/usage.json"
+five_old_obs=$(printf '%s' "$five_in" | NO_COLOR=1 LIMITLINE_CODEX=1 XDG_CACHE_HOME="$five_cache" LIMITLINE_PHAROS_HOME="$TEST_HOME/five-pharos" LIMITLINE_LINES=5 LIMITLINE_REFRESH=0 "$BIN" | sed -n 2p)
+check "five-codex-observed-30m" "$([[ "$five_old_obs" == *"codex 7d ██░░░"* ]] && echo yes || echo "$five_old_obs")" "yes"
 check "two-lines-unchanged" "$(printf '%s' "$five_in" | NO_COLOR=1 XDG_CACHE_HOME="$five_cache" LIMITLINE_LINES=2 LIMITLINE_REFRESH=0 "$BIN" | grep -c 'left ')" "0"
 if five_unit=$(python3 -m unittest -q "$ROOT/tests/test_fivelines.py" 2>&1); then
   check "fivelines-unit" "ok" "ok"

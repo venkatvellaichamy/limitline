@@ -85,6 +85,7 @@ FORMAT = 1          # the newest usage.json / summary.json version this display 
 STALE_S = 15 * 60   # Pharos refreshes every 2 minutes; a reading older than this is not current
 SKEW_S = 120        # a reading up to this far in the future is clock jitter, not a future reading
 MAX_BYTES = 4 << 20
+GROK_TTL = 180      # bin/limitline's default grok_ttl for the same grok.line (LL_GROK_TTL)
 MISSING, BAD = "missing", "bad"
 _memo = None        # a dict while build() runs
 
@@ -362,9 +363,11 @@ def window_cell(name, used, reset, now):
 
 
 def held(usage, plan, now):
-    """None when `plan` (a usage.json plan) can be drawn as current. Otherwise the cell to
-    show instead: `—` with the reading's age when it is old, `—` alone when it has no time
-    or is from the future."""
+    """None when `plan` (a usage.json plan, or its hosts block) can be drawn as current.
+    Otherwise the age to show with `—` (HELD_NO_AGE for none). Pharos decides when a plan
+    is stale: a plan's observed_at is its last reading (Codex's last rate-limit event can be
+    hours old and still valid), so only usage.json's own age, the plan's `stale` flag, or an
+    observed_at from the future holds it here."""
     if usage is not None and (usage.get("stale") or usage.get("skew")):
         age = usage.get("age")
         return HELD_NO_AGE if age is None else age
@@ -373,7 +376,7 @@ def held(usage, plan, now):
     kind, age = freshness(plan.get("observed_at"), now)
     if kind == "future":
         return HELD_NO_AGE
-    if kind == "old" or plan.get("stale"):
+    if plan.get("stale") is True:
         return age if age is not None else HELD_NO_AGE
     return None
 
@@ -444,8 +447,10 @@ def cursor_cell(now, usage=None):
     hold = held(usage, None, now)
     if hold is not None:
         return held_cell("cursor+grok", hold)
+    # The refresher rewrites grok.line every run; line 1 hides it after grok_ttl, and so does this.
     kind, age = freshness(mtime, now)
-    if kind != "fresh":
+    ttl = num(env("LL_GROK_TTL")) or GROK_TTL
+    if kind is None or kind == "future" or age > ttl:
         return Cell("cursor+grok", None, age=age)  # an old line, or one from the future: no percent
     used = pct(flags[0]) if flags else None
     if used is None:
