@@ -1,11 +1,28 @@
 # Changelog
 
-## 0.12.1 - 2026-11-04
+## 0.13.0 - 2026-11-04
 
-- **Line 2 is now `used`, drawn as small bars.** It used to print what was left, which read backwards next to the context meter, and made Antigravity look inverted (`gemini 100%` meant untouched, `argon 0%` meant spent). Every plan now shows how much is used, as a 5-cell bar in eighths with the same colours as the line 1 meters: `✻ claude 7d ███▌░ │ ⬡ cursor+grok ████▏ │ ✦ agy gemini ░░░░░ · argon █████`.
-- `used = "both"` adds the number after each bar; `used = "pct"` shows numbers only (`LIMITLINE_USED` overrides). The ascii theme draws `###--`.
-- The refill time (`→`) now appears at 75% used or more (Pharos's default cap), instead of at 25% left.
-- On a narrow terminal the bars shrink to 3 cells after the refill times and the agy claude+gpt bucket are dropped.
+### Line 2 shows what is used, in the view you pick
+
+- **Line 2 is now `used`.** It used to print what was left, which read backwards next to the context meter and made Antigravity look inverted (`gemini 100%` meant untouched, `argon 0%` meant spent). Every number Pharos gives is used (Antigravity's `remaining_fraction` becomes `100 - remaining` in Pharos), and every view now fills as a plan is used.
+- **Six views**, `plan_view` (or `LIMITLINE_PLAN_VIEW`), shown with live numbers:
+  - `bar` (default) `claude 7d ███▌░`: 5 cells in eighths, so 70% and 82% look different;
+  - `gauge` `claude 7d ▆`: one character;
+  - `dots` `claude 7d ◕`: five steps;
+  - `trend` `claude 7d ··▁▂▄▅▆`: the last 7 days from Pharos's `usage-report.json` `daily` (Pharos 0.7.1), today live, `·` before Pharos had a reading;
+  - `cap` `cursor+grok ██████│▌░ over cap`: the bar with Pharos's cap (`cap_pct`, default 75) marked, `over cap` at or above it, and `▲` when the window is filling faster than its time is passing;
+  - `none`: numbers only.
+- `plan_numbers = "on"` adds the percent after any view. `plan_show = "left"` shows `100 - used` with the label `left`; colours, the cap, and the refill time still follow used, so a spent plan stays red either way.
+- Colours match the line 1 meters: green, yellow from 50%, red above 80%. The refill time (`→`) appears at the plan's cap or above.
+- On a narrow terminal the views drop refill times, then the agy claude+gpt bucket, then shorten bars, and `trend` and `cap` fall back to `gauge`.
+
+### Releases, channels, and updates
+
+- **CI** (`.github/workflows/ci.yml`): every pull request and push to `main` runs the version check, the unit tests, and the full suite on macOS. A Linux run is advisory for now.
+- **Release** (`.github/workflows/release.yml`): pushing a tag `vX.Y.Z` or `vX.Y.Z-beta.N` checks the tag against every version file and the CHANGELOG, re-runs the suite on the tagged commit, publishes a GitHub release (a prerelease for beta) from the CHANGELOG section, and moves the channel branches: `beta` on every release (never backwards), `stable` on stable releases.
+- **Channels**: `stable`, `beta`, and `dev` (`main`). Install a channel with `claude plugin marketplace add venkatvellaichamy/limitline#stable`.
+- **New commands**: `limitline version` (version, channel, commit), `limitline update` (runs Claude Code's marketplace and plugin update), and `limitline channel stable|beta|dev --yes` (re-adds the marketplace on that branch; the status-line setting is untouched). These are the only limitline commands that touch the network, and only when you run them.
+- `scripts/version.py check|bump|notes|channel|newer` and `RELEASING.md` describe the release steps.
 
 ## 0.12.0 - 2026-11-03
 

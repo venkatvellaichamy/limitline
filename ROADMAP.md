@@ -36,9 +36,10 @@ If a feature measures, stores, or decides, it belongs in Pharos.
 | **0.10.0** | Display only: the five-line view, Pharos as the source | Merged, **needs tag** |
 | **0.11.0** | Live, but quiet | Merged (PR #11), **needs tag** |
 | **0.12.0** | Finish the split | Merged (PR #13), **needs tag** |
-| **0.12.1** | Line 2 shows used, as bars | This PR |
-| **0.13.0** | Display hardening | Planned |
-| **0.14.0** | Every surface shows the same thing | Planned |
+| **0.13.0** | Plan views (used or left), CI, releases, channels, update | This PR |
+| **0.14.0** | Display hardening | Planned |
+| **0.15.0** | Every surface shows the same thing | Planned |
+| **0.16.0** | A settings menu, and an icon on every line | Planned |
 | **1.0.0** | Stable display of a versioned Pharos contract | Planned |
 
 ### Shipped
@@ -74,9 +75,11 @@ Already on `main` (PRs #9 and #10) but still labelled 0.9.0. Release it as-is.
 - The `left` line shows the age of Pharos's reading when it is over 5 minutes old.
 - `animate = "off"` keeps the information and drops the motion.
 
-### 0.12.1 — Line 2 shows used, as bars (this PR)
+### 0.13.0 — Plan views, releases, and channels (this PR)
 
-Line 2 read "left" while the context meter on line 1 reads "used", and Antigravity's numbers looked inverted next to the others. Line 2 is now `used`, with a 5-cell bar per window in eighths, the line 1 colours, and `used = "both" | "pct"` for numbers. The refill time shows at 75% used.
+- Line 2 reads `used` (or `left` with `plan_show`), in one of six views: `bar`, `gauge`, `dots`, `trend` (7 days, from Pharos 0.7.1 `daily`), `cap` (Pharos's `cap_pct` marked, pace `▲`), or `none`; `plan_numbers` adds the percent.
+- CI on every pull request; tagged releases with a GitHub release, moving `stable` and `beta` branches; `limitline version`, `update`, and `channel`. See RELEASING.md.
+- The first release cut this way should be `v0.13.0`. Earlier versions 0.10.0 to 0.12.0 were merged without tags; they can be tagged on their merge commits for history, with no release.
 
 ### 0.12.0 — Finish the split
 
@@ -97,7 +100,7 @@ Still open, because it depends on Pharos 0.8.0 (`pharos statusline`):
 
 - With Pharos, the Claude row should come from `usage.json`, and limitline should stop writing `~/.pharos/inbox/claude.json`. Claude Code gives its limits only to the status-line command, so this needs Pharos to own that slot and pass the same input to limitline to draw. Until then the relay stays, and it is the one file limitline writes.
 
-### 0.13.0 — Display hardening
+### 0.14.0 — Display hardening
 
 Prove the display stays honest when Pharos's files are bad. Synthetic files and a disposable cache only.
 
@@ -112,10 +115,15 @@ Prove the display stays honest when Pharos's files are bad. Synthetic files and 
 | Narrow terminal | Drops the lowest-priority segment first, as documented |
 | Slow disk | Render stays under 50 ms |
 
-### 0.14.0 — Every surface shows the same thing
+### 0.15.0 — Every surface shows the same thing
 
 - `status`, `watch`, the menu bar and the status line read one shared view, so they never disagree.
 - Menu bar parity for every segment.
+
+### 0.16.0 — A settings menu, and an icon on every line
+
+- **An icon on every line**, like line 1's 🧠 and 🪟: for example `◔` before `used`, `▶` before `today`, `⏳` before `older`, `🖥` before `hosts`, with a `marks = "none"` and ascii fallback and the same width rules.
+- **`limitline settings`**: a full-screen menu for every setting (lines, theme, marks, plan view, numbers, used or left, animate, segments, widths), each shown as a live example drawn from your own numbers before you pick it. Saving writes `~/.config/limitline/config.toml` with a backup and shows the diff. It replaces hand-editing for most people, and `limitline config` stays as the template.
 
 ### 1.0.0 — Stable
 

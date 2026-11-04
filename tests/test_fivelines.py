@@ -101,13 +101,71 @@ class FiveLines(unittest.TestCase):
             self.assertEqual(len(filled) + len(empty), 5)
 
     def test_number_modes(self):
-        os.environ["LL_USED"] = "both"
+        os.environ["LL_PLAN_NUMBERS"] = "on"
         line = plain(fivelines.build(now=NOW))[0]
         self.assertIn("claude 7d ███▌░ 70%", line)
         self.assertIn("argon █████ 100%", line)
-        os.environ["LL_USED"] = "pct"
+        os.environ["LL_PLAN_VIEW"] = "none"
+        os.environ["LL_PLAN_NUMBERS"] = "off"
         line = plain(fivelines.build(now=NOW))[0]
-        self.assertIn("agy gemini 0% · claude+gpt 7% · argon 100% →", line)
+        self.assertIn("agy gemini 0% · claude+gpt 7% · argon 100% →", line, "none always shows numbers")
+
+    def test_gauge_with_numbers(self):
+        os.environ.update({"LL_PLAN_VIEW": "gauge", "LL_PLAN_NUMBERS": "on"})
+        line = plain(fivelines.build(now=NOW))[0]
+        self.assertIn("claude 7d ▆ 70%", line)
+        self.assertIn("cursor+grok ▇ 81%", line)
+        self.assertIn("agy gemini ▁ 0% · claude+gpt ▁ 7% · argon █ 100%", line)
+
+    def test_dots(self):
+        os.environ["LL_PLAN_VIEW"] = "dots"
+        line = plain(fivelines.build(now=NOW))[0]
+        self.assertIn("claude 7d ◕", line)
+        self.assertIn("agy gemini ○ · claude+gpt ○ · argon ●", line)
+
+    def test_trend_from_pharos_daily_with_live_today(self):
+        (self.pharos / "usage-report.json").write_text(json.dumps({"daily": {
+            "claude": {"7d": [None, None, 10, 25, 40, 55, 60]},
+            "antigravity": {"argon": [None, None, None, None, None, 100, 100]}}}))
+        self.usage["plans"][0]["windows"][3]["id"] = "argon"
+        self.write_usage()
+        os.environ["LL_PLAN_VIEW"] = "trend"
+        line = plain(fivelines.build(now=NOW))[0]
+        self.assertIn("claude 7d ··▁▂▄▅▆", line, "no reading is a dot; today is the live 70%, not 60")
+        self.assertIn("argon ·····██", line)
+        self.assertIn("codex 5h ·······", line.replace("█", "·"), "no series: dots, then today's level")
+
+    def test_cap_mark_over_cap_and_pace(self):
+        self.usage["plans"].append({"key": "claude", "provider": "claude", "cap_pct": 60, "windows": []})
+        self.write_usage()
+        os.environ["LL_PLAN_VIEW"] = "cap"
+        line = plain(fivelines.build(now=NOW))[0]
+        self.assertIn("claude 7d █████│▋░░ over cap", line, "the cap comes from Pharos (60 here: after 5 of 8 cells)")
+        self.assertIn("7d █████▌│░░ ▲", line, "codex 69% with 3 of 7 days gone: ahead of pace")
+        self.assertIn("argon ██████│██ over cap", line)
+        self.assertIn("claude+gpt ▌░░░░░│░░", line, "default cap 75 when Pharos gives none")
+        cell = fivelines.Cell("7d", 55, reset=NOW + 4 * 86400)
+        self.assertTrue(cell.pace_ahead(NOW), "55% used with 3 of 7 days (43%) gone is ahead of pace")
+        self.assertFalse(fivelines.Cell("7d", 30, reset=NOW + 4 * 86400).pace_ahead(NOW))
+
+    def test_left_inverts_the_number_not_the_meaning(self):
+        os.environ.update({"LL_PLAN_SHOW": "left", "LL_PLAN_VIEW": "gauge", "LL_PLAN_NUMBERS": "on", "LL_COLOR": "1"})
+        raw = fivelines.build(now=NOW)[0]
+        line = plain([raw])[0]
+        self.assertTrue(line.startswith("left  ✻ claude 7d ▃ 30%"), line)
+        self.assertIn("argon ▁ 0%", line)
+        self.assertIn("gemini █ 100%", line)
+        self.assertIn("\x1b[31m▁\x1b[0m", raw, "spent argon stays red in left mode")
+
+    def test_every_view_handles_every_value(self):
+        for view in fivelines.VIEWS:
+            for show in ("used", "left"):
+                os.environ.update({"LL_PLAN_VIEW": view, "LL_PLAN_SHOW": show})
+                style = fivelines.Style()
+                for used in (0, 0.4, 12.5, 49.9, 50, 74.9, 75, 80, 80.1, 99.6, 100):
+                    cell = fivelines.Cell("7d", used, reset=NOW + 3600)
+                    cell.trend = [None, 0, used, None, 100, 50, used]
+                    self.assertTrue(cell.text(style, NOW))
 
     def test_reset_only_shown_at_75_or_more(self):
         line = plain(fivelines.build(now=NOW))[0]
