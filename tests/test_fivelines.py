@@ -77,30 +77,114 @@ class FiveLines(unittest.TestCase):
         folder.mkdir()
         (folder / "state.json").write_text(json.dumps({"id": id_, "status": status, "started_at": started, "repo": "/r/pharos", **extra}))
 
-    def test_left_is_remaining_in_fixed_order_with_marks(self):
-        left = plain(fivelines.build(now=NOW))[0]
-        self.assertTrue(left.startswith("left  ✻ claude 7d 30%"), left)
-        order = [left.index(word) for word in ("claude", "◎ codex", "⬡ cursor+grok", "✦ agy")]
+    def test_used_bars_in_fixed_order_with_marks(self):
+        line = plain(fivelines.build(now=NOW))[0]
+        self.assertTrue(line.startswith("used  ✻ claude 7d ███▌░"), line)
+        order = [line.index(word) for word in ("claude", "◎ codex", "⬡ cursor+grok", "✦ agy")]
         self.assertEqual(order, sorted(order))
-        self.assertIn("codex 5h 1% →18:00 · 7d 31%", left)
-        self.assertIn("cursor+grok 19% →Thu 23:22", left)
-        self.assertIn("agy gemini 100% · claude+gpt 93% · argon 0% →", left)
-        self.assertNotIn("gemini app", left.lower())
+        self.assertIn("codex 5h █████ →18:00 · 7d ███▌░", line)
+        self.assertIn("cursor+grok ████░ →Thu 23:22", line)
+        self.assertIn("agy gemini ░░░░░ · claude+gpt ▍░░░░ · argon █████ →", line)
+        self.assertNotIn("left", line)
+        self.assertNotIn("gemini app", line.lower())
 
-    def test_reset_only_shown_at_25_or_less(self):
-        left = plain(fivelines.build(now=NOW))[0]
-        self.assertNotIn("claude 7d 30% →", left)
-        self.assertNotIn("7d 31% →", left)
+    def test_every_plan_reads_the_same_way(self):
+        """Antigravity used to look backwards next to the others; now all bars fill as they are used."""
+        filled, empty = fivelines.used_bar(0)
+        self.assertEqual((filled, empty), ("", "░░░░░"))
+        self.assertEqual(fivelines.used_bar(100), ("█████", ""))
+        self.assertEqual(fivelines.used_bar(70), ("███▌", "░"))
+        self.assertNotEqual(fivelines.used_bar(70), fivelines.used_bar(82), "70% and 82% look different")
+        self.assertEqual(fivelines.used_bar(50, ascii=True), ("###", "--"))
+        for used in range(0, 101):
+            filled, empty = fivelines.used_bar(used)
+            self.assertEqual(len(filled) + len(empty), 5)
 
-    def test_colours_at_10_and_25(self):
-        self.assertEqual(fivelines.left_code(10), "31")
-        self.assertEqual(fivelines.left_code(11), "33")
-        self.assertEqual(fivelines.left_code(25), "33")
-        self.assertEqual(fivelines.left_code(26), "")
+    def test_number_modes(self):
+        os.environ["LL_PLAN_NUMBERS"] = "on"
+        line = plain(fivelines.build(now=NOW))[0]
+        self.assertIn("claude 7d ███▌░ 70%", line)
+        self.assertIn("argon █████ 100%", line)
+        os.environ["LL_PLAN_VIEW"] = "none"
+        os.environ["LL_PLAN_NUMBERS"] = "off"
+        line = plain(fivelines.build(now=NOW))[0]
+        self.assertIn("agy gemini 0% · claude+gpt 7% · argon 100% →", line, "none always shows numbers")
+
+    def test_gauge_with_numbers(self):
+        os.environ.update({"LL_PLAN_VIEW": "gauge", "LL_PLAN_NUMBERS": "on"})
+        line = plain(fivelines.build(now=NOW))[0]
+        self.assertIn("claude 7d ▆ 70%", line)
+        self.assertIn("cursor+grok ▇ 81%", line)
+        self.assertIn("agy gemini ▁ 0% · claude+gpt ▁ 7% · argon █ 100%", line)
+
+    def test_dots(self):
+        os.environ["LL_PLAN_VIEW"] = "dots"
+        line = plain(fivelines.build(now=NOW))[0]
+        self.assertIn("claude 7d ◕", line)
+        self.assertIn("agy gemini ○ · claude+gpt ○ · argon ●", line)
+
+    def test_trend_from_pharos_daily_with_live_today(self):
+        (self.pharos / "usage-report.json").write_text(json.dumps({"daily": {
+            "claude": {"7d": [None, None, 10, 25, 40, 55, 60]},
+            "antigravity": {"argon": [None, None, None, None, None, 100, 100]}}}))
+        self.usage["plans"][0]["windows"][3]["id"] = "argon"
+        self.write_usage()
+        os.environ["LL_PLAN_VIEW"] = "trend"
+        line = plain(fivelines.build(now=NOW))[0]
+        self.assertIn("claude 7d ··▁▂▄▅▆", line, "no reading is a dot; today is the live 70%, not 60")
+        self.assertIn("argon ·····██", line)
+        self.assertIn("codex 5h ·······", line.replace("█", "·"), "no series: dots, then today's level")
+
+    def test_cap_mark_over_cap_and_pace(self):
+        self.usage["plans"].append({"key": "claude", "provider": "claude", "cap_pct": 60, "windows": []})
+        self.write_usage()
+        os.environ["LL_PLAN_VIEW"] = "cap"
+        line = plain(fivelines.build(now=NOW))[0]
+        self.assertIn("claude 7d █████│▋░░ over cap", line, "the cap comes from Pharos (60 here: after 5 of 8 cells)")
+        self.assertIn("7d █████▌│░░ ▲", line, "codex 69% with 3 of 7 days gone: ahead of pace")
+        self.assertIn("argon ██████│██ over cap", line)
+        self.assertIn("claude+gpt ▌░░░░░│░░", line, "default cap 75 when Pharos gives none")
+        cell = fivelines.Cell("7d", 55, reset=NOW + 4 * 86400)
+        self.assertTrue(cell.pace_ahead(NOW), "55% used with 3 of 7 days (43%) gone is ahead of pace")
+        self.assertFalse(fivelines.Cell("7d", 30, reset=NOW + 4 * 86400).pace_ahead(NOW))
+
+    def test_left_inverts_the_number_not_the_meaning(self):
+        os.environ.update({"LL_PLAN_SHOW": "left", "LL_PLAN_VIEW": "gauge", "LL_PLAN_NUMBERS": "on", "LL_COLOR": "1"})
+        raw = fivelines.build(now=NOW)[0]
+        line = plain([raw])[0]
+        self.assertTrue(line.startswith("left  ✻ claude 7d ▃ 30%"), line)
+        self.assertIn("argon ▁ 0%", line)
+        self.assertIn("gemini █ 100%", line)
+        self.assertIn("\x1b[31m▁\x1b[0m", raw, "spent argon stays red in left mode")
+
+    def test_every_view_handles_every_value(self):
+        for view in fivelines.VIEWS:
+            for show in ("used", "left"):
+                os.environ.update({"LL_PLAN_VIEW": view, "LL_PLAN_SHOW": show})
+                style = fivelines.Style()
+                for used in (0, 0.4, 12.5, 49.9, 50, 74.9, 75, 80, 80.1, 99.6, 100):
+                    cell = fivelines.Cell("7d", used, reset=NOW + 3600)
+                    cell.trend = [None, 0, used, None, 100, 50, used]
+                    self.assertTrue(cell.text(style, NOW))
+
+    def test_reset_only_shown_at_75_or_more(self):
+        line = plain(fivelines.build(now=NOW))[0]
+        self.assertNotIn("claude 7d ███▌░ →", line)
+        self.assertNotIn("7d ███▌░ →", line)
+
+    def test_colours_match_line_one(self):
+        self.assertEqual(fivelines.used_code(49), "32")
+        self.assertEqual(fivelines.used_code(50), "33")
+        self.assertEqual(fivelines.used_code(80), "33")
+        self.assertEqual(fivelines.used_code(81), "31")
         os.environ["LL_COLOR"] = "1"
-        left = fivelines.build(now=NOW)[0]
-        self.assertIn("\x1b[31m1%\x1b[0m", left)
-        self.assertIn("\x1b[33m19%\x1b[0m", left)
+        line = fivelines.build(now=NOW)[0]
+        self.assertIn("\x1b[31m█████\x1b[0m", line)
+        self.assertIn("\x1b[33m███▌\x1b[0m", line)
+
+    def test_narrow_terminal_uses_short_bars(self):
+        line = plain(fivelines.build(now=NOW, columns=60))[0]
+        self.assertIn("claude 7d ██▏", line)
 
     def test_missing_reading_is_a_dash_not_a_number(self):
         for key in ("LL_CODEX5", "LL_CODEX5_RESET", "LL_CODEX7", "LL_CODEX7_RESET"):
@@ -112,16 +196,16 @@ class FiveLines(unittest.TestCase):
         self.assertIn("◎ codex 7d —", left)
         self.assertIn("✦ agy gemini —", left)
 
-    def test_expired_window_is_not_shown_as_left(self):
+    def test_expired_window_is_not_shown(self):
         os.environ["LL_CODEX5_RESET"] = str(NOW - 10)
-        left = plain(fivelines.build(now=NOW))[0]
-        self.assertNotIn("5h 1%", left)
+        line = plain(fivelines.build(now=NOW))[0]
+        self.assertNotIn("5h", line)
 
     def test_marks_none(self):
         os.environ["LL_MARKS"] = "none"
         left = plain(fivelines.build(now=NOW))[0]
         self.assertNotIn("✻", left)
-        self.assertTrue(left.startswith("left  claude 7d 30%"))
+        self.assertTrue(left.startswith("used  claude 7d ███▌░"))
 
     def test_today_and_older_from_pharos_summary(self):
         os.environ["LL_ANIMATE"] = "off"
@@ -145,7 +229,7 @@ class FiveLines(unittest.TestCase):
     def test_without_pharos_only_claude(self):
         (self.pharos / "usage.json").unlink()
         lines = plain(fivelines.build(now=NOW))
-        self.assertEqual(lines, ["left  ✻ claude 7d 30%"])
+        self.assertEqual(lines, ["used  ✻ claude 7d ███▌░"])
 
     def test_stale_pharos_usage_shows_dashes_for_agy(self):
         self.usage["generated_at"] = NOW - 3600
@@ -186,7 +270,7 @@ class FiveLines(unittest.TestCase):
         os.environ["LL_COLOR"] = "1"
         fivelines.build(now=NOW)
         os.environ["LL_CLAUDE7"] = "75"
-        self.assertIn("\x1b[1;33m25%", fivelines.build(now=NOW + 5)[0], "a moved number is bold (and keeps its colour)")
+        self.assertIn("\x1b[1;33m███▊", fivelines.build(now=NOW + 5)[0], "a moved number is bold (and keeps its colour)")
         self.assertNotIn("\x1b[1;", fivelines.build(now=NOW + 30)[0], "then plain again")
 
     def test_old_pharos_reading_says_its_age(self):

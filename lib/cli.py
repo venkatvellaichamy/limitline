@@ -465,7 +465,15 @@ def cmd_doctor():
         print("fleet sources: check failed (%s)" % exc.__class__.__name__)
     raw = ""
     if not sys.stdin.isatty():
-        raw = sys.stdin.read()
+        import select
+
+        # Only read a payload that is already there: run from a script with an open but idle
+        # stdin, doctor used to wait forever.
+        try:
+            ready = select.select([sys.stdin], [], [], 0.5)[0]
+        except (OSError, ValueError):
+            ready = []
+        raw = sys.stdin.read() if ready else ""
     if not raw.strip():
         print("stdin: no status payload")
         return
@@ -528,7 +536,10 @@ def cmd_config():
     print('# jobs = "on"  # reported with pharos job update; shown unless "off"')
     print("# fleet_ttl = 180")
     print("# machines_ttl = 180")
-    print("# lines = 5  # session, what's left, today, older, hosts")
+    print("# lines = 5  # session, what's used, today, older, hosts")
+    print('# plan_view = "bar"     # line 2: bar, gauge, dots, trend, cap, or none (numbers only)')
+    print('# plan_numbers = "off"  # "on" adds the percent after each view')
+    print('# plan_show = "used"    # or "left" (100 - used); colours and the cap still follow used')
     print('# animate = "off"')
     print("# Inside Cursor or Grok without Pharos (LIMITLINE_TOOL=cursor): the token estimate budget")
     print("# cursor_week_tokens = 1000000")
@@ -707,6 +718,8 @@ def main(argv):
         except Exception:
             return
 
+    elif cmd in ("version", "--version", "update", "channel"):
+        sys.exit(load_lib("release").main(argv) or 0)
     elif cmd == "schedule":
         sys.exit(load_lib("schedule").main(argv[1:]) or 0)
     else:

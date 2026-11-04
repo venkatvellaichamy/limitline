@@ -1,12 +1,14 @@
 #!/usr/bin/env python3
 """Lines 2-5 of the five-line status line (`lines = 5`).
 
-    left  ✻ claude 7d 30% →Wed 04:00 │ ◎ codex 5h 1% →18:14 · 7d 31% │ ⬡ cursor+grok 19% →Thu │ ✦ agy gemini 100% · claude+gpt 93% · argon 0% →Fri
+    used  ✻ claude 7d ███▌░ │ ◎ codex 5h ░░░░░ · 7d ███▌░ │ ⬡ cursor+grok ████▏ →Thu │ ✦ agy gemini ░░░░░ · claude+gpt ▍░░░░ · argon █████ →Fri
     today ▶ 1 running │ ✓ 5 done │ ✋ 3 need you │ ✗ 2 failed · ↻ 1 retried │ ⏸ 1 waiting on limit
     older ✋ 4 need you │ ✗ 1 failed │ oldest 6d (pharos-reviews)
     hosts studio 82% free · 22% cpu │ laptop 49% · 45% │ backup 73% · 16%
 
-Every plan number is the amount LEFT (100 - used). Pharos measures; this only draws:
+Every plan bar is the amount USED, like the context meter on line 1: an empty bar is a
+fresh allowance, a full bar is spent. `used = "both"` adds the number, `"pct"` shows only
+the number. Pharos measures; this only draws:
 plans and hosts come from ~/.pharos/usage.json and job counts from ~/.pharos/summary.json.
 Without Pharos only Claude's own line is shown (from the status-line input) and the job
 and host lines are left out. Nothing here runs a model CLI, ssh, or the network. Inputs
@@ -81,9 +83,14 @@ class Style:
         theme = env("LL_MARKS", "unicode").strip().lower() or "unicode"
         self.marks = MARKS.get(theme, MARKS["unicode"])
         self.animate = env("LL_ANIMATE", "on").strip().lower() not in ("0", "off", "false", "no")
+        view = env("LL_PLAN_VIEW", "bar").strip().lower()
+        self.view = view if view in VIEWS else "bar"
+        self.numbers = self.view == "none" or env("LL_PLAN_NUMBERS", "off").strip().lower() in ("1", "on", "true", "yes")
+        self.left = env("LL_PLAN_SHOW", "used").strip().lower() == "left"
+        self.ascii = env("LL_THEME") == "ascii"
 
     def paint(self, code, text):
-        return f"\x1b[{code}m{text}\x1b[0m" if self.color and code else text
+        return f"\x1b[{code}m{text}\x1b[0m" if self.color and code and text else text
 
     def mark(self, key):
         glyph = self.marks.get(key, "")
@@ -99,14 +106,60 @@ def width(text):
     return total
 
 
-def left_code(left):
-    if left is None:
+def used_code(used):
+    """The same colours as the meters on line 1: green, yellow from 50, red above 80."""
+    if used is None:
         return "2"
-    if left <= 10:
+    if used > 80:
         return "31"
-    if left <= 25:
+    if used >= 50:
         return "33"
-    return ""
+    return "32"
+
+
+VIEWS = ("bar", "gauge", "dots", "trend", "cap", "none")
+EIGHTHS = " ▏▎▍▌▋▊▉"
+LEVELS = "▁▂▃▄▅▆▇█"
+DOTS = "○◔◑◕●"
+PACE_GAP = 8  # the same gap line 1's pace segment uses
+
+
+def level(value, ascii=False):
+    """One character for 0-100: a vertical eighth, so a row of them is a sparkline."""
+    if value is None:
+        return "·"
+    value = min(100.0, max(0.0, value))
+    if ascii:
+        return "_.-=+*#@"[min(7, int(value * 8 / 100))]
+    return LEVELS[max(0, min(7, -(-int(round(value)) * 8 // 100) - 1))] if value > 0 else LEVELS[0]
+
+
+def dot(value, ascii=False):
+    value = min(100.0, max(0.0, value))
+    if ascii:
+        return "0" if value < 12.5 else "o" if value < 62.5 else "O"
+    return DOTS[int(value / 25 + 0.5)]
+
+
+def window_seconds(name):
+    """5-hour windows are 5h; everything else Pharos reports (7d, week, weekly) is a week."""
+    return 5 * 3600 if "5h" in str(name) else 7 * 86400
+BAR_WIDTH = 5
+RESET_FROM = 75  # show when a window refills once it is this full (Pharos's default cap)
+
+
+def used_bar(used, cells=BAR_WIDTH, ascii=False):
+    """A small meter in eighths of a cell, so 70% and 82% look different in 5 cells."""
+    used = min(100.0, max(0.0, used))
+    if ascii:
+        full = int(used * cells / 100 + 0.5)
+        return "#" * full, "-" * (cells - full)
+    steps = int(used * cells * 8 / 100 + 0.5)
+    full, part = divmod(steps, 8)
+    if full >= cells:
+        return "█" * cells, ""
+    filled = "█" * full + (EIGHTHS[part] if part else "")
+    return filled, "░" * (cells - full - (1 if part else 0))
 
 
 def reset_label(epoch, now):
@@ -127,27 +180,85 @@ def age_label(seconds):
 
 
 class Cell:
-    """One plan window. `left` None means no reading."""
+    """One plan window. `used` None means no reading. Pharos's numbers are always used; with
+    `plan_show = "left"` the display shows 100 - used, but colours and the cap still follow used."""
 
-    def __init__(self, name, left, reset=None, age=None, estimate=False):
-        self.name, self.left, self.reset, self.age, self.estimate = name, left, reset, age, estimate
-        self.fresh_change = False  # set by mark_changes: shown bold for a short while
+    def __init__(self, name, used, reset=None, age=None, estimate=False, window=None):
+        self.name, self.used, self.reset, self.age, self.estimate = name, used, reset, age, estimate
+        self.window = window or name  # the window id in Pharos's files
+        self.cap = None               # set from usage.json cap_pct
+        self.trend = None             # 7 values from usage-report.json daily, used
+        self.fresh_change = False     # set by mark_changes: shown bold for a short while
 
-    def text(self, style, now, resets=True):
-        if self.left is None:
+    def shown(self, used):
+        return None if used is None else (100.0 - used if self.left else used)
+
+    def pace_ahead(self, now):
+        if not self.reset:
+            return False
+        length = window_seconds(self.window)
+        elapsed = 1 - (self.reset - now) / length
+        return 0 <= elapsed <= 1 and self.used - elapsed * 100 >= PACE_GAP
+
+    def meter(self, style, now, code, cells):
+        value = self.shown(self.used)
+        dim = lambda text: style.paint("2", text)
+        if style.view == "gauge":
+            return style.paint(code, level(value, style.ascii)) if value > 0 else dim(level(0, style.ascii))
+        if style.view == "dots":
+            return style.paint(code, dot(value, style.ascii))
+        if style.view == "trend":
+            days = list(self.trend or [None] * 7)[-7:]
+            days = [None] * (7 - len(days)) + days
+            days[-1] = self.used  # today is the live reading
+            out = ""
+            for used in days:
+                glyph = level(self.shown(used), style.ascii)
+                out += dim(glyph) if used is None else style.paint(used_code(used), glyph)
+            return out
+        if style.view == "cap":
+            cells = 8 if cells == BAR_WIDTH else cells
+            filled, empty = used_bar(value, cells, style.ascii)
+            cap = self.cap if self.cap is not None else RESET_FROM
+            at = int(round(self.shown(cap) * cells / 100))
+            if at <= len(filled):
+                text = style.paint(code, filled[:at]) + dim("│" if not style.ascii else "|") + style.paint(code, filled[at:]) + dim(empty)
+            else:
+                gap = at - len(filled)
+                text = style.paint(code, filled) + dim(empty[:gap] + ("│" if not style.ascii else "|") + empty[gap:])
+            return text
+        if style.view == "none":
+            return ""
+        filled, empty = used_bar(value, cells, style.ascii)
+        return style.paint(code, filled) + dim(empty)
+
+    def text(self, style, now, resets=True, cells=BAR_WIDTH):
+        self.left = style.left
+        if self.used is None:
             age = f" {age_label(self.age)} ago" if self.age else ""
             return f"{self.name} " + style.paint("2", "—" + age)
-        pct = f"{'~' if self.estimate else ''}{int(round(self.left))}%"
-        code = left_code(self.left)
+        code = used_code(self.used)
         if self.fresh_change and style.animate:
-            code = ("1;" + code) if code else "1"
-        out = f"{self.name} " + style.paint(code, pct)
-        if resets and self.reset and self.left <= 25:
+            code = "1;" + code
+        parts = [self.meter(style, now, code, cells)]
+        if style.numbers:
+            parts.append(style.paint(code, f"{'~' if self.estimate else ''}{int(round(self.shown(self.used)))}%"))
+        elif self.estimate:
+            parts[0] = style.paint("2", "~") + parts[0]
+        if style.view == "cap":
+            cap = self.cap if self.cap is not None else RESET_FROM
+            if self.used >= cap:
+                parts.append(style.paint("31", "over cap"))
+            elif self.pace_ahead(now):
+                parts.append(style.paint("33", "▲"))
+        out = f"{self.name} " + " ".join(p for p in parts if p)
+        threshold = self.cap if self.cap is not None else RESET_FROM
+        if resets and self.reset and self.used >= threshold:
             out += " " + style.paint("2", "→" + reset_label(self.reset, now))
         return out
 
 
-# ---- line 2: what's left ---------------------------------------------------------------
+# ---- line 2: what's used ---------------------------------------------------------------
 
 
 def window_cell(name, used, reset, now):
@@ -155,7 +266,7 @@ def window_cell(name, used, reset, now):
     reset = int(num(reset) or 0) or None
     if used is None or (reset and reset <= now):
         return None
-    return Cell(name, max(0.0, 100.0 - used), reset)
+    return Cell(name, min(100.0, max(0.0, used)), reset)
 
 
 def claude_cells(now):
@@ -210,7 +321,7 @@ def cursor_cell(now):
         reset = next_weekday(match.group(1), int(match.group(2)), int(match.group(3)), now)
     if used is None:
         return Cell("cursor+grok", None, age=age)
-    return Cell("cursor+grok", max(0.0, 100.0 - used), reset, estimate=estimate)
+    return Cell("cursor+grok", min(100.0, max(0.0, used)), reset, estimate=estimate, window="week")
 
 
 def next_weekday(day, hour, minute, now):
@@ -257,14 +368,16 @@ def agy_cells(now, usage=None):
             if not isinstance(bucket, dict) or bucket.get("group") != group:
                 continue
             cell = window_cell(name, bucket.get("used_pct"), bucket.get("resets_at"), now)
-            if cell and (best is None or cell.left < best.left):
+            if cell:
+                cell.window = str(bucket.get("id") or bucket.get("name") or name)
+            if cell and (best is None or cell.used > best.used):
                 best = cell
         if best:
             cells.append(best)
     return cells or [Cell("gemini", None)]
 
 
-def left_parts(now):
+def used_parts(now):
     """[(mark key, label, [cells])] in the fixed order. Without Pharos, Claude only."""
     parts = [("claude", "claude", claude_cells(now))]
     usage = read_usage(now)
@@ -275,11 +388,38 @@ def left_parts(now):
     if cursor:
         parts.append(("cursor", "", [cursor]))
     parts.append(("agy", "agy", agy_cells(now, usage)))
+    add_caps_and_trends(parts, usage)
     return parts
 
 
+PLAN_KEYS = {"claude": "claude", "codex": "codex", "cursor": "cursor+grok", "agy": "antigravity"}
+
+
+def report_file():
+    return env("LIMITLINE_PHAROS_REPORT") or os.path.join(pharos_home(), "usage-report.json")
+
+
+def add_caps_and_trends(parts, usage):
+    """The cap (usage.json cap_pct) and the 7-day series (usage-report.json daily), both from
+    Pharos. A cursor+grok estimate has no plan reading of its own, so it gets no series."""
+    caps = {}
+    for plan in (usage or {}).get("plans") or []:
+        if isinstance(plan, dict) and num(plan.get("cap_pct")) is not None:
+            caps[plan.get("key")] = num(plan.get("cap_pct"))
+    report = read_json(report_file())
+    daily = report.get("daily") if isinstance(report, dict) and isinstance(report.get("daily"), dict) else {}
+    for key, _label, cells in parts:
+        plan = PLAN_KEYS.get(key)
+        series = daily.get(plan) if isinstance(daily.get(plan), dict) else {}
+        for cell in cells:
+            cell.cap = caps.get(plan)
+            values = series.get(cell.window)
+            if isinstance(values, list) and not cell.estimate:
+                cell.trend = [num(v) for v in values]
+
+
 CHANGE_SHOW_S = 20  # a number that just moved is bold for this long, then plain again
-STALE_NOTE_S = 300  # older than this, the left line says how old Pharos's reading is
+STALE_NOTE_S = 300  # older than this, the used line says how old Pharos's reading is
 
 
 def mark_changes(parts, now):
@@ -291,10 +431,10 @@ def mark_changes(parts, now):
     dirty = False
     for key, _label, cells in parts:
         for cell in cells:
-            if cell.left is None:
+            if cell.used is None:
                 continue
-            slot = f"{key}/{cell.name}"
-            value = int(round(cell.left))
+            slot = f"{key}/{cell.name}/used"
+            value = int(round(cell.used))
             before = seen.get(slot)
             if not isinstance(before, list) or len(before) != 2:
                 seen[slot] = [value, 0]
@@ -314,16 +454,15 @@ def mark_changes(parts, now):
             pass
 
 
-def render_left(style, now, resets=True, drop_agy_3p=False):
-    out = []
-    parts = left_parts(now)
+def render_used(style, now, resets=True, drop_agy_3p=False, cells=BAR_WIDTH):
+    out, bar = [], cells
+    parts = used_parts(now)
     mark_changes(parts, now)
     for key, label, cells in parts:
-        if drop_agy_3p:
-            cells = [c for c in cells if c.name != "claude+gpt"]
-        body = " · ".join(c.text(style, now, resets) for c in cells)
+        shown = [c for c in cells if c.name != "claude+gpt"] if drop_agy_3p else cells
+        body = " · ".join(c.text(style, now, resets, bar) for c in shown)
         out.append(style.mark(key) + (label + " " if label else "") + body)
-    line = style.paint("2", "left ") + " " + SEP.join(out)
+    line = style.paint("2", "left " if style.left else "used ") + " " + SEP.join(out)
     usage = read_usage(now)
     if usage is not None:
         age = now - int(num(usage.get("generated_at")) or now)
@@ -489,6 +628,15 @@ def render_hosts(style, now, with_cpu=True):
 # ---- fit and print ---------------------------------------------------------------------
 
 
+def narrow_style(style):
+    """trend and cap are the widest views; when even short bars do not fit, fall back to gauges."""
+    import copy
+
+    small = copy.copy(style)
+    small.view = "gauge"
+    return small
+
+
 def fit(variants, columns):
     """The first variant that fits, else the last one."""
     if columns <= 0:
@@ -505,10 +653,11 @@ def build(now=None, columns=None):
         columns = int(num(env("LL_COLUMNS")) or 0)
     style = Style()
     lines = [fit([
-        render_left(style, now),
-        render_left(style, now, resets=False),
-        render_left(style, now, resets=False, drop_agy_3p=True),
-    ], columns)]
+        render_used(style, now),
+        render_used(style, now, resets=False),
+        render_used(style, now, resets=False, drop_agy_3p=True),
+        render_used(style, now, resets=False, drop_agy_3p=True, cells=3),
+    ] + ([render_used(narrow_style(style), now, resets=False, drop_agy_3p=True)] if style.view in ("trend", "cap") else []), columns)]
     summary = job_summary(now)
     if summary:
         lines.append(fit([render_today(style, summary, now), render_today(style, summary, now, with_event=False)], columns))

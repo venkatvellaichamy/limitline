@@ -4,6 +4,9 @@ set -u
 
 ROOT=$(cd "$(dirname "$0")/.." && pwd)
 BIN="$ROOT/bin/limitline"
+# The status line must redraw in about 50 ms on a Mac. Shared CI runners are slower, so CI
+# raises this (LIMITLINE_SPEED_MS=200); a real slowdown still fails there.
+SPEED_MS="${LIMITLINE_SPEED_MS:-50}"
 FIX="$ROOT/tests/fixtures"
 
 if [[ ! -x "$BIN" ]]; then
@@ -1097,7 +1100,7 @@ for _ in range(runs):
     total += time.perf_counter() - start
 print(int(total / runs * 1000))
 ' )
-if [[ "$speed_ms" -le 50 ]]; then
+if [[ "$speed_ms" -le "$SPEED_MS" ]]; then
   check "speed-${speed_ms}ms" "fast" "fast"
 else
   check "speed-${speed_ms}ms" "slow" "fast"
@@ -1122,7 +1125,7 @@ for _ in range(runs):
     total += time.perf_counter() - start
 print(int(total / runs * 1000))
 ')
-if [[ "$warm_ms" -le 50 ]]; then
+if [[ "$warm_ms" -le "$SPEED_MS" ]]; then
   check "warm-cache-${warm_ms}ms" "fast" "fast"
 else
   check "warm-cache-${warm_ms}ms" "slow" "fast"
@@ -1148,7 +1151,7 @@ for _ in range(runs):
     total += time.perf_counter() - start
 print(int(total / runs * 1000))
 ')
-if [[ "$jobs_ms" -le 50 ]]; then
+if [[ "$jobs_ms" -le "$SPEED_MS" ]]; then
   check "jobs-warm-${jobs_ms}ms" "fast" "fast"
 else
   check "jobs-warm-${jobs_ms}ms" "slow" "fast"
@@ -1163,13 +1166,20 @@ five_out=$(printf '%s' "$five_in" | NO_COLOR=1 XDG_CACHE_HOME="$five_cache" LIMI
 five_l1=$(printf '%s\n' "$five_out" | sed -n 1p)
 five_l2=$(printf '%s\n' "$five_out" | sed -n 2p)
 check "five-line1-session-only" "$([[ "$five_l1" == *Opus* && "$five_l1" != *7d* ]] && echo yes || echo no)" "yes"
-check "five-line2-left" "$([[ "$five_l2" == "left  ✻ claude 7d 30%"* && "$five_l2" == *"cursor+grok 19%"* ]] && echo yes || echo no)" "yes"
+check "five-line2-used" "$([[ "$five_l2" == "used  ✻ claude 7d ███▌░"* && "$five_l2" == *"cursor+grok ████░"* ]] && echo yes || echo no)" "yes"
+five_pct=$(printf '%s' "$five_in" | NO_COLOR=1 XDG_CACHE_HOME="$five_cache" LIMITLINE_PHAROS_HOME="$TEST_HOME/five-pharos" LIMITLINE_LINES=5 LIMITLINE_REFRESH=0 LIMITLINE_PLAN_NUMBERS=on "$BIN" | sed -n 2p)
+check "five-line2-both" "$([[ "$five_pct" == *"claude 7d ███▌░ 70%"* ]] && echo yes || echo no)" "yes"
 check "five-hosts-line" "$(printf '%s\n' "$five_out" | tail -1)" "hosts studio 82% mem free · 22% cpu"
 check "two-lines-unchanged" "$(printf '%s' "$five_in" | NO_COLOR=1 XDG_CACHE_HOME="$five_cache" LIMITLINE_LINES=2 LIMITLINE_REFRESH=0 "$BIN" | grep -c 'left ')" "0"
 if python3 -m unittest -q "$ROOT/tests/test_fivelines.py" >/dev/null 2>&1; then
   check "fivelines-unit" "ok" "ok"
 else
   check "fivelines-unit" "failed" "ok"
+fi
+if python3 -m unittest -q "$ROOT/tests/test_release.py" >/dev/null 2>&1; then
+  check "release-unit" "ok" "ok"
+else
+  check "release-unit" "failed" "ok"
 fi
 
 # Display only (2026-11-03): the status line relays Claude's reading to Pharos and

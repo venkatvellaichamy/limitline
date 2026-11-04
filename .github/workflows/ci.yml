@@ -1,0 +1,40 @@
+name: ci
+
+# Every pull request and every push to main (the dev channel) runs the full suite.
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+env:
+  LIMITLINE_SPEED_MS: "200"  # shared runners are slower than a Mac; 50 ms locally
+
+jobs:
+  macos:
+    name: tests (macOS)
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Release files agree
+        run: python3 scripts/version.py check
+      - name: Shell syntax
+        run: bash -n bin/limitline
+      - name: Unit tests
+        run: python3 -m unittest -v tests/test_fivelines.py tests/test_release.py
+      - name: Full suite
+        run: bash tests/run.sh
+
+  linux:
+    # limitline is built on macOS; Linux is checked so the status line stays portable.
+    # Not required until it has passed for a while.
+    name: tests (Linux, advisory)
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+      - run: sudo apt-get update -q && sudo apt-get install -yq jq gawk
+      - run: python3 -m unittest -v tests/test_fivelines.py
+      - run: bash tests/run.sh

@@ -1,0 +1,61 @@
+name: release
+
+# Pushing a tag vX.Y.Z (stable) or vX.Y.Z-beta.N (beta) publishes a release:
+#   1. the tag must match every version file and have a CHANGELOG section;
+#   2. the full suite runs on the tagged commit;
+#   3. a GitHub release is created from the CHANGELOG section (a prerelease for beta);
+#   4. the channel branches move: `beta` on every release, `stable` on stable ones.
+# Users on `#stable` or `#beta` then get it from `claude plugin marketplace update limitline`
+# (or `limitline update`), because the plugin version changed.
+on:
+  push:
+    tags: ["v*.*.*"]
+
+permissions:
+  contents: write
+
+env:
+  LIMITLINE_SPEED_MS: "200"
+
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+jobs:
+  release:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Tag matches the version files and CHANGELOG
+        run: python3 scripts/version.py check "${GITHUB_REF_NAME}"
+      - name: The tag is on main
+        run: git merge-base --is-ancestor "${GITHUB_SHA}" origin/main
+      - name: Full suite on the tagged commit
+        run: |
+          python3 -m unittest tests/test_fivelines.py
+          bash tests/run.sh
+      - name: GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          version="${GITHUB_REF_NAME#v}"
+          channel="$(python3 scripts/version.py channel "$version")"
+          python3 scripts/version.py notes "$version" > notes.md
+          printf '\n\nInstall: `claude plugin marketplace add venkatvellaichamy/limitline#%s` then `claude plugin install limitline@limitline`.\n' "$channel" >> notes.md
+          flags=()
+          [ "$channel" = beta ] && flags+=(--prerelease) || flags+=(--latest)
+          gh release create "${GITHUB_REF_NAME}" --title "limitline ${version}" --notes-file notes.md --verify-tag "${flags[@]}"
+      - name: Move the channel branches
+        run: |
+          version="${GITHUB_REF_NAME#v}"
+          beta="$(git show origin/beta:bin/limitline 2>/dev/null | sed -n 's/^# Version: //p' | head -1)"
+          if python3 scripts/version.py newer "$version" "$beta"; then
+            git push --force origin "${GITHUB_SHA}:refs/heads/beta"
+          else
+            echo "beta is already on $beta; left where it is"
+          fi
+          if [ "$(python3 scripts/version.py channel "$version")" = stable ]; then
+            git push --force origin "${GITHUB_SHA}:refs/heads/stable"
+          fi

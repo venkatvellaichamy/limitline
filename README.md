@@ -64,6 +64,7 @@ With pace, sparklines, and fresh wording turned on, the same session looks like 
 Opus 5.5 │ ctx ▓▓░░░ ·41% │ 5h ▓▓▓░░ +62% fresh in 1h42m │ 5h ▁▃▅▆▅ 62% │ 7d ▓▓░░░ ·38% fresh Thu 09:00 │ 7d ▁▃▃▅▅▇▄ 38% │ ~15%/day left for 4d │ $1.25
 ```
 
+
 ## Why limitline
 
 The number you care about is already on the machine: the status payload Claude Code just handed you, the newest Codex log line, a snapshot from the last prompt. limitline turns that into one row you can read without opening a dashboard. It does not phone home, and a missing field is skipped instead of guessed.
@@ -72,15 +73,41 @@ The number you care about is already on the machine: the status payload Claude C
 
 Check Claude's usage screen, note the 5-hour and weekly percents and when they reset, then do the same for Codex, remember that Cursor and Grok do not publish a local quota, and check Antigravity's usage per model group. Repeat that every time the window moves. limitline reads those local files once per prompt and prints the row. The switches below add pace, a sparkline, a nudge, or a second machine when you want them, and each one can be turned off.
 
+
+## Install, update, and channels
+
+limitline ships as a Claude Code plugin from this repository. Pick a channel when you add it:
+
+| Channel | Branch | Gets | Use it for |
+|---|---|---|---|
+| `stable` | `stable` | each stable release, `vX.Y.Z` | day to day |
+| `beta` | `beta` | every release, including `vX.Y.Z-beta.N` | trying the next version |
+| `dev` | `main` | every merged pull request | developing limitline |
+
+```sh
+claude plugin marketplace add venkatvellaichamy/limitline#stable
+claude plugin install limitline@limitline
+```
+
+Then `/limitline:install` sets it as the status line. Later:
+
+- `limitline version` prints the version, channel, and commit;
+- `limitline update` runs `claude plugin marketplace update limitline` and `claude plugin update limitline@limitline`;
+- `limitline channel beta --yes` moves to another channel (without `--yes` it only prints the steps). Your status-line setting stays as it is.
+
+Releases are cut from tags; see [RELEASING.md](RELEASING.md). The status line itself never touches the network: only `update` and `channel` do, when you run them.
+
 ## Install with the plugin
 
 Inside Claude Code:
 
 ```
-/plugin marketplace add venkatvellaichamy/limitline
+/plugin marketplace add venkatvellaichamy/limitline#stable
 /plugin install limitline@limitline
 /limitline:install
 ```
+
+Use `#beta` or no suffix (`main`, the dev channel) for the other channels above.
 
 `/limitline:install` backs up `~/.claude/settings.json`, keeps every other key, and asks before replacing an existing `statusLine`. It points `statusLine` at the installed `bin/limitline`.
 
@@ -150,15 +177,26 @@ Five lines are `lines = 5`:
 
 ```
 🧠 Opus 5.5 │ 🪟 ctx ▓▓▓░░ +58% 84k left │ ♥ session 2h10m · +312 -40 · $4.20
-left  ✻ claude 7d 30% │ ◎ codex 5h 1% →18:14 · 7d 31% │ ⬡ cursor+grok 19% →Thu 23:22 │ ✦ agy gemini 100% · claude+gpt 93% · argon 0% →Fri 15:35
+used  ✻ claude 7d ███▌░ │ ◎ codex 5h ░░░░░ · 7d ███▌░ │ ⬡ cursor+grok ████▏ →Thu 23:22 │ ✦ agy gemini ░░░░░ · claude+gpt ▍░░░░ · argon █████ →Fri 15:35
 today ▶ 0 running │ ✓ 7 done │ ✋ 6 need you │ ✗ 3 failed · ↻ 0 retried │ ⏸ 1 waiting on limit
 older ✋ 5 need you │ ✗ 2 failed │ ⏸ 1 waiting on limit │ oldest 1d (website)
 hosts mini 82% mem free · 25% cpu │ macbook 34% · 52% │ silver 73% · 13%
 ```
 
-While Pharos jobs run, `▶` turns slowly (◐ ◓ ◑ ◒). A new Pharos event (a run merged or failed, a plan crossing 75/90/100%, a host offline) shows dimmed at the end of `today` for 30 seconds, a plan number that just moved is bold for 20 seconds, and a Pharos reading older than 5 minutes adds its age to `left`. `animate = "off"` drops the motion. Claude Code redraws on activity and every `refreshInterval` seconds; 10 keeps the motion visible at about 0.2 s of CPU per redraw.
+While Pharos jobs run, `▶` turns slowly (◐ ◓ ◑ ◒). A new Pharos event (a run merged or failed, a plan crossing 75/90/100%, a host offline) shows dimmed at the end of `today` for 30 seconds, a plan number that just moved is bold for 20 seconds, and a Pharos reading older than 5 minutes adds its age to `used`. `animate = "off"` drops the motion. Claude Code redraws on activity and every `refreshInterval` seconds; 10 keeps the motion visible at about 0.2 s of CPU per redraw.
 
-Every plan number on `left` is the amount left. The reset (`→`) appears at 25% or less. Job counts follow Pharos: done is done, merged, or a run with no changes; need you is a run with commits waiting for a check, or a failed check; retried is a run another run replaced. `older` only counts open jobs from the last 7 days. Hosts use the nicknames set in Pharos (`hosts = [...]` in `~/.pharos/usage.toml`). When the terminal is narrow, `left` drops reset times first, then the agy claude+gpt bucket; `older` drops the oldest-job note; `hosts` drops CPU load. `marks = "none"` prints plain names.
+Every view on `used` shows the amount used, like the context meter on line 1: empty is a fresh allowance, full is spent, and the colours are the same (green, yellow from 50%, red above 80%). Pick one with `plan_view`:
+
+| `plan_view` | Looks like | Notes |
+|---|---|---|
+| `bar` (default) | `claude 7d ███▌░` | 5 cells in eighths, so 70% and 82% (`████▏`) look different |
+| `gauge` | `claude 7d ▆` | one character per window |
+| `dots` | `claude 7d ◕` | five steps: ○ ◔ ◑ ◕ ● |
+| `trend` | `claude 7d ··▁▂▄▅▆` | the last 7 days from Pharos (`usage-report.json` `daily`), today live; `·` is no reading yet |
+| `cap` | `cursor+grok ██████│▌░ over cap` | `│` is Pharos's cap for that plan; `▲` means filling faster than the window's time passes |
+| `none` | `claude 7d 70%` | numbers only |
+
+`plan_numbers = "on"` adds the percent after any view (`claude 7d ▆ 70%`). `plan_show = "left"` shows `100 - used` instead and labels the line `left`; colours, the cap, and the refill time still follow used. The refill time (`→`) appears at the plan's cap (Pharos's `cap_pct`, default 75%) or above. Job counts follow Pharos: done is done, merged, or a run with no changes; need you is a run with commits waiting for a check, or a failed check; retried is a run another run replaced. `older` only counts open jobs from the last 7 days. Hosts use the nicknames set in Pharos (`hosts = [...]` in `~/.pharos/usage.toml`). When the terminal is narrow, `used` drops refill times first, then the agy claude+gpt bucket, then shortens the bars to 3 cells (and `trend` or `cap` becomes `gauge`); `older` drops the oldest-job note; `hosts` drops CPU load. `marks = "none"` prints plain names.
 
 A second line is `lines = 2` or `LIMITLINE_LINES=2`. When `COLUMNS` or `LIMITLINE_COLUMNS` is set, the lowest-priority segments drop until the row fits.
 
@@ -213,7 +251,10 @@ Hosts, plan prices, and every measuring setting are Pharos's (`~/.pharos/usage.t
 # vitals = "on"
 # alerts = "off"
 # quiet = "22-7"
-# lines = 5                       # session, what's left, today, older, hosts (needs Pharos for 3-5)
+# lines = 5                       # session, what's used, today, older, hosts (needs Pharos for 3-5)
+# plan_view = "bar"               # line 2: bar, gauge, dots, trend, cap, none
+# plan_numbers = "off"            # "on" adds the percent
+# plan_show = "used"              # or "left"
 # animate = "off"
 # fleet = "on"                    # these four show what Pharos measured
 # machines = "on"
