@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- **Live, but quiet.** With `lines = 5`, the status line now shows that things are moving without asking for attention:
+  - while Pharos jobs run, the `▶` on the `today` line turns slowly (◐ ◓ ◑ ◒), one step per redraw; it stands still when nothing runs;
+  - a new event from Pharos's event log (a run merged or failed, a plan crossing 75/90/100%, a host going offline) appears dimmed at the end of the `today` line for 30 seconds; routine percent moves are not announced;
+  - a plan number that just moved is bold for 20 seconds, then plain;
+  - when Pharos's reading is older than 5 minutes, the `left` line ends with its age (`· 10m old`).
+  `animate = "off"` (or `LIMITLINE_ANIMATE=off`) keeps the event note and the age but drops the motion and bold. The event note reads only the last 16 KB of today's event file; the change marker is one small cache file rewritten only when a number moves.
 - **limitline shows usage; Pharos measures it.** The status line, `status`, `watch`, `report`, host lines, and the five-line view read Pharos's `~/.pharos/usage.json` (every plan and host) and `summary.json` (job counts). limitline no longer runs agy (`/usage`), the Grok plan fetch, the hosts ssh probe, or any reader for a tool it is not running in. Those moved to `pharos usage`, with their tests.
 - On its own, limitline shows only the tool it runs in: Claude Code's limits from the status-line input, or with `LIMITLINE_TOOL=codex|grok|cursor` that tool's own local files.
 - The status line relays Claude's reading, as-is, to `~/.pharos/inbox/claude.json` when `~/.pharos` exists. Claude Code gives these numbers only to the status-line program, so this is how Pharos sees them.

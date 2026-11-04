@@ -80,6 +80,7 @@ class Style:
         self.color = env("LL_COLOR", "1") == "1" and env("LL_THEME") != "mono"
         theme = env("LL_MARKS", "unicode").strip().lower() or "unicode"
         self.marks = MARKS.get(theme, MARKS["unicode"])
+        self.animate = env("LL_ANIMATE", "on").strip().lower() not in ("0", "off", "false", "no")
 
     def paint(self, code, text):
         return f"\x1b[{code}m{text}\x1b[0m" if self.color and code else text
@@ -130,13 +131,17 @@ class Cell:
 
     def __init__(self, name, left, reset=None, age=None, estimate=False):
         self.name, self.left, self.reset, self.age, self.estimate = name, left, reset, age, estimate
+        self.fresh_change = False  # set by mark_changes: shown bold for a short while
 
     def text(self, style, now, resets=True):
         if self.left is None:
             age = f" {age_label(self.age)} ago" if self.age else ""
             return f"{self.name} " + style.paint("2", "—" + age)
         pct = f"{'~' if self.estimate else ''}{int(round(self.left))}%"
-        out = f"{self.name} " + style.paint(left_code(self.left), pct)
+        code = left_code(self.left)
+        if self.fresh_change and style.animate:
+            code = ("1;" + code) if code else "1"
+        out = f"{self.name} " + style.paint(code, pct)
         if resets and self.reset and self.left <= 25:
             out += " " + style.paint("2", "→" + reset_label(self.reset, now))
         return out
@@ -273,14 +278,58 @@ def left_parts(now):
     return parts
 
 
+CHANGE_SHOW_S = 20  # a number that just moved is bold for this long, then plain again
+STALE_NOTE_S = 300  # older than this, the left line says how old Pharos's reading is
+
+
+def mark_changes(parts, now):
+    """Compare with the last render (~/.cache/limitline/five-last.json) and flag what moved.
+    One small file, rewritten only when a number changed."""
+    path = os.path.join(cache_dir(), "five-last.json")
+    seen = read_json(path)
+    seen = seen if isinstance(seen, dict) else {}
+    dirty = False
+    for key, _label, cells in parts:
+        for cell in cells:
+            if cell.left is None:
+                continue
+            slot = f"{key}/{cell.name}"
+            value = int(round(cell.left))
+            before = seen.get(slot)
+            if not isinstance(before, list) or len(before) != 2:
+                seen[slot] = [value, 0]
+                dirty = True
+            elif before[0] != value:
+                seen[slot] = [value, now]
+                dirty = True
+            cell.fresh_change = bool(seen[slot][1]) and now - seen[slot][1] < CHANGE_SHOW_S
+    if dirty:
+        try:
+            os.makedirs(cache_dir(), exist_ok=True)
+            tmp = path + ".%d" % os.getpid()
+            with open(tmp, "w", encoding="utf-8") as handle:
+                json.dump(seen, handle)
+            os.replace(tmp, path)
+        except OSError:
+            pass
+
+
 def render_left(style, now, resets=True, drop_agy_3p=False):
     out = []
-    for key, label, cells in left_parts(now):
+    parts = left_parts(now)
+    mark_changes(parts, now)
+    for key, label, cells in parts:
         if drop_agy_3p:
             cells = [c for c in cells if c.name != "claude+gpt"]
         body = " · ".join(c.text(style, now, resets) for c in cells)
         out.append(style.mark(key) + (label + " " if label else "") + body)
-    return style.paint("2", "left ") + " " + SEP.join(out)
+    line = style.paint("2", "left ") + " " + SEP.join(out)
+    usage = read_usage(now)
+    if usage is not None:
+        age = now - int(num(usage.get("generated_at")) or now)
+        if age > STALE_NOTE_S:
+            line += style.paint("2", f" · {age_label(age)} old")
+    return line
 
 
 # ---- lines 3 and 4: jobs ---------------------------------------------------------------
@@ -326,8 +375,74 @@ def join_jobs(cells):
     return SEP.join(out)
 
 
-def render_today(style, summary):
-    return style.paint("2", "today") + " " + join_jobs(job_cells(style, summary["today"], False))
+SPINNER = "◐◓◑◒"
+EVENT_SHOW_S = 30  # a new event stays on the today line this long
+
+
+def spinner(style, now, running):
+    """The ▶ mark turns slowly while jobs run (one step per redraw), and stands still otherwise."""
+    if not running or not style.animate or not style.marks:
+        return None
+    return SPINNER[int(now // 2) % len(SPINNER)]
+
+
+def latest_event(now, show_s=EVENT_SHOW_S):
+    """The newest event worth a glance, from the tail of today's Pharos event file."""
+    path = os.path.join(pharos_home(), "events", datetime.fromtimestamp(now).strftime("%Y-%m-%d") + ".jsonl")
+    try:
+        with open(path, "rb") as handle:
+            handle.seek(0, os.SEEK_END)
+            size = handle.tell()
+            handle.seek(max(0, size - 16384))
+            tail = handle.read().decode("utf-8", "replace").splitlines()
+    except OSError:
+        return None
+    for line in reversed(tail):
+        try:
+            event = json.loads(line)
+        except ValueError:
+            continue
+        if not isinstance(event, dict) or now - (num(event.get("ts")) or 0) > show_s:
+            return None
+        text = event_text(event)
+        if text:
+            return text
+    return None
+
+
+RUN_WORDS = {"done": ("✓", "verified"), "merged": ("✓", "merged"), "no-changes": ("✓", "no changes"),
+             "awaiting-verify": ("✋", "needs review"), "verify-failed": ("✋", "check failed"),
+             "failed": ("✗", "failed"), "paused-quota": ("⏸", "waiting on limit"), "running": ("▶", "started")}
+
+
+def event_text(event):
+    data = event.get("data") if isinstance(event.get("data"), dict) else {}
+    kind = event.get("kind")
+    if kind == "run.status":
+        mark, word = RUN_WORDS.get(str(data.get("status")), ("", ""))
+        if not word:
+            return None
+        return f"{mark} {data.get('repo') or event.get('subject')} {word}".strip()
+    if kind == "usage.threshold":
+        return f"⚠ {data.get('plan')} {data.get('window')} {data.get('threshold')}% used"
+    if kind == "usage.reset":
+        return f"↺ {data.get('plan')} {data.get('window')} reset"
+    if kind in ("host.offline", "host.online"):
+        return f"{data.get('host')} {kind.split('.')[1]}"
+    return None
+
+
+def render_today(style, summary, now=None, with_event=True):
+    now = now_epoch() if now is None else now
+    cells = job_cells(style, summary["today"], False)
+    turn = spinner(style, now, int(num(summary["today"].get("running")) or 0))
+    if turn and cells:
+        cells[0] = cells[0].replace(style.marks.get("running", "▶"), turn, 1)
+    line = style.paint("2", "today") + " " + join_jobs(cells)
+    note = latest_event(now) if with_event else None
+    if note:
+        line += style.paint("2", " · " + note)
+    return line
 
 
 def render_older(style, summary, with_oldest=True):
@@ -396,7 +511,7 @@ def build(now=None, columns=None):
     ], columns)]
     summary = job_summary(now)
     if summary:
-        lines.append(fit([render_today(style, summary)], columns))
+        lines.append(fit([render_today(style, summary, now), render_today(style, summary, now, with_event=False)], columns))
         older = fit([render_older(style, summary), render_older(style, summary, with_oldest=False)], columns)
         if older:
             lines.append(older)
