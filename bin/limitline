@@ -1127,12 +1127,22 @@ fi
 [[ "$ON_CODEX" == "1" ]] || { codex5=""; codex7=""; }
 [[ "$ON_BURN" == "1" ]] || hist_path=""
 
+# A file's mtime in epoch seconds, or 0. Each form is tried on its own: GNU stat reads
+# `-f` as --file-system, so `stat -f %m FILE` prints FILE's file system and exits 1, and
+# chaining it with `|| stat -c %Y` in one capture glued that text onto the mtime.
+file_mtime() {
+  local m
+  m=$(stat -c %Y "$1" 2>/dev/null) && [[ "$m" =~ ^[0-9]+$ ]] && { printf '%s' "$m"; return 0; }
+  m=$(stat -f %m "$1" 2>/dev/null) && [[ "$m" =~ ^[0-9]+$ ]] && { printf '%s' "$m"; return 0; }
+  printf '0'
+}
+
 fresh_line() {
   local file="$1" ttl="$2" now mtime age line
   [[ -f "$file" ]] || return 0
   now=$(date +%s)
-  mtime=$(stat -f %m "$file" 2>/dev/null || stat -c %Y "$file" 2>/dev/null || echo 0)
-  case "$mtime" in ''|*[!0-9]*) return 0 ;; esac
+  mtime=$(file_mtime "$file")
+  case "$mtime" in ''|*[!0-9]*|0) return 0 ;; esac
   age=$((now - mtime))
   if [[ "$age" -gt "$ttl" ]]; then
     return 0
@@ -1148,7 +1158,7 @@ kick_refresh() {
   lock="$cache_dir/refresh.lock"
   now=$(date +%s)
   if [[ -f "$lock" ]]; then
-    mtime=$(stat -f %m "$lock" 2>/dev/null || stat -c %Y "$lock" 2>/dev/null || echo 0)
+    mtime=$(file_mtime "$lock")
     case "$mtime" in ''|*[!0-9]*) mtime=0 ;; esac
     if [[ $((now - mtime)) -lt 30 ]]; then
       return 0
