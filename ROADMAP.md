@@ -152,3 +152,5 @@ These were on the limitline roadmap before the split. They are tracked in the Ph
 Built when token budget allows; each lives at `skills/<name>/SKILL.md`.
 
 limitline ships only status-line commands (`/limitline:install`, `theme`, `doctor`, `config`, `preview`, `uninstall`). Skills that help an agent choose a tool belong to Pharos, which owns the numbers and the caps: `/limits` and `/ramp` are planned in Pharos 0.10.0 (decided 2026-11-04). Without Pharos, `limitline status` already shows the tool's own usage.
+
+- [x] Pharos 0.8 attention: working/blocked counts, owner-based need you, and the first recent attention reason; `jobs_detail` selects reason or counts. Legacy summary v1 output is preserved.

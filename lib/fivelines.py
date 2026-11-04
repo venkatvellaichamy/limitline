@@ -27,12 +27,12 @@ from datetime import datetime
 
 MARKS = {
     "unicode": {"claude": "✻", "codex": "◎", "cursor": "⬡", "agy": "✦",
-                "running": "▶", "done": "✓", "need_you": "✋", "failed": "✗", "retried": "↻", "waiting_limit": "⏸"},
+                "working": "⚙", "blocked": "⛔", "running": "▶", "done": "✓", "need_you": "✋", "failed": "✗", "retried": "↻", "waiting_limit": "⏸"},
     "none": {},
 }
-LABELS = {"running": "running", "done": "done", "need_you": "need you", "failed": "failed",
+LABELS = {"working": "working", "blocked": "blocked", "running": "running", "done": "done", "need_you": "need you", "failed": "failed",
           "retried": "retried", "waiting_limit": "waiting on limit"}
-KEYS = ("running", "done", "need_you", "failed", "retried", "waiting_limit")
+KEYS = ("running", "working", "done", "blocked", "need_you", "failed", "retried", "waiting_limit")
 OPEN = ("running", "need_you", "failed", "waiting_limit")
 AGY_NAMES = (("Gemini Models", "gemini"), ("Claude and GPT models", "claude+gpt"), ("Gemini 4 Argon", "argon"))
 SEP = " │ "
@@ -699,7 +699,7 @@ def job_summary(now):
 
 
 # When a job line is too wide, counts drop in this order (the first goes first).
-JOB_DROP = ("retried", "done", "waiting_limit", "running", "failed", "need_you")
+JOB_DROP = ("retried", "done", "waiting_limit", "running", "working", "failed", "blocked", "need_you")
 
 
 def count_of(bucket, key):
@@ -708,20 +708,42 @@ def count_of(bucket, key):
     return int(value) if value is not None and value >= 0 and value == int(value) else None
 
 
-def job_cells(style, bucket, only_nonzero, drop=0):
+def attention_reason(summary, bucket):
+    if env("LL_JOBS_DETAIL", "reason") == "counts":
+        return None
+    recent = summary.get("recent")
+    if not isinstance(recent, list):
+        return None
+    for row in recent:
+        if not isinstance(row, dict):
+            continue
+        state = row.get("state")
+        key = "blocked" if state == "blocked" else "need_you" if row.get("owner") == "you" else None
+        reason = row.get("reason")
+        if key and count_of(bucket, key) and isinstance(reason, str) and reason.strip():
+            reason = " ".join(ANSI.sub("", reason).split())
+            return key, reason[:79] + "…" if len(reason) > 80 else reason
+    return None
+
+
+def job_cells(style, bucket, only_nonzero, drop=0, detail=None):
     cells = []
     dropped = set(JOB_DROP[:drop])
     for key in KEYS:
+        if key in ("working", "blocked") and key not in bucket:
+            continue
         count = count_of(bucket, key)
         if only_nonzero and not count:
             continue
         if key in dropped:
             continue
         text = f"{style.mark(key)}{'—' if count is None else count} {LABELS[key]}"
+        if detail and detail[0] == key:
+            text += ": " + detail[1]
         if not count:
             text = style.paint("2", text)
-        elif key in ("need_you", "failed"):
-            text = style.paint("33" if key == "need_you" else "31", text)
+        elif key in ("need_you", "blocked", "failed"):
+            text = style.paint("31" if key == "failed" else "33", text)
         cells.append(text)
     return cells
 
@@ -797,11 +819,11 @@ def event_text(event):
     return None
 
 
-def render_today(style, summary, now=None, with_event=True, only_nonzero=False, drop=0):
+def render_today(style, summary, now=None, with_event=True, only_nonzero=False, drop=0, with_reason=True):
     now = now_epoch() if now is None else now
     if summary.get("too_new"):
         return style.paint("2", "today") + " " + style.paint("2", "— " + too_new_note("summary ", summary["too_new"]))
-    cells = job_cells(style, summary["today"], only_nonzero, drop)
+    cells = job_cells(style, summary["today"], only_nonzero, drop, attention_reason(summary, summary["today"]) if with_reason else None)
     turn = spinner(style, now, count_of(summary["today"], "running") or 0)
     if turn and cells:  # a no-op when the running count was dropped for width
         cells[0] = cells[0].replace(style.marks.get("running", "▶"), turn, 1)
@@ -812,11 +834,11 @@ def render_today(style, summary, now=None, with_event=True, only_nonzero=False, 
     return line
 
 
-def render_older(style, summary, with_oldest=True, drop=0):
+def render_older(style, summary, with_oldest=True, drop=0, with_reason=True):
     older = summary.get("older")
     if not isinstance(older, dict):
         return ""
-    cells = job_cells(style, older, True, drop)
+    cells = job_cells(style, older, True, drop, attention_reason(summary, older) if with_reason else None)
     if not cells:
         return ""
     line = style.paint("2", "older") + " " + join_jobs(cells)
@@ -937,12 +959,13 @@ def _build(style, now, columns):
     summary = safe(lambda: job_summary(now))
     if summary:
         lines.append(safe(lambda: fit(
-            [lambda: render_today(style, summary, now), lambda: render_today(style, summary, now, with_event=False),
-             lambda: render_today(style, summary, now, with_event=False, only_nonzero=True)]
-            + [lambda d=d: render_today(style, summary, now, with_event=False, only_nonzero=True, drop=d) for d in drops], columns)))
+            [lambda: render_today(style, summary, now),
+             lambda: render_today(style, summary, now, with_reason=False), lambda: render_today(style, summary, now, with_event=False, with_reason=False),
+             lambda: render_today(style, summary, now, with_event=False, only_nonzero=True, with_reason=False)]
+            + [lambda d=d: render_today(style, summary, now, with_event=False, only_nonzero=True, drop=d, with_reason=False) for d in drops], columns)))
         lines.append(safe(lambda: fit(
-            [lambda: render_older(style, summary), lambda: render_older(style, summary, with_oldest=False)]
-            + [lambda d=d: render_older(style, summary, with_oldest=False, drop=d) for d in drops], columns)))
+            [lambda: render_older(style, summary), lambda: render_older(style, summary, with_reason=False), lambda: render_older(style, summary, with_oldest=False, with_reason=False)]
+            + [lambda d=d: render_older(style, summary, with_oldest=False, drop=d, with_reason=False) for d in drops], columns)))
     hosts = safe(lambda: host_count(now)) or 0
     lines.append(safe(lambda: fit(
         [lambda: render_hosts(style, now), lambda: render_hosts(style, now, with_cpu=False)]

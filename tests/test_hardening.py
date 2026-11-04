@@ -143,7 +143,7 @@ class Hardening(unittest.TestCase):
         self.usage["hosts"]["hosts"][0]["free_pct"] = "?"
         self.usage["hosts"]["hosts"][0]["load_pct"] = float("nan")
         self.write_usage()
-        today = dict(dict.fromkeys(fivelines.KEYS, 0), done="lots", running=1)
+        today = dict(dict.fromkeys(("running", "done", "need_you", "failed", "retried", "waiting_limit"), 0), done="lots", running=1)
         (self.pharos / "summary.json").write_text(json.dumps(
             {"generated_at": NOW, "today": today, "older": ["not", "a", "dict"], "oldest_open": "h"}))
         os.environ["LL_ANIMATE"] = "off"

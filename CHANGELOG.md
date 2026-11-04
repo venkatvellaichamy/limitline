@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased
+
+- Show Pharos 0.8 working (⚙) and blocked (⛔) counts, with blocked in yellow and failed in red. Show the first recent attention reason, capped at 80 characters and dropped first on narrow terminals. `jobs_detail = "counts"` (or `LIMITLINE_JOBS_DETAIL=counts`) hides reasons; the default is `"reason"`. Summary v1 files without the added keys render unchanged.
+
 ## 0.14.0 - 2026-11-04
 
 - The `/limits` skill moved to Pharos (planned for Pharos 0.10.0, next to `/ramp`). limitline ships only status-line commands; skills that help an agent pick a tool belong to Pharos, which owns the numbers and the caps.
