@@ -465,7 +465,15 @@ def cmd_doctor():
         print("fleet sources: check failed (%s)" % exc.__class__.__name__)
     raw = ""
     if not sys.stdin.isatty():
-        raw = sys.stdin.read()
+        import select
+
+        # Only read a payload that is already there: run from a script with an open but idle
+        # stdin, doctor used to wait forever.
+        try:
+            ready = select.select([sys.stdin], [], [], 0.5)[0]
+        except (OSError, ValueError):
+            ready = []
+        raw = sys.stdin.read() if ready else ""
     if not raw.strip():
         print("stdin: no status payload")
         return
