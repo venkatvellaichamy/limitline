@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.13.1 - 2026-11-04
+
+- **`plan_resets = "always"`** (or `LIMITLINE_PLAN_RESETS=always`) shows when every window refills (`→04:00`, `→Thu 23:22`), not only windows at the cap. The default stays `"near-cap"`: the refill time appears once a plan reaches its cap. On a narrow terminal refill times are still the first thing dropped.
+
 ## 0.13.0 - 2026-11-04
 
 ### Line 2 shows what is used, in the view you pick

@@ -167,7 +167,20 @@ class FiveLines(unittest.TestCase):
                     cell.trend = [None, 0, used, None, 100, 50, used]
                     self.assertTrue(cell.text(style, NOW))
 
-    def test_reset_only_shown_at_75_or_more(self):
+    def test_resets_always_behind_the_flag(self):
+        os.environ["LL_PLAN_RESETS"] = "always"
+        line = plain(fivelines.build(now=NOW))[0]
+        self.assertIn("claude 7d ███▌░ →Wed 04:00", line, "Claude at 70% still shows when it refills")
+        self.assertIn("codex 5h █████ →18:00 · 7d ███▌░ →Sat 17:00", line)
+        self.assertIn("gemini ░░░░░ →Fri 17:00", line, "even an unused window says when it refills")
+
+    def test_resets_dropped_first_when_narrow(self):
+        os.environ["LL_PLAN_RESETS"] = "always"
+        line = plain(fivelines.build(now=NOW, columns=110))[0]
+        self.assertNotIn("→", line)
+        self.assertIn("claude 7d ███▌░", line)
+
+    def test_reset_only_shown_at_the_cap_by_default(self):
         line = plain(fivelines.build(now=NOW))[0]
         self.assertNotIn("claude 7d ███▌░ →", line)
         self.assertNotIn("7d ███▌░ →", line)

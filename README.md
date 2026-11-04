@@ -196,7 +196,7 @@ Every view on `used` shows the amount used, like the context meter on line 1: em
 | `cap` | `cursor+grok ██████│▌░ over cap` | `│` is Pharos's cap for that plan; `▲` means filling faster than the window's time passes |
 | `none` | `claude 7d 70%` | numbers only |
 
-`plan_numbers = "on"` adds the percent after any view (`claude 7d ▆ 70%`). `plan_show = "left"` shows `100 - used` instead and labels the line `left`; colours, the cap, and the refill time still follow used. The refill time (`→`) appears at the plan's cap (Pharos's `cap_pct`, default 75%) or above. Job counts follow Pharos: done is done, merged, or a run with no changes; need you is a run with commits waiting for a check, or a failed check; retried is a run another run replaced. `older` only counts open jobs from the last 7 days. Hosts use the nicknames set in Pharos (`hosts = [...]` in `~/.pharos/usage.toml`). When the terminal is narrow, `used` drops refill times first, then the agy claude+gpt bucket, then shortens the bars to 3 cells (and `trend` or `cap` becomes `gauge`); `older` drops the oldest-job note; `hosts` drops CPU load. `marks = "none"` prints plain names.
+`plan_numbers = "on"` adds the percent after any view (`claude 7d ▆ 70%`). `plan_show = "left"` shows `100 - used` instead and labels the line `left`; colours, the cap, and the refill time still follow used. The refill time (`→`) appears at the plan's cap (Pharos's `cap_pct`, default 75%) or above; `plan_resets = "always"` shows it for every window. Job counts follow Pharos: done is done, merged, or a run with no changes; need you is a run with commits waiting for a check, or a failed check; retried is a run another run replaced. `older` only counts open jobs from the last 7 days. Hosts use the nicknames set in Pharos (`hosts = [...]` in `~/.pharos/usage.toml`). When the terminal is narrow, `used` drops refill times first, then the agy claude+gpt bucket, then shortens the bars to 3 cells (and `trend` or `cap` becomes `gauge`); `older` drops the oldest-job note; `hosts` drops CPU load. `marks = "none"` prints plain names.
 
 A second line is `lines = 2` or `LIMITLINE_LINES=2`. When `COLUMNS` or `LIMITLINE_COLUMNS` is set, the lowest-priority segments drop until the row fits.
 
@@ -255,6 +255,7 @@ Hosts, plan prices, and every measuring setting are Pharos's (`~/.pharos/usage.t
 # plan_view = "bar"               # line 2: bar, gauge, dots, trend, cap, none
 # plan_numbers = "off"            # "on" adds the percent
 # plan_show = "used"              # or "left"
+# plan_resets = "near-cap"        # or "always"
 # animate = "off"
 # fleet = "on"                    # these four show what Pharos measured
 # machines = "on"
