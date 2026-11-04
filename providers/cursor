@@ -186,13 +186,8 @@ def main():
     one = os.environ.get("LIMITLINE_CURSOR_LOG")
     if one and os.path.isfile(one):
         tokens += file_tokens(one)
-    root = os.environ.get("LIMITLINE_PHAROS_RUNS")
-    if not root:
-        home = os.environ.get("LIMITLINE_PHAROS_HOME") or os.path.join(os.path.expanduser("~"), ".pharos")
-        candidate = os.path.join(home, "runs")
-        if os.path.isdir(candidate):
-            root = candidate
-    tokens += runs_tokens(root, now)
+    # Pharos's run logs are Pharos's to count (its usage.json carries that estimate);
+    # inside Cursor, limitline reads only Cursor's own files.
     cursor_dir = os.environ.get("LIMITLINE_CURSOR_DIR") or os.path.join(os.path.expanduser("~"), ".cursor")
     tokens += shallow_usage(cursor_dir)
     if tokens <= 0:

@@ -1,23 +1,12 @@
 #!/usr/bin/env python3
-"""Pick the other local tool with the most room. No network."""
-import json, os, subprocess, sys
+"""Pick the other tool with the most room, from what Pharos measured. No network.
+
+The readings come from ~/.pharos/usage.json; without Pharos there is nothing to
+compare, so there is no nudge. limitline never runs another tool's reader here."""
+import json, os, sys
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 ORDER = ("codex", "cursor", "grok", "antigravity")
-
-
-def run_provider(name):
-    path = os.path.join(ROOT, "providers", name)
-    cmd = [path] if os.access(path, os.X_OK) else [sys.executable, path]
-    try:
-        proc = subprocess.run(cmd, capture_output=True, timeout=2, env=os.environ.copy())
-        data = json.loads(proc.stdout.decode() or "{}")
-    except Exception:
-        data = {}
-    if not isinstance(data, dict):
-        data = {}
-    data.setdefault("windows", [])
-    return data
 
 
 def constraint_pct(data):
@@ -51,23 +40,27 @@ def idle_machine():
 
 
 def rows():
-    """Provider rows, with Cursor and Grok folded into the shared plan when its
-    cache exists, so `→ cursor ok` is not offered for a plan that is 90% used."""
-    found = [dict(run_provider(name), provider=name) for name in ORDER]
-    plan = run_provider("xai-plan")
-    plan.setdefault("provider", "xai-plan")
+    """The other tools' rows from Pharos's usage.json, with Cursor and Grok as the one
+    shared plan, so `→ cursor ok` is not offered for a plan that is 90% used."""
     sys.path.insert(0, os.path.join(ROOT, "lib"))
     try:
+        import pharos_view
         import xaiplan
-        return xaiplan.merge(found + [plan])
     except Exception:
-        return found
+        return []
+    usage = pharos_view.read_usage()
+    if usage is None or usage.get("stale"):
+        return []
+    found = [r for r in pharos_view.plan_rows(usage) if r.get("provider") in ORDER + ("xai-plan",)]
+    return xaiplan.merge(found)
 
 
 def suggestion():
     measured = None
     empty = []
-    for data in rows():
+    found = rows()
+    rows_seen = [bool(found)]
+    for data in found:
         name = data.get("label") or data.get("provider")
         found = constraint_window(data)
         if found is None:
@@ -77,6 +70,8 @@ def suggestion():
         if measured is None or used < measured[0]:
             measured = (used, name, "~" if rough else "", " estimate" if rough else "")
     hint = idle_machine()
+    if not rows_seen[0]:
+        return hint
     if measured is not None and measured[0] < 50:
         text = "%s %s%d%%%s" % (measured[1], measured[2], int(measured[0] + 0.5), measured[3])
         if hint:

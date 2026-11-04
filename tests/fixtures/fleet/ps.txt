@@ -1,8 +1,0 @@
-10 1 00:10:00 cursor-agent --print
-11 1 00:02:00 codex
-12 1 00:02:00 codex exec task
-13 1 00:01:00 claude
-14 1 00:01:00 claude -p hello
-15 1 00:01:00 grok -p hello
-16 1 00:01:00 agy
-17 1 00:01:00 python3

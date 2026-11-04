@@ -23,6 +23,6 @@ os.write(fd, b"q")
 drain(1.5)
 done, status = os.waitpid(pid, os.WNOHANG)
 text = out.decode("utf-8", "replace")
-print("exited" if done else "running", "selected-b" if "› run-b" in text else "no-move", "cursor-restored" if "\x1b[?25h" in text else "cursor-hidden")
+print("exited" if done else "running", "selected-second" if "› run-d" in text else "no-move", "cursor-restored" if "\x1b[?25h" in text else "cursor-hidden")
 if not done:
     os.kill(pid, 9)

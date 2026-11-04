@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
-"""Rebuild the status line's small caches from what Pharos measured. Measures nothing.
+"""Rebuild the status line's small caches from what Pharos wrote. Measures nothing.
 
-grok.line and machines.line come from ~/.pharos/usage.json, fleet.line from Pharos's run
-states, jobs.line from `limitline job` reports. No provider command, no ssh, no network:
-Pharos does that (`pharos usage --refresh`).
+grok.line and machines.line come from ~/.pharos/usage.json; fleet.line and jobs.line from
+~/.pharos/summary.json. No provider command, no ssh, no network, no Pharos command:
+Pharos does the measuring (`pharos usage --refresh`) on its own schedule.
 """
 import json, os, sys
 
@@ -29,9 +29,7 @@ def write_text(path, text):
 
 
 def write_fleet():
-    states = fleet.collect()
-    recent, _ = fleet.split_recent(states)
-    text = fleet.format_segment(fleet.summarize(recent))
+    text = fleet.segment_text()
     path = os.environ.get("LIMITLINE_FLEET_LINE") or os.path.join(machines.cache_dir(), "fleet.line")
     write_text(path, text)
 
@@ -70,18 +68,12 @@ def write_grok(usage=None):
 
 
 def write_jobs():
-    if os.path.isdir(jobs.jobs_dir()):
-        jobs.write_line()
-
-
-def write_history():
-    import history
-    history.record(_cli().load_all())
+    jobs.write_line()
 
 
 def main(argv=None):
     usage = pharos_view.read_usage()
-    for step in (lambda: write_grok(usage), write_jobs, write_fleet, lambda: write_machines(usage), write_history):
+    for step in (lambda: write_grok(usage), write_jobs, write_fleet, lambda: write_machines(usage)):
         try:
             step()
         except Exception:
