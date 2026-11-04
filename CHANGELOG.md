@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+- **The split is complete: limitline shows, Pharos owns the data.** limitline now reads only Pharos's documented files (`usage.json`, `summary.json`, `usage-report.json`, the tail of today's event file) and writes only Claude's own reading to Pharos's inbox. It runs no Pharos command, reads no Pharos run file, scans no processes, and runs no ssh.
+- Fleet and the Runs list come from `summary.json` (`recent`). The process scan, `fleet_window`, and the run-file parsing are gone; Pharos decides what is recent.
+- Reported jobs moved to Pharos: `pharos job update|list|rm`. The `jobs` segment, the Jobs block, and watch show them from `summary.json`. `limitline job` only points at `pharos job`.
+- `limitline watch` is read-only: it lists runs and jobs and opens a run's log, and the keys that used to resume, stop, pause, or signal now say to use Pharos.
+- `limitline history` and `report --week` show Pharos's weekly report. limitline records no plan or job history of its own.
+- Removed: `sync_dir` (and `lib/sync.py`); readings from other Macs come through Pharos. The Cursor reader no longer reads Pharos run logs; Pharos makes that estimate.
+- `limitline config` and the docs no longer list host, ssh, or window settings; those are Pharos's (`~/.pharos/usage.toml`).
+
 - **Live, but quiet.** With `lines = 5`, the status line now shows that things are moving without asking for attention:
   - while Pharos jobs run, the `▶` on the `today` line turns slowly (◐ ◓ ◑ ◒), one step per redraw; it stands still when nothing runs;
   - a new event from Pharos's event log (a run merged or failed, a plan crossing 75/90/100%, a host going offline) appears dimmed at the end of the `today` line for 30 seconds; routine percent moves are not announced;

@@ -93,21 +93,8 @@ def load_lib(name):
 
 
 def prepare(rows):
-    # The same setting the renderer and refresh read: LIMITLINE_SYNC_DIR, else sync_dir.
-    try:
-        sync_dir = load_lib("config").setting("sync_dir", "LIMITLINE_SYNC_DIR", "")
-    except Exception:
-        sync_dir = os.environ.get("LIMITLINE_SYNC_DIR") or ""
-    if not sync_dir:
-        return rows
-    sync_dir = os.path.expanduser(sync_dir)
-    try:
-        sync = load_lib("sync")
-        for row in rows:
-            sync.publish(sync_dir, row.get("provider") or "tool", row)
-        return sync.merge_rows(rows, sync_dir)
-    except Exception:
-        return rows
+    """Rows as they are. Readings from other machines come through Pharos, not a sync folder."""
+    return rows
 
 
 def provider_brief(data):
@@ -200,18 +187,12 @@ def cockpit_blocks(swiftbar=False):
     older_lines = []
     try:
         fleet = load_lib("fleet")
-        now = fleet.now_epoch()
-        window = fleet.window_seconds()
-        states = fleet.collect()
-        recent, older = fleet.split_recent(states, now=now, window=window)
-        summary = fleet.format_segment(fleet.summarize(recent))
-        runs = fleet.run_lines(recent, now=now, swiftbar=swiftbar)
-        if older:
-            older_lines.append("%s, last active over %s ago" % (fleet.older_summary(older), fleet.window_label(window)))
-            shown = fleet.run_lines(older[-OLDER_LIMIT:], now=now, swiftbar=swiftbar)
-            older_lines.extend(shown)
-            if len(older) > OLDER_LIMIT:
-                older_lines.append("+%d more" % (len(older) - OLDER_LIMIT))
+        found = fleet.read_summary()
+        summary = fleet.segment_text(found) if found else ""
+        runs = fleet.run_lines(fleet.recent(found), swiftbar=swiftbar) if found else []
+        oldest = (found or {}).get("oldest_open")
+        if isinstance(oldest, dict) and oldest.get("id"):
+            older_lines.append("oldest open: %s (%s), %sh" % (oldest.get("id"), oldest.get("repo"), oldest.get("age_hours")))
     except Exception:
         summary = ""
         runs = []
@@ -243,10 +224,8 @@ def cockpit_blocks(swiftbar=False):
 
 
 def record_history(rows):
-    try:
-        load_lib("history").record(rows)
-    except Exception:
-        pass
+    """Plan history is Pharos's (`pharos usage --report`); limitline keeps none."""
+    return None
 
 
 def cmd_status():
@@ -319,7 +298,6 @@ def cmd_preview():
             "NO_COLOR": "1",
             "TZ": "UTC",
         })
-        env.pop("LIMITLINE_SYNC_DIR", None)
         proc = subprocess.run([binary], input=sample.encode(), capture_output=True, env=env)
         print("## %s" % theme)
         sys.stdout.write(proc.stdout.decode())
@@ -367,22 +345,19 @@ def fleet_doctor():
     cache = machines.cache_dir()
 
     remote = str(os.environ.get("CLAUDE_CODE_REMOTE") or "").strip().lower() not in ("", "0", "false", "no")
-    lines.append("session: %s" % ("cloud-hosted (local Macs are not reachable; use sync_dir snapshots)" if remote else "local"))
+    lines.append("session: %s" % ("cloud-hosted (local Macs and Pharos files are not reachable)" if remote else "local"))
 
     fleet_on, fleet_why = segment_enabled(config, "fleet", "LIMITLINE_FLEET")
     mach_on, mach_why = segment_enabled(config, "machines", "LIMITLINE_MACHINES")
     lines.append("fleet segment: %s (%s)" % ("on" if fleet_on else "off", fleet_why))
     lines.append("machines segment: %s (%s)" % ("on" if mach_on else "off", mach_why))
 
-    root = fleet.pharos_runs_root()
-    states = fleet.load_states(root)
-    window = fleet.window_seconds()
-    if states:
-        recent, older = fleet.split_recent(states, window=window)
-        lines.append("pharos runs: %d (%d within %s, %d older)" % (len(states), len(recent), fleet.window_label(window) if window else "all", len(older)))
+    found = fleet.read_summary()
+    if found is None:
+        lines.append("pharos summary: not found at %s (fleet, runs, and jobs need Pharos)" % fleet.summary_path())
     else:
-        found = fleet.from_ps(fleet.read_ps())
-        lines.append("pharos runs: none; process scan sees %d agent process%s" % (len(found), "" if len(found) == 1 else "es"))
+        age = max(0, fleet.now_epoch() - int(found.get("generated_at") or 0))
+        lines.append("pharos summary: %ds old, %d recent runs, %d jobs" % (age, len(fleet.recent(found)), len(found.get("jobs") or [])))
 
     fleet_ttl = ttl_setting(config, "fleet_ttl", "LIMITLINE_FLEET_TTL")
     fleet_file = os.environ.get("LIMITLINE_FLEET_LINE") or os.path.join(cache, "fleet.line")
@@ -398,22 +373,7 @@ def fleet_doctor():
     else:
         lines.append("fleet cache: %ds old, ttl %ds%s" % (age, fleet_ttl, "" if age <= fleet_ttl else " (stale, hidden)"))
 
-    hosts = machines.resolve_hosts()
-    if "LIMITLINE_HOSTS" in os.environ:
-        host_src = "LIMITLINE_HOSTS"
-    elif config.values().get("hosts"):
-        host_src = "config hosts"
-    elif hosts:
-        host_src = "~/.pharos/machines.json"
-    else:
-        host_src = "none"
-    lines.append("hosts: %s (%s)" % (", ".join(item["name"] for item in hosts) or "none", host_src))
-    for item in hosts:
-        if item["ssh"] in ("local", "localhost") or item["name"] in ("local", "localhost"):
-            continue
-        key = any(os.path.isfile(os.path.join(os.path.expanduser("~"), ".ssh", name)) for name in ("id_ed25519", "id_ecdsa", "id_rsa"))
-        lines.append("  %s: ssh BatchMode with key%s" % (item["name"], "" if key else " (no default key in ~/.ssh)"))
-        break
+    lines.append("hosts: measured by Pharos (hosts in ~/.pharos/usage.toml)")
     mach_ttl = ttl_setting(config, "machines_ttl", "LIMITLINE_MACHINES_TTL")
     mach_file = machines.json_path()
     mage = cache_age(mach_file)
@@ -442,28 +402,13 @@ def fleet_doctor():
     age = cache_age(relay)
     lines.append("claude relay to pharos: %s" % ("%ds old" % age if age is not None else "not written yet"))
     jobs = load_lib("jobs")
-    if os.path.isdir(jobs.jobs_dir()):
-        every = jobs.load(every=True)
-        lines.append("jobs: %d reported, %d shown" % (len(every), len(jobs.load())))
-    else:
-        lines.append("jobs: none reported (limitline job update NAME ...)")
+    shown = jobs.load()
+    lines.append("jobs: %d shown from Pharos (pharos job update NAME ...)" % len(shown) if shown else "jobs: none (report one with pharos job update NAME ...)")
 
     state, detail = refresher.status()
     lines.append("refresher: %s (%s)" % (state, detail))
     state, detail = load_lib("schedule").status()
     lines.append("schedule: %s (%s)" % (state, detail))
-
-    sync_dir = config.setting("sync_dir", "LIMITLINE_SYNC_DIR", "")
-    if not sync_dir:
-        lines.append("sync_dir: not set")
-    elif not os.path.isdir(sync_dir):
-        lines.append("sync_dir: set but the folder does not exist here")
-    else:
-        others = []
-        for name in sorted(os.listdir(sync_dir)):
-            if os.path.isdir(os.path.join(sync_dir, name, "cockpit")):
-                others.append(name)
-        lines.append("sync_dir: %d machine%s publishing fleet snapshots" % (len(others), "" if len(others) == 1 else "s"))
 
     if not fleet_on:
         why["fleet"] = "the segment is off; set fleet = \"on\""
@@ -472,14 +417,11 @@ def fleet_doctor():
     elif age > fleet_ttl:
         why["fleet"] = "cache older than fleet_ttl; install-refresher keeps it fresh"
     elif not text:
-        if states:
-            why["fleet"] = "no run active or finished within fleet_window"
-        else:
-            why["fleet"] = "no Pharos runs, no agent processes, and no fresh sync_dir snapshot"
+        why["fleet"] = "nothing open in Pharos's summary" if found else "no Pharos summary.json; fleet needs Pharos"
     if not mach_on:
         why["machines"] = "the segment is off; set machines = \"on\""
-    elif not hosts and not data.get("hosts"):
-        why["machines"] = "no hosts; set hosts = [\"mini=user@host\", \"laptop=local\"] or sync_dir"
+    elif not data.get("hosts"):
+        why["machines"] = "no hosts in Pharos's usage.json; set hosts in ~/.pharos/usage.toml"
     elif mage is None:
         why["machines"] = "no cache yet; run limitline refresh or install-refresher"
     elif mage > mach_ttl:
@@ -558,23 +500,18 @@ def cmd_config():
     print('# vitals = "on"')
     print('# alerts = "off"')
     print('# quiet = "22-7"')
-    print('# sync_dir = ""')
-    print("# fleet and machines stay off on the Claude Code line until named")
+    print("# With Pharos: plans, hosts, runs, and jobs come from ~/.pharos (hosts, prices, and")
+    print("# measuring are Pharos settings in ~/.pharos/usage.toml). These segments show them.")
     print('# fleet = "on"')
     print('# machines = "on"')
-    print('# hosts = ["mini", "worker-1"]')
-    print("# ssh_timeout = 2")
-    print("# mem_free_warn = 15")
-    print('# fleet_window = "12h"')
+    print('# grok = "on"')
+    print('# jobs = "on"  # reported with pharos job update; shown unless "off"')
     print("# fleet_ttl = 180")
     print("# machines_ttl = 180")
-    print("# Cursor and Grok share one xAI plan. limitline set xai-plan 69 --resets \"2026-11-05 09:00\"")
-    print("# writes its percent; without it Cursor shows a token estimate against this budget")
+    print("# lines = 5  # session, what's left, today, older, hosts")
+    print('# animate = "off"')
+    print("# Inside Cursor or Grok without Pharos (LIMITLINE_TOOL=cursor): the token estimate budget")
     print("# cursor_week_tokens = 1000000")
-    print("# grok plan and 7-day tokens stay off on the Claude Code line until named")
-    print('# grok = "on"')
-    print("# background jobs reported with limitline job update; shown unless jobs = \"off\"")
-    print('# jobs = "on"')
     print("# pharos binary for limitline watch, when it is not on PATH")
     print('# pharos = "~/projects/pharos/bin/pharos"')
     print("# jobs_ttl = 600")

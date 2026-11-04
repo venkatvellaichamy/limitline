@@ -134,14 +134,14 @@ Each segment can be turned off or reordered with `segments` in the config file.
 | Cache | `cache cold: <cause>` only when the prompt cache is cold |
 | Vim | `.vim.mode` |
 | Codex | newest `rate_limits` event across every Codex session file from the last 8 days, scanned by `providers/codex` (python3) at most every 30 seconds. Each window shows until its own reset time, so `codex 7d ·41%` can stay after the 5-hour window has reset |
-| Jobs | `jobs mining 62/1842 · backup ok 08:36`, from `limitline job update`. On by default, but nothing is read until a job is reported. `jobs = "off"` hides it |
+| Jobs | `jobs mining 62/1842 · backup ok 08:36`, the jobs Pharos lists in `summary.json` (reported with `pharos job update`). `jobs = "off"` hides it |
 | Grok / Cursor plan | With a plan reading: `cursor+grok +74% · Thu 23:22 · grok 7d 1.2M tok`, live from the Grok CLI log, dimmed with its age (`· 9h old`) after 6 hours. A manual value says `manual` and is always dimmed. Without it: `grok SuperGrok Plus · 7d 1.2M tok`, the plan name and the session tokens Grok recorded in the last 7 days, never a percent. Read from a line `limitline refresh` writes. Off until `grok = "on"` or `grok` (or `cursor+grok`) is named |
 | Session | first 6 characters of `.session_id`. Off unless you opt in |
 | Pace | `▲ ahead of pace` or `▼ under pace` when usage and elapsed time differ by 8 points or more, plus `~15%/day left for 4d` on the weekly window. Off until `pace = "on"` |
 | Sparkline | `5h ▁▃▅▆▅ 62%` from local snapshots, and a 7-day daily history. Off until `spark = "on"` |
 | Fresh | `fresh in 1h42m`, and `✨` on the first prompt after usage drops into a new window. Off until `fresh = "on"` |
 | Nudge | `→ codex 12% · mini idle`, `→ cursor ok`, or `↯ compact soon: /compact`. Off until `nudges = "on"` |
-| Fleet | `⚙ 3 run · 1 ✗`, from a local cache of Pharos runs or a process scan. Only runs that are live or were active in the last 12 hours (`fleet_window`). `⚠` when a run is stalled or paused for quota. Off until named |
+| Fleet | `⚙ 3 run · 1 ✗`: Pharos's open work from `summary.json` (running, needs review, failed). `⚠` when a run waits on a plan limit. Off until named |
 | Machines | `mini 29% free · qwen3:14b`: free memory, then the loaded Ollama model. Hosts are split by ` / `. Unreachable is `mini ∅`. A loaded model that would leave under 15% free memory adds `⚠`. Off until named |
 | Value | `≈ $412 of value this week`, an estimate. Off until `value = "on"` |
 | Vitals | session duration, auto-compactions, lines, and the cost trend. Off until `vitals = "on"` |
@@ -158,7 +158,7 @@ hosts mini 82% mem free · 25% cpu │ macbook 34% · 52% │ silver 73% · 13%
 
 While Pharos jobs run, `▶` turns slowly (◐ ◓ ◑ ◒). A new Pharos event (a run merged or failed, a plan crossing 75/90/100%, a host offline) shows dimmed at the end of `today` for 30 seconds, a plan number that just moved is bold for 20 seconds, and a Pharos reading older than 5 minutes adds its age to `left`. `animate = "off"` drops the motion. Claude Code redraws on activity and every `refreshInterval` seconds; 10 keeps the motion visible at about 0.2 s of CPU per redraw.
 
-Every plan number on `left` is the amount left. The reset (`→`) appears at 25% or less. Job counts follow Pharos: done is done, merged, or a run with no changes; need you is a run with commits waiting for a check, or a failed check; retried is a run another run replaced. `older` only counts open jobs from the last 7 days. Hosts use the nicknames in `hosts = ["studio=local", "backup=user@host"]`. When the terminal is narrow, `left` drops reset times first, then the agy claude+gpt bucket; `older` drops the oldest-job note; `hosts` drops CPU load. `marks = "none"` prints plain names.
+Every plan number on `left` is the amount left. The reset (`→`) appears at 25% or less. Job counts follow Pharos: done is done, merged, or a run with no changes; need you is a run with commits waiting for a check, or a failed check; retried is a run another run replaced. `older` only counts open jobs from the last 7 days. Hosts use the nicknames set in Pharos (`hosts = [...]` in `~/.pharos/usage.toml`). When the terminal is narrow, `left` drops reset times first, then the agy claude+gpt bucket; `older` drops the oldest-job note; `hosts` drops CPU load. `marks = "none"` prints plain names.
 
 A second line is `lines = 2` or `LIMITLINE_LINES=2`. When `COLUMNS` or `LIMITLINE_COLUMNS` is set, the lowest-priority segments drop until the row fits.
 
@@ -202,7 +202,7 @@ auto_compact_warn = 80
 segments = ["model", "style", "context", "limits", "burn", "cost", "git", "pr", "cache", "vim"]
 ```
 
-`limitline config` prints that template and does not write it. The block below is the quiet default. `examples/delight.toml` turns on pace, sparklines, fresh wording, nudges, and vitals.
+Hosts, plan prices, and every measuring setting are Pharos's (`~/.pharos/usage.toml`), not limitline's. `limitline config` prints that template and does not write it. The block below is the quiet default. `examples/delight.toml` turns on pace, sparklines, fresh wording, nudges, and vitals.
 
 ```toml
 # pace = "on"
@@ -213,21 +213,17 @@ segments = ["model", "style", "context", "limits", "burn", "cost", "git", "pr", 
 # vitals = "on"
 # alerts = "off"
 # quiet = "22-7"
-# sync_dir = ""
-# fleet = "on"
+# lines = 5                       # session, what's left, today, older, hosts (needs Pharos for 3-5)
+# animate = "off"
+# fleet = "on"                    # these four show what Pharos measured
 # machines = "on"
-# hosts = ["mini", "worker-1"]
-# fleet_window = "12h"
+# grok = "on"
+# jobs = "on"
 # fleet_ttl = 180
 # machines_ttl = 180
-# ssh_timeout = 2
-# mem_free_warn = 15
-# cursor_week_tokens = 1000000   # only used when there is no cursor+grok reading
-# grok = "on"
 # grok_ttl = 180
-# xai_ttl = 30                    # minutes between Grok plan fetches in limitline refresh
-# jobs = "on"
 # jobs_ttl = 180
+# cursor_week_tokens = 1000000   # inside Cursor without Pharos (LIMITLINE_TOOL=cursor) only
 ```
 
 ## Pace
@@ -244,11 +240,7 @@ With `spark = "on"`, each status line stores the current percent under `~/.cache
 
 ## Fleet
 
-`fleet` is off on the Claude Code line until `segments` names it or `fleet = "on"`. The segment reads one cached line, `⚙ 3 run · 1 ✗`. Counts are running (including stalled), awaiting verify, and failed. `⚠` is added when any run is stalled or paused for quota.
-
-Only recent runs are counted. A run that is `starting`, `running`, or `paused-quota` always counts. Any other run (awaiting verify, failed, stopped, stalled) counts only when its latest recorded time is inside `fleet_window`, default `12h`. The time used is a recorded finish time (`finished_at`, `ended_at`, or `completed_at`) when there is one, otherwise the modification time of the run's `stdout.log`, which only the agent writes, otherwise `last_activity`, `updated_at`, or `started_at`. `last_activity` is only a fallback because Pharos sweeps bump it on runs that finished hours earlier, and `state.json` and `events.jsonl` times are never used because every sweep rewrites them. Naive timestamps such as `2026-01-02T08:41:27` are read as local time. `fleet_window` takes `90m`, `12h`, `2d`, or a bare number of hours; `off` counts every run. limitline never edits Pharos files. Pharos is optional. When `~/.pharos/runs/*/state.json` exists, those files are the source. Otherwise limitline counts `cursor-agent`, `codex exec`, `claude -p`, `grok`, and `agy` in the process list. `limitline refresh` writes the cache. The status line never waits on that scan.
-
-`limitline status`, `limitline watch`, and the SwiftBar menu add a Runs list: run id, tool, repository basename, status, and age. Runs outside the window move to an `Older` block with their own counts, such as `17 verify · 3 ✗ · 4 stopped, last active over 12h ago`. SwiftBar opens `stdout.log` for that run. Full paths are not printed.
+`fleet` is off on the Claude Code line until `segments` names it or `fleet = "on"`. The segment reads one cached line, `⚙ 3 run · 1 ✗`: Pharos's open work from `~/.pharos/summary.json`, today's and the older still-open runs together. Counts are running, needs review (`verify`), and failed; `⚠` is added when a run waits on a plan limit. Pharos decides what each run is and which runs are recent (see its `docs/CONTRACT.md`); limitline reads no run files and scans no processes. Without Pharos there is no fleet segment. `limitline refresh` writes the cache; the status line never waits on it.
 
 ## Machines and local models
 
@@ -299,18 +291,14 @@ Without a live or manual reading, Cursor falls back to the token estimate below,
 
 ## Background jobs
 
-Pharos runs show up in Fleet. Anything else, such as a mining pass or a backup, can report itself:
+Jobs that are not Pharos runs (a mining pass, a backup) are reported to Pharos, which owns them:
 
 ```bash
-limitline job update mining --done 62 --total 1842 --failed 0 --status running --pid $$ --log ~/logs/mining.log
-limitline job update backup --status ok
-limitline job list
-limitline job rm backup
+pharos job update mining --done 62 --total 1842 --failed 0 --status running --pid $$ --log ~/logs/mining.log
+pharos job update backup --status ok
 ```
 
-Each job is one JSON file in `~/.cache/limitline/jobs/<name>.json` (`LIMITLINE_JOBS_DIR`): `name`, `machine` (this host unless `--machine`), `pid`, `pid_start` (when that pid's process started, looked up with `ps -o lstart=` on this machine), `started_at`, `done`, `total`, `failed`, `status`, `log`, and `updated_at`. Updates merge, so a script can send only `--done`. Names are letters, digits, `.`, `-`, and `_`. A job on this machine whose `pid` is gone, and whose status is not finished (`ok`, `done`, `failed`, `stopped`, and similar), is shown as `dead`. So is one whose pid is alive but belongs to a process that started after `pid_start`: pids are reused, and a recycled pid is not the job. Another machine's pid is never checked.
-
-The Claude Code line shows `jobs mining 62/1842 ✗3 · backup ok 08:36`: running and dead jobs first, then finished jobs with their finish time, at most three and then `+N`. Finished jobs stay for `fleet_window` (default 12 hours); `limitline job list` shows all of them. The segment is on unless `jobs = "off"` or `segments` leaves it out, and it reads `jobs.line`, which `job update` and `limitline refresh` write, so the status line never parses job files. With no jobs folder, nothing is read. `limitline status`, `watch`, and the SwiftBar menu add a Jobs block with machine, status, counts, age, and the log file name.
+The Claude Code line shows them from Pharos's `summary.json`: `jobs mining 62/1842 ✗3 · backup ok 08:36`, running and dead jobs first, at most three and then `+N`. Pharos decides when a job is `dead` (its pid is gone on its own machine) and keeps finished jobs listed for 12 hours. `limitline status`, `watch`, and the SwiftBar menu add a Jobs block. `limitline job` now only points at `pharos job`.
 
 ## Providers
 
@@ -355,48 +343,36 @@ The Gemini app's allowance (gemini.google.com) is not shown: no tool can read it
 
 ## History
 
-`limitline refresh` (so the background refresher, every minute) and `limitline status` each record one sample per plan, at most every 10 minutes, into `~/.cache/limitline/history/<plan>.tsv` (`LIMITLINE_HISTORY_DIR`) as `epoch percent resets_at`. Samples older than 30 days are dropped. Plans are measured windows only: `claude-5h`, `claude-7d`, `codex-5h`, `codex-7d`, `cursor+grok-week`, and one per live Antigravity bucket, such as `antigravity-gemini-weekly`. A limit-hit event is not a measurement and is never recorded. A stale row, a Cursor token estimate, or a window merged from several machines is never recorded.
-
-Finished jobs (ok, failed, stopped) and jobs found dead are appended once each to `~/.cache/limitline/jobs-history.jsonl` (`LIMITLINE_JOBS_HISTORY`), with their machine, counts, and finish time.
-
-`limitline history [--days N]` prints one mark per day (the day's peak, `.` for a day with no sample) and the job history per machine:
+Usage history is Pharos's. Its 2-minute job writes the weekly report to `~/.pharos/usage-report.json` (the same numbers as `pharos usage --report`), and limitline only shows it:
 
 ```
-plans
-  claude-7d  ........................█.▄▁▅▅  peak 92% Oct 28 · last 58%
+limitline history (weekly peaks from Pharos, since 2026-05-04)
 
-jobs by machine
-  mini    2 jobs · 1 ok · 1 dead · 123 items · last crawler dead Nov 2 04:00
-  worker  1 job · 1 failed · 1800 items · 42 item failures · last mining failed Nov 2 04:00
+claude       ▄█▆  avg peak 70% · 1 at limit · 1 over 75% · $60/month unused
 ```
 
-`limitline report --week` (and `--week --md`) is the weekly report: for each plan, the 7-day sparkline, the peak and its day, the average daily peak, the days over 80%, and how many window resets the samples saw, then the week's jobs by machine. Days are local days.
+`limitline report --week` (and `--week --md`) prints each plan's peak this week and its weeks at the limit. limitline keeps no plan history of its own. The 5h and 7d sparklines on the Claude Code line use only the status line's own input.
 
 ## Watch
 
-`limitline watch` redraws every tool side by side every 5 seconds. In a terminal it is interactive: below the tools is a list of recent Pharos runs and background jobs, and keys act on the selected one.
+`limitline watch` redraws every tool side by side every 5 seconds. In a terminal, below the tools is a list of recent Pharos runs and reported jobs, taken from Pharos's `summary.json`. It is read-only:
 
-| Key | Pharos run | Job on this machine |
-| --- | --- | --- |
-| `↑` `↓` or `k` `j` | select | select |
-| `r` | `pharos resume <id>` | `SIGCONT`, status `running` |
-| `s`, then `y` | `pharos stop <id>` | `SIGTERM`, status `stopped` |
-| `p` | not available: Pharos has no per-run pause | `SIGSTOP`, status `paused` |
-| `l` | `pharos logs <id>` in the pager | the job's `log` in the pager |
-| `P` / `U` | `pharos pause` / `pharos unpause` (new runs are held or let in) | same |
-| `q` | quit | quit |
+| Key | What it does |
+| --- | --- |
+| `↑` `↓` or `k` `j` | select |
+| `l` | open the run's `stdout.log` in the pager (`$PAGER`, else `less -R +G`) |
+| `r`, `s`, `p`, `P`, `U` | says to act in Pharos (`pharos resume|stop <id>`, `pharos pause`, or the Console); runs nothing |
+| `q` | quit |
 
-`pharos` is found on `PATH`, or set `pharos = "/path/to/pharos"` in the config (or `LIMITLINE_PHAROS`) when it is not on `PATH`, as when it lives in a project's `bin/`. The pager is `$PAGER`, else `less -R +G`. A job is only signalled when it runs on this machine and its pid is still the reported process. Just before the signal, watch re-reads the job file and checks that the `pid`, `started_at`, and process start time all still match; otherwise it says so and sends nothing. After the signal, the status is written only if the file still names that pid and run, so a job that restarted meanwhile keeps its new file. A job file without `pid_start` (reported before 0.9.0) is not signalled; report the job again. A job reported from another machine says so instead. Stop always asks `y/n`. The status line itself never runs these commands.
-
-If stdout is not a terminal, or `LIMITLINE_WATCH_ONCE=1`, it prints one plain frame and exits. `LIMITLINE_WATCH_KEYS="down s y q"` replays keys without a terminal, which is how the tests drive it.
+limitline never runs `pharos` or signals a process. If stdout is not a terminal, or `LIMITLINE_WATCH_ONCE=1`, it prints one plain frame and exits. `LIMITLINE_WATCH_KEYS="down l q"` replays keys without a terminal, which is how the tests drive it.
 
 ## More than one Mac
 
-Set `sync_dir` or `LIMITLINE_SYNC_DIR` to a folder you already sync, such as an iCloud or Dropbox directory. Each machine writes its own snapshot there. `limitline status`, `report`, and `watch` keep the higher percent for a shared window and mark it `×2` when two machines reported it. Only readings that can still be current are compared. A snapshot marked stale, a window whose reset has passed, and a window with no reset in a snapshot older than 15 minutes are all ignored, so an offline machine cannot hold an old number in place. Readings are compared only within one reset cycle (resets within 10 minutes of each other), and the newest cycle wins. Nothing is uploaded by limitline. `LIMITLINE_HOST` sets the folder name; otherwise the short hostname is used, with characters outside letters, digits, and `-` removed.
+Pharos measures every Mac it lists (`hosts` in `~/.pharos/usage.toml`) and every plan, so any terminal on a Mac with Pharos sees all of them. limitline has no sync folder of its own; earlier `sync_dir` settings are ignored.
 
 ## Background refresh
 
-The status line never runs ssh, a provider, or another tool's CLI. It reads `fleet.line`, `machines.line`, and `grok.line` from `~/.cache/limitline/`, and when they are old it starts one `limitline refresh` in the background. That refresh only re-reads Pharos's files (`usage.json`, run states) and `limitline job` reports. Measuring is Pharos's job: its `com.venkat.pharos.usage` launchd agent runs `pharos usage --refresh` every 2 minutes.
+The status line never runs ssh, a provider, or another tool's CLI. It reads `fleet.line`, `machines.line`, `grok.line`, and `jobs.line` from `~/.cache/limitline/`, and when they are old it starts one `limitline refresh` in the background. That refresh only re-reads Pharos's files (`usage.json`, `summary.json`). Measuring is Pharos's job: its `com.venkat.pharos.usage` launchd agent runs `pharos usage --refresh` every 2 minutes.
 
 On macOS, `limitline install-refresher` installs a launchd agent (`~/Library/LaunchAgents/dev.limitline.refresh.plist`) that runs `limitline refresh` every 60 seconds, so idle terminals stay current. `limitline uninstall-refresher` removes it.
 
@@ -406,67 +382,11 @@ Every Claude Code session on the same Mac shares one cache, so a second session 
 
 ## Doctor
 
-`limitline doctor` lists the tools on `PATH`, then the fleet sources it can see: whether the fleet and machines segments are on and why, Pharos runs inside and outside the window (or the process scan count), each cache's age against its TTL, the host list and where it came from, which hosts were reachable at the last refresh, whether the refresher is installed and loaded, and how many machines publish into `sync_dir`. When a segment would be empty, an `empty segments` block says why, such as `fleet: cache older than fleet_ttl; install-refresher keeps it fresh` or `machines: no hosts`. With a status payload on stdin it also lists which known fields are present. Host names are printed; ssh user names and addresses are not.
-
-| Variable | Meaning |
-| --- | --- |
-| `LIMITLINE_THEME` | `minimal`, `powerline`, `ascii`, `pill`, `emoji`, or `mono` |
-| `LIMITLINE_ASCII` | `1` forces `ascii` |
-| `LIMITLINE_LINES` | `1` or `2` |
-| `LIMITLINE_SEGMENTS` | Comma-separated segment names. Include `pace`, `spark`, `fresh`, `nudge`, `value`, or `vitals` to turn that segment on |
-| `LIMITLINE_BAR_WIDTH` | Bar length, 1–40, default 5 |
-| `LIMITLINE_GIT` | `1` or `0`. Default on, but only when the payload has a directory |
-| `LIMITLINE_SESSION` | `1` shows the short session id |
-| `LIMITLINE_BURN` | `0` hides the `pace ~1h35m` projection from recent 5-hour samples |
-| `LIMITLINE_PACE` | `1` shows ahead/under pace. `0` hides it |
-| `LIMITLINE_SPARK` | `1` draws sparklines |
-| `LIMITLINE_FRESH` | `1` uses fresh wording and the sparkle |
-| `LIMITLINE_NUDGES` | `1` adds the short hints |
-| `LIMITLINE_VALUE` | `1` shows the weekly estimate |
-| `LIMITLINE_VALUE_FILE` | Cost or token JSON for the estimate |
-| `LIMITLINE_VITALS` | `1` shows session vitals |
-| `LIMITLINE_ALERTS` | `off`, `bell`, or `notify` |
-| `LIMITLINE_QUIET` | Quiet hours, such as `22-7` |
-| `LIMITLINE_SYNC_DIR` | Folder of per-machine snapshots |
-| `LIMITLINE_HOST` | This machine's name inside that folder |
-| `LIMITLINE_FLEET` | `1` shows the fleet segment. `0` hides it |
-| `LIMITLINE_MACHINES` | `1` shows the machines segment. `0` hides it |
-| `LIMITLINE_HOSTS` | Comma-separated workers, such as `mini,worker-1` |
-| `LIMITLINE_SSH_TIMEOUT` | SSH connect timeout in seconds, default 2 |
-| `LIMITLINE_MEM_WARN` | Warn when a loaded model would leave free memory under this percent, default 15 |
-| `LIMITLINE_FLEET_TTL` | Seconds a fleet cache line stays fresh, default 180 |
-| `LIMITLINE_MACHINES_TTL` | Seconds a machine cache stays fresh, default 180 |
-| `LIMITLINE_FLEET_WINDOW` | Count finished runs active within this window, default `12h`. `off` counts all |
-| `LIMITLINE_REFRESH` | `0` stops the status line from starting a background refresh |
-| `LIMITLINE_CURSOR_WEEK_TOKENS` | Denominator for the Cursor weekly estimate, default 1000000 |
-| `LIMITLINE_GROK` | `1` shows the Grok plan and 7-day tokens on the status line. `0` hides it |
-| `LIMITLINE_GROK_TTL` | Seconds the Grok cache line stays fresh, default 180 |
-| `LIMITLINE_GROK_DIR` | Grok sessions folder, default `~/.grok/sessions` |
-| `LIMITLINE_GROK_SETTINGS` | Grok settings cache, default `~/.grok/settings_cache.json` |
-| `LIMITLINE_GROK_LOG` | Grok CLI log with the live plan reading, default `~/.grok/logs/unified.jsonl` |
-| `LIMITLINE_GROK_BIN` | Grok CLI that `limitline refresh` opens for `/usage show`, default `~/.grok/bin/grok` |
-| `LIMITLINE_XAI_TTL` | Minutes between plan fetches, default 30 (`xai_ttl`) |
-| `LIMITLINE_XAI_TIMEOUT` | Seconds one plan fetch may take, default 45 |
-| `LIMITLINE_XAI_FETCH` | `0` turns the plan fetch off |
-| `LIMITLINE_AGY_FETCH` | `0` turns the Antigravity usage fetch off |
-| `LIMITLINE_AGY_BIN` | agy binary for the fetch (config `agy`), default `agy` on `PATH` or in the usual install folders |
-| `LIMITLINE_AGY_USAGE` | Antigravity usage cache, default `~/.cache/limitline/antigravity.json` |
-| `LIMITLINE_AGY_TTL` | Minutes between Antigravity fetches, default 15 |
-| `LIMITLINE_AGY_TIMEOUT` | Seconds before the agy command is stopped, default 30 |
-| `LIMITLINE_CLAUDE_CACHE` | `0` turns off the cached Claude 7d fallback |
-| `LIMITLINE_XAI_PLAN` | Manual override file, default `~/.cache/limitline/xai-plan.json` |
-| `LIMITLINE_LEDGER` | JSONL file of `usd` amounts for the api row |
-| `LIMITLINE_LINKS` | `1` adds OSC 8 links for a `owner/name` repo |
-| `LIMITLINE_CODEX` | `auto` (default), `1`, or `0` |
-| `LIMITLINE_COLUMNS` | Width cap. `COLUMNS` is used when this is unset |
-| `NO_COLOR` | Disable ANSI colours |
-| `LIMITLINE_CONFIG` | Alternate config file. `/dev/null` skips the home file |
-| `LIMITLINE_DEBUG` | `1` saves stdin to `~/.cache/limitline/stdin.json` |
-| `LIMITLINE_NOW` | Fixed unix time, used by tests |
+`limitline doctor` lists the tools on `PATH`, then what it can see of Pharos: whether `summary.json` and `usage.json` exist and how old they are, when the Claude relay last wrote, each cache's age against its TTL, and whether the refresher is installed and loaded. When a segment would be empty, an `empty segments` block says why, such as `fleet: no Pharos summary.json; fleet needs Pharos` or `machines: no hosts in Pharos's usage.json`. With a status payload on stdin it also lists which known fields are present.
 
 ## Privacy
 
-limitline reads the status JSON a host already pipes in, an optional local config file, a cache directory it writes itself, and the local files named above. It does not send them anywhere. It does not read API keys or OAuth tokens. Debug output stays in the cache file you opted into. Session id display is off unless `LIMITLINE_SESSION=1`. The value file is read only when the value meter is on, and only for cost and token counts. The report and the Runs list keep repository folder names, not full paths. A sync folder is written only when you set one. From Grok it reads the plan name in `settings_cache.json` and the token and cost counters in `usage.json`; it never opens `~/.grok/auth.json`, and it does not print the identity or signature in the settings file. For the plan percent it reads the `fetched credits config` lines in `~/.grok/logs/unified.jsonl`. `limitline refresh` (and only refresh) starts the Grok CLI and types `/usage show`; the Grok CLI then calls xAI's billing API with its own login. `limitline refresh` also runs `agy -p "/usage" --output-format json`, a local command that spends no tokens; agy answers with its own login, and limitline keeps only the bucket percents and resets. It never opens agy's or the Gemini app's cookies, keychains, credential stores, or LevelDB/IndexedDB data. limitline itself opens no network connection and reads no token. Pharos is detected and used when its run files or machine list are present, and limitline still runs when they are absent. SSH runs only inside `limitline refresh`, with a timeout, and only for hosts you listed. The background refresher exists only if you run `limitline install-refresher` or `limitline schedule install`, and both run the same `limitline refresh`. Fleet and machine snapshots go to `sync_dir` only when you set one; they hold counts, host names, memory, load, and model names, not paths or user names.
+limitline reads the status JSON a host already pipes in, an optional local config file, a cache directory it writes itself, Pharos's `usage.json`, `summary.json`, `usage-report.json`, and the tail of today's event file. It writes one file for Pharos, `~/.pharos/inbox/claude.json` (Claude's own reading, only when `~/.pharos` exists). It does not send anything anywhere, opens no network connection, runs no ssh, and starts no other tool's CLI; Pharos does all measuring. It does not read API keys or OAuth tokens. Inside Grok or Cursor without Pharos (`LIMITLINE_TOOL`), it reads that tool's own local files: the plan name and token counters Grok keeps, the `fetched credits config` lines in Grok's log, or Cursor token counts in a log you name. It never opens `~/.grok/auth.json`, cookies, keychains, or credential stores. The report and the Runs list keep repository folder names, not full paths. Debug output stays in the cache file you opted into. Session id display is off unless `LIMITLINE_SESSION=1`.
 
 ## Tests
 

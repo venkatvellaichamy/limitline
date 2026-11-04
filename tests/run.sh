@@ -573,13 +573,16 @@ third_fresh=$(printf '%s' "$low" | NO_COLOR=1 LIMITLINE_FRESH=1 "$BIN" | strip_a
 printf '%s' "$third_fresh" | grep -q -F '✨' && check "fresh-once" "no" "yes" || check "fresh-once" "yes" "yes"
 
 # Nudges are opt-in and stay short.
-nudge_ok=$(NO_COLOR=1 LIMITLINE_NUDGES=1 "$BIN" < "$FIX/over_80.json" | strip_ansi)
+# The other tools' numbers come from Pharos's usage.json; without it there is no tool nudge.
+nudge_none=$(NO_COLOR=1 LIMITLINE_NUDGES=1 LIMITLINE_PHAROS_USAGE="$TEST_HOME/none.json" "$BIN" < "$FIX/over_80.json" | strip_ansi)
+! printf '%s' "$nudge_none" | grep -q -F '→' && check "nudge-needs-pharos" "yes" "yes" || check "nudge-needs-pharos" "$nudge_none" "no tool nudge without Pharos"
+nudge_ok=$(NO_COLOR=1 LIMITLINE_NUDGES=1 LIMITLINE_PHAROS_USAGE="$(LIMITLINE_CODEX_DIR="$TEST_HOME/none" pharos_usage codex cursor)" "$BIN" < "$FIX/over_80.json" | strip_ansi)
 printf '%s' "$nudge_ok" | grep -q -F '→ cursor ok' && check "nudge-cursor" "yes" "yes" || check "nudge-cursor" "$nudge_ok" "cursor ok"
-nudge_codex=$(NO_COLOR=1 LIMITLINE_NUDGES=1 LIMITLINE_CODEX_DIR="$fresh_dir" "$BIN" < "$FIX/over_80.json" | strip_ansi)
+nudge_codex=$(NO_COLOR=1 LIMITLINE_NUDGES=1 LIMITLINE_PHAROS_USAGE="$(LIMITLINE_CODEX_DIR="$fresh_dir" pharos_usage codex cursor)" "$BIN" < "$FIX/over_80.json" | strip_ansi)
 # Codex at 5h 12% · 7d 55% is constrained by its week, so it is not offered as "codex 12%".
 printf '%s' "$nudge_codex" | grep -q -F '→ cursor ok' && ! printf '%s' "$nudge_codex" | grep -q -F 'codex 12%' \
   && check "nudge-codex-week-constrains" "yes" "yes" || check "nudge-codex-week-constrains" "$nudge_codex" "→ cursor ok, no codex 12%"
-nudge_room=$(NO_COLOR=1 LIMITLINE_NUDGES=1 LIMITLINE_CODEX_DIR="$many" "$BIN" < "$FIX/over_80.json" | strip_ansi)
+nudge_room=$(NO_COLOR=1 LIMITLINE_NUDGES=1 LIMITLINE_PHAROS_USAGE="$many_usage" "$BIN" < "$FIX/over_80.json" | strip_ansi)
 printf '%s' "$nudge_room" | grep -q -F '→ codex 40%' && check "nudge-codex" "yes" "yes" || check "nudge-codex" "$nudge_room" "codex 40%"
 nudge_ctx=$(NO_COLOR=1 LIMITLINE_NUDGES=1 "$BIN" < "$FIX/near_compact.json" | strip_ansi)
 printf '%s' "$nudge_ctx" | grep -q -F '↯ compact soon: /compact' && check "nudge-compact" "yes" "yes" || check "nudge-compact" "$nudge_ctx" "compact"
@@ -677,56 +680,6 @@ watch_got=$(LIMITLINE_TOOL=codex LIMITLINE_WATCH_ONCE=1 LIMITLINE_CLAUDE_SNAPSHO
 printf '%s' "$watch_got" | grep -q -F 'claude' && printf '%s' "$watch_got" | grep -q -F 'codex' \
   && printf '%s' "$watch_got" | grep -q -F '62%' && check "watch" "yes" "yes" || check "watch" "$watch_got" "side by side"
 
-sync_dir="$TEST_HOME/sync"
-mkdir -p "$sync_dir/macbook"
-printf '%s\n' '{"observed_at":1762055100,"provider":"claude","source":"statusline","stale":false,"windows":[{"name":"5h","used_pct":80,"resets_at":1762062120},{"name":"7d","used_pct":50,"resets_at":1762419600}]}' > "$sync_dir/macbook/claude.json"
-sync_got=$(LIMITLINE_HOST=mini LIMITLINE_SYNC_DIR="$sync_dir" LIMITLINE_CLAUDE_SNAPSHOT="$TEST_HOME/claude-snapshot.json" LIMITLINE_CODEX_DIR="$codex_prov" "$BIN" status)
-printf '%s' "$sync_got" | grep -q -F '5h 80% ×2' && printf '%s' "$sync_got" | grep -q -F '7d 50% ×2' \
-  && check "sync-merge" "yes" "yes" || check "sync-merge" "$sync_got" "merged"
-test -f "$sync_dir/mini/claude.json" && check "sync-publish" "yes" "yes" || check "sync-publish" "no" "yes"
-
-# Review F5: sync_dir from the config file works for status, not only the env var.
-sync_cfg_dir="$TEST_HOME/sync-cfg"
-mkdir -p "$sync_cfg_dir/macbook"
-cp "$sync_dir/macbook/claude.json" "$sync_cfg_dir/macbook/claude.json"
-printf 'sync_dir = "%s"\n' "$sync_cfg_dir" > "$TEST_HOME/sync-config.toml"
-sync_cfg_got=$(LIMITLINE_CONFIG="$TEST_HOME/sync-config.toml" LIMITLINE_HOST=mini LIMITLINE_CLAUDE_SNAPSHOT="$TEST_HOME/claude-snapshot.json" LIMITLINE_CODEX_DIR="$codex_prov" "$BIN" status)
-printf '%s' "$sync_cfg_got" | grep -q -F '5h 80% ×2' && test -f "$sync_cfg_dir/mini/claude.json" \
-  && check "sync-config-file" "yes" "yes" || check "sync-config-file" "$sync_cfg_got" "merged and published"
-
-# Review F1: an offline host's stale or expired window never replaces a current reading.
-sync_merge() {
-  python3 -c 'import json, sys
-sys.path.insert(0, sys.argv[1])
-import sync
-rows = json.loads(sys.argv[3])
-out = sync.merge_rows(rows, sys.argv[2])
-print(json.dumps(out[0]["windows"], sort_keys=True))' "$ROOT/lib" "$1" "$2"
-}
-f1_dir="$TEST_HOME/sync-f1"
-mkdir -p "$f1_dir/offline"
-printf '%s\n' '{"observed_at":1700000000,"provider":"codex","source":"session","stale":false,"windows":[{"name":"7d","used_pct":99,"resets_at":100}]}' > "$f1_dir/offline/codex.json"
-f1_local='[{"provider":"codex","observed_at":1762056000,"source":"session","stale":false,"windows":[{"name":"7d","used_pct":10,"resets_at":2000000000}]}]'
-check "sync-expired-remote-ignored" "$(sync_merge "$f1_dir" "$f1_local")" '[{"name": "7d", "resets_at": 2000000000, "used_pct": 10}]'
-# A remote window without a reset counts only while its snapshot is fresh.
-f1b="$TEST_HOME/sync-f1b"
-mkdir -p "$f1b/offline"
-printf '%s\n' '{"observed_at":1762052400,"provider":"codex","source":"session","stale":false,"windows":[{"name":"7d","used_pct":90}]}' > "$f1b/offline/codex.json"
-check "sync-old-noreset-ignored" "$(sync_merge "$f1b" "$f1_local")" '[{"name": "7d", "resets_at": 2000000000, "used_pct": 10}]'
-# Reset cycles: only readings for the same reset (within a few minutes) are compared.
-# The newest cycle wins; a reading from another cycle is not mixed into it.
-f1c="$TEST_HOME/sync-f1c"
-mkdir -p "$f1c/offline" "$f1c/online"
-printf '%s\n' '{"observed_at":1762055000,"provider":"codex","source":"session","stale":false,"windows":[{"name":"7d","used_pct":95,"resets_at":1762060000}]}' > "$f1c/offline/codex.json"
-printf '%s\n' '{"observed_at":1762055900,"provider":"codex","source":"session","stale":false,"windows":[{"name":"7d","used_pct":30,"resets_at":1762664420}]}' > "$f1c/online/codex.json"
-f1c_local='[{"provider":"codex","observed_at":1762056000,"source":"session","stale":false,"windows":[{"name":"7d","used_pct":12,"resets_at":1762664400}]}]'
-check "sync-other-cycle-ignored" "$(sync_merge "$f1c" "$f1c_local")" '[{"machines": 1, "name": "7d", "resets_at": 1762664420, "used_pct": 30}]'
-# A stale-flagged snapshot is ignored even when its reset is still ahead.
-f1d="$TEST_HOME/sync-f1d"
-mkdir -p "$f1d/offline"
-printf '%s\n' '{"observed_at":1762055000,"provider":"codex","source":"session","stale":true,"windows":[{"name":"7d","used_pct":95,"resets_at":1762664400}]}' > "$f1d/offline/codex.json"
-check "sync-stale-remote-ignored" "$(sync_merge "$f1d" "$f1c_local")" '[{"name": "7d", "resets_at": 1762664400, "used_pct": 12}]'
-
 # Review F2: a provider is as constrained as its most-used window.
 f2_got=$(python3 -c 'import sys
 sys.path.insert(0, sys.argv[1])
@@ -787,28 +740,33 @@ check "claude-7d-cached-reset-passed-nojq" "$seven_old_py" "$seven_old"
 seven_live=$(LIMITLINE_CLAUDE_CACHE=1 LIMITLINE_CLAUDE_SNAPSHOT="$seven_snap" NO_COLOR=1 "$BIN" < "$FIX/full.json" | strip_ansi)
 check "claude-7d-live-no-age" "$seven_live" "$full_want"
 
-# Fleet from Pharos state files, otherwise a process list. Paths stay as basenames.
-fleet_line=$(LIMITLINE_PHAROS_RUNS="$FIX/fleet/runs" "$ROOT/lib/fleet.py")
-fleet_line=${fleet_line%$'\n'}
-check "fleet-segment" "$fleet_line" '⚙ 3 run · 1 ✗'
-stalled_line=$(LIMITLINE_PHAROS_RUNS="$FIX/fleet/stalled" "$ROOT/lib/fleet.py")
-stalled_line=${stalled_line%$'\n'}
-check "fleet-stalled" "$stalled_line" '⚙ 1 run ⚠'
-paused_line=$(LIMITLINE_PHAROS_RUNS="$FIX/fleet/paused" "$ROOT/lib/fleet.py")
-paused_line=${paused_line%$'\n'}
-check "fleet-paused" "$paused_line" '⚙ ⚠'
-verify_line=$(LIMITLINE_PHAROS_RUNS="$FIX/fleet/verify" "$ROOT/lib/fleet.py")
-verify_line=${verify_line%$'\n'}
-check "fleet-verify" "$verify_line" '⚙ 1 verify'
-ps_line=$(LIMITLINE_PHAROS_RUNS="$TEST_HOME/no-such-runs" LIMITLINE_PS_FILE="$FIX/fleet/ps.txt" "$ROOT/lib/fleet.py")
-ps_line=${ps_line%$'\n'}
-check "fleet-process-scan" "$ps_line" '⚙ 5 run'
+# Fleet and Runs come from Pharos's summary.json; limitline reads no run files and scans no processes.
+summary_fix="$TEST_HOME/summary.json"
+mkdir -p "$TEST_HOME/runlogs/run-a"
+printf '%s\n' 'ok' > "$TEST_HOME/runlogs/run-a/stdout.log"
+make_summary() {  # make_summary <path> <today json> [<recent json>] [<jobs json>]
+  printf '{"version":1,"generated_at":1762056000,"today":%s,"older":{},"oldest_open":null,"recent":%s,"jobs":%s}\n' "$2" "${3:-[]}" "${4:-[]}" > "$1"
+}
+make_summary "$summary_fix" '{"running":3,"failed":1}' "[{\"id\":\"run-a\",\"tool\":\"cursor\",\"repo\":\"demo\",\"status\":\"running\",\"age_s\":720,\"log\":\"$TEST_HOME/runlogs/run-a/stdout.log\"},{\"id\":\"run-d\",\"tool\":\"grok\",\"repo\":\"widget\",\"status\":\"failed\",\"age_s\":1800,\"log\":\"/nowhere/stdout.log\"}]"
+export LIMITLINE_PHAROS_SUMMARY="$summary_fix"
+check "fleet-segment" "$("$ROOT/lib/fleet.py")" '⚙ 3 run · 1 ✗'
+make_summary "$TEST_HOME/s-warn.json" '{"running":1,"waiting_limit":1}'
+check "fleet-waiting-on-limit" "$(LIMITLINE_PHAROS_SUMMARY="$TEST_HOME/s-warn.json" "$ROOT/lib/fleet.py")" '⚙ 1 run ⚠'
+make_summary "$TEST_HOME/s-paused.json" '{"waiting_limit":1}'
+check "fleet-paused" "$(LIMITLINE_PHAROS_SUMMARY="$TEST_HOME/s-paused.json" "$ROOT/lib/fleet.py")" '⚙ ⚠'
+printf '%s\n' '{"version":1,"generated_at":1762056000,"today":{},"older":{"need_you":1},"recent":[],"jobs":[]}' > "$TEST_HOME/s-older.json"
+check "fleet-counts-older-open" "$(LIMITLINE_PHAROS_SUMMARY="$TEST_HOME/s-older.json" "$ROOT/lib/fleet.py")" '⚙ 1 verify'
+check "fleet-without-pharos" "$(LIMITLINE_PHAROS_SUMMARY="$TEST_HOME/none.json" "$ROOT/lib/fleet.py")" ''
+ps_spy="$TEST_HOME/psbin"
+mkdir -p "$ps_spy"
+printf '#!/bin/sh\necho ps >> "%s/calls"\n' "$ps_spy" > "$ps_spy/ps"; chmod +x "$ps_spy/ps"
+PATH="$ps_spy:$PATH" "$ROOT/lib/fleet.py" >/dev/null
+[[ ! -e "$ps_spy/calls" ]] && check "fleet-no-process-scan" "yes" "yes" || check "fleet-no-process-scan" "ran ps" "no process scan"
 
-fleet_status=$(LIMITLINE_PHAROS_RUNS="$FIX/fleet/runs" "$BIN" status)
+fleet_status=$("$BIN" status)
 printf '%s' "$fleet_status" | grep -q -F '⚙ 3 run · 1 ✗' \
   && printf '%s' "$fleet_status" | grep -q -F 'run-a  cursor  demo  running  12m' \
   && printf '%s' "$fleet_status" | grep -q -F 'run-d  grok  widget  failed  30m' \
-  && ! printf '%s' "$fleet_status" | grep -q -F '/var' \
   && check "fleet-status" "yes" "yes" || check "fleet-status" "$fleet_status" "runs section"
 
 # Machines come from Pharos's usage.json; refresh copies them into the cache and never opens ssh.
@@ -819,21 +777,17 @@ chmod +x "$ssh_dir/ssh"
 rm -f "$TEST_HOME/ssh.flag"
 hosts_usage="$TEST_HOME/hosts-usage.json"
 printf '%s\n' '{"version":1,"generated_at":1762056000,"plans":[],"hosts":{"hosts":[{"name":"mini","reachable":true,"free_pct":41,"load_pct":12,"loaded":"qwen3:14b"},{"name":"worker-1","reachable":false}]}}' > "$hosts_usage"
-PATH="$ssh_dir:$PATH" LIMITLINE_PHAROS_USAGE="$hosts_usage" LIMITLINE_PHAROS_RUNS="$FIX/fleet/runs" "$BIN" refresh
+PATH="$ssh_dir:$PATH" LIMITLINE_PHAROS_USAGE="$hosts_usage" "$BIN" refresh
 [[ -f "$TEST_HOME/ssh.flag" ]] && check "machines-no-ssh" "called" "quiet" || check "machines-no-ssh" "quiet" "quiet"
 check "machines-from-pharos" "$(cat "$XDG_CACHE_HOME/limitline/machines.line")" 'mini 41% free · qwen3:14b / worker-1 ∅'
 hot_payload='{"model":{"display_name":"Claude Opus 5.5"}}'
 hot_got=$(printf '%s' "$hot_payload" | NO_COLOR=1 LIMITLINE_SEGMENTS=machines,fleet,model "$BIN" | strip_ansi)
 check "hot-fleet-machines" "$hot_got" 'mini 41% free · qwen3:14b / worker-1 ∅ │ ⚙ 3 run · 1 ✗ │ Opus 5.5'
 
-sb_root="$TEST_HOME/sb-runs"
-mkdir -p "$sb_root/run-a"
-cp "$FIX/fleet/runs/run-a/state.json" "$sb_root/run-a/state.json"
-printf '%s\n' 'ok' > "$sb_root/run-a/stdout.log"
-swift_runs=$(LIMITLINE_PHAROS_RUNS="$sb_root" "$BIN" --host swiftbar)
+swift_runs=$("$BIN" --host swiftbar)
 printf '%s' "$swift_runs" | grep -q -F 'Fleet' && printf '%s' "$swift_runs" | grep -q -F 'bash=/usr/bin/open' \
-  && printf '%s' "$swift_runs" | grep -q -F 'stdout.log' \
-  && check "swiftbar-run-log" "yes" "yes" || check "swiftbar-run-log" "$swift_runs" "open log"
+  && printf '%s' "$swift_runs" | grep -q -F 'run-a/stdout.log' && ! printf '%s' "$swift_runs" | grep -q -F '/nowhere' \
+  && check "swiftbar-run-log" "yes" "yes" || check "swiftbar-run-log" "$swift_runs" "open log only when the file exists"
 
 cursor_got=$(LIMITLINE_CURSOR_LOG="$FIX/providers/cursor-usage.jsonl" "$ROOT/providers/cursor")
 cursor_got=${cursor_got%$'\n'}
@@ -846,59 +800,17 @@ printf '%s' "$spend_status" | sed -n 2p | grep -q -F 'claude' \
   && printf '%s' "$spend_status" | grep -q -F 'api spend $0.25' \
   && check "provider-order" "yes" "yes" || check "provider-order" "$spend_status" "constrained first"
 
-nudge_v2=$(NO_COLOR=1 LIMITLINE_NUDGES=1 LIMITLINE_CODEX_DIR="$many" LIMITLINE_MACHINES_JSON="$FIX/machines/idle.json" "$BIN" < "$FIX/over_80.json" | strip_ansi)
+nudge_v2=$(NO_COLOR=1 LIMITLINE_NUDGES=1 LIMITLINE_PHAROS_USAGE="$many_usage" LIMITLINE_MACHINES_JSON="$FIX/machines/idle.json" "$BIN" < "$FIX/over_80.json" | strip_ansi)
 printf '%s' "$nudge_v2" | grep -q -F '→ codex 40% · mini idle' \
   && check "nudge-v2" "yes" "yes" || check "nudge-v2" "$nudge_v2" "codex and idle machine"
 cfg_out=$("$BIN" config)
-printf '%s' "$cfg_out" | grep -q -F 'hosts = ["mini", "worker-1"]' \
-  && printf '%s' "$cfg_out" | grep -q -F 'mem_free_warn = 15' \
+printf '%s' "$cfg_out" | grep -q -F '# fleet = "on"' && printf '%s' "$cfg_out" | grep -q -F '~/.pharos/usage.toml' \
+  && ! printf '%s' "$cfg_out" | grep -q -F 'sync_dir' && ! printf '%s' "$cfg_out" | grep -q -F 'hosts = ' \
   && check "config-fleet" "yes" "yes" || check "config-fleet" "no" "yes"
-
-# 0.4.1: fleet window. Live runs always count; finished runs only within fleet_window.
-win_line=$(LIMITLINE_PHAROS_RUNS="$FIX/fleet/window" "$ROOT/lib/fleet.py")
-check "fleet-window-default" "${win_line%$'\n'}" '⚙ 1 run · 1 verify'
-win_off=$(LIMITLINE_FLEET_WINDOW=off LIMITLINE_PHAROS_RUNS="$FIX/fleet/window" "$ROOT/lib/fleet.py")
-check "fleet-window-off" "${win_off%$'\n'}" '⚙ 1 run · 2 verify · 1 ✗'
-win_day=$(LIMITLINE_FLEET_WINDOW=1d LIMITLINE_PHAROS_RUNS="$FIX/fleet/window" "$ROOT/lib/fleet.py")
-check "fleet-window-1d" "${win_day%$'\n'}" '⚙ 1 run · 2 verify · 1 ✗'
-win_cfg="$TEST_HOME/window.toml"
-printf '%s\n' 'fleet_window = "30m"' > "$win_cfg"
-win_cfg_got=$(LIMITLINE_CONFIG="$win_cfg" LIMITLINE_PHAROS_RUNS="$FIX/fleet/window" "$ROOT/lib/fleet.py")
-check "fleet-window-config" "${win_cfg_got%$'\n'}" '⚙ 1 run'
-win_status=$(LIMITLINE_PHAROS_RUNS="$FIX/fleet/window" "$BIN" status)
-older_block=$(printf '%s\n' "$win_status" | sed -n '/^Older$/,$p')
-runs_block=$(printf '%s\n' "$win_status" | sed -n '/^Runs$/,/^$/p')
-printf '%s' "$older_block" | grep -q -F '1 verify · 1 ✗ · 1 stopped, last active over 12h ago' \
-  && printf '%s' "$older_block" | grep -q -F 'old-verify  cursor  widget  awaiting-verify' \
-  && printf '%s' "$runs_block" | grep -q -F 'recent-verif  cursor  demo  awaiting-verify' \
-  && ! printf '%s' "$runs_block" | grep -q -F 'old-verify' \
-  && check "fleet-status-older" "yes" "yes" || check "fleet-status-older" "$win_status" "Older block"
-LIMITLINE_PHAROS_RUNS="$FIX/fleet/window" LIMITLINE_HOSTS= "$BIN" refresh
-check "fleet-window-refresh" "$(cat "$XDG_CACHE_HOME/limitline/fleet.line")" '⚙ 1 run · 1 verify'
-
-# A sweep can bump last_activity on a finished run; the agent's own stdout.log time wins.
-sweep_root="$TEST_HOME/sweep-runs/run-swept"
-mkdir -p "$sweep_root"
-printf '%s\n' '{"id": "run-swept", "status": "awaiting-verify", "tool": "cursor", "repo": "demo", "started_at": "2025-11-01T09:00:00", "last_activity": 1762052400}' > "$sweep_root/state.json"
-printf '%s\n' 'done' > "$sweep_root/stdout.log"
-TZ=UTC touch -t 202511011000 "$sweep_root/stdout.log"
-sweep_line=$(LIMITLINE_PHAROS_RUNS="$TEST_HOME/sweep-runs" "$ROOT/lib/fleet.py")
-check "fleet-sweep-ignored" "${sweep_line%$'\n'}" ''
-TZ=UTC touch -t 202511020300 "$sweep_root/stdout.log"
-sweep_recent=$(LIMITLINE_PHAROS_RUNS="$TEST_HOME/sweep-runs" "$ROOT/lib/fleet.py")
-check "fleet-log-recent" "${sweep_recent%$'\n'}" '⚙ 1 verify'
-
-# Pharos writes naive local time. Read it as local time, not UTC.
-tz_root="$TEST_HOME/tz-runs/run-tz"
-mkdir -p "$tz_root"
-printf '%s\n' '{"id": "run-tz", "status": "running", "tool": "codex", "repo": "demo", "started_at": "2025-11-02T09:00:00"}' > "$tz_root/state.json"
-tz_status=$(TZ=Asia/Kolkata LIMITLINE_PHAROS_RUNS="$TEST_HOME/tz-runs" "$BIN" status)
-printf '%s' "$tz_status" | grep -q -F 'run-tz  codex  demo  running  30m' \
-  && check "fleet-local-time" "yes" "yes" || check "fleet-local-time" "$tz_status" "30m in local time"
 
 # Two lines: each line is fitted to the width on its own, so line 2 does not
 # push context off line 1. Payload shape from Claude Code 2.1.317 (7d only).
-LIMITLINE_PHAROS_USAGE="$hosts_usage" LIMITLINE_PHAROS_RUNS="$FIX/fleet/runs" "$BIN" refresh
+LIMITLINE_PHAROS_USAGE="$hosts_usage" "$BIN" refresh
 two_fit=$(NO_COLOR=1 LIMITLINE_LINES=2 LIMITLINE_COLUMNS=80 LIMITLINE_FLEET=1 LIMITLINE_MACHINES=1 LIMITLINE_THEME=emoji "$BIN" < "$FIX/seven_day_only.json" | strip_ansi)
 line_one=$(printf '%s\n' "$two_fit" | sed -n 1p)
 line_two=$(printf '%s\n' "$two_fit" | sed -n 2p)
@@ -933,8 +845,8 @@ if [[ "$plist_ok" == "True" ]] && grep -q 'bootstrap gui/' "$lc_log" && [[ -x "$
 else
   check "refresher-install" "$inst_out" "plist, launcher, bootstrap"
 fi
-launch_run=$(cd "$TEST_HOME" && LIMITLINE_PHAROS_RUNS="$FIX/fleet/window" LIMITLINE_HOSTS= python3 "$TEST_HOME/.local/share/limitline/refresh-launcher.py"; cat "$XDG_CACHE_HOME/limitline/fleet.line")
-check "refresher-launcher-runs" "$launch_run" '⚙ 1 run · 1 verify'
+launch_run=$(cd "$TEST_HOME" && LIMITLINE_PHAROS_SUMMARY="$TEST_HOME/s-warn.json" python3 "$TEST_HOME/.local/share/limitline/refresh-launcher.py"; cat "$XDG_CACHE_HOME/limitline/fleet.line")
+check "refresher-launcher-runs" "$launch_run" '⚙ 1 run ⚠'
 doc_ref=$(LIMITLINE_LAUNCHCTL="$lc_stub" "$BIN" doctor < /dev/null)
 printf '%s' "$doc_ref" | grep -q -F 'refresher: installed (launchd every 60s, loaded)' \
   && check "doctor-refresher" "yes" "yes" || check "doctor-refresher" "$doc_ref" "refresher installed"
@@ -944,12 +856,12 @@ LIMITLINE_LAUNCHCTL="$lc_stub" "$BIN" uninstall-refresher >/dev/null
 
 # Doctor names each fleet source and says why a segment is empty.
 rm -f "$XDG_CACHE_HOME/limitline/fleet.line" "$XDG_CACHE_HOME/limitline/machines.json"
-doc_empty=$(LIMITLINE_LAUNCHCTL="$lc_stub" LIMITLINE_FLEET=1 LIMITLINE_MACHINES=1 LIMITLINE_HOSTS= LIMITLINE_PHAROS_RUNS="$TEST_HOME/no-runs" "$BIN" doctor < /dev/null)
-printf '%s' "$doc_empty" | grep -q -F 'pharos runs: none; process scan sees 0 agent processes' \
+doc_empty=$(LIMITLINE_LAUNCHCTL="$lc_stub" LIMITLINE_FLEET=1 LIMITLINE_MACHINES=1 LIMITLINE_PHAROS_SUMMARY="$TEST_HOME/none.json" "$BIN" doctor < /dev/null)
+printf '%s' "$doc_empty" | grep -q -F 'pharos summary: not found' \
   && printf '%s' "$doc_empty" | grep -q -F 'fleet: no cache yet' \
-  && printf '%s' "$doc_empty" | grep -q -F 'machines: no hosts' \
+  && printf '%s' "$doc_empty" | grep -q -F 'machines: no hosts in Pharos' \
   && printf '%s' "$doc_empty" | grep -q -F 'refresher: missing' \
-  && printf '%s' "$doc_empty" | grep -q -F 'sync_dir: not set' \
+  && ! printf '%s' "$doc_empty" | grep -q -F 'sync_dir' \
   && check "doctor-fleet-sources" "yes" "yes" || check "doctor-fleet-sources" "$doc_empty" "sources and reasons"
 doc_cloud=$(CLAUDE_CODE_REMOTE=true LIMITLINE_LAUNCHCTL="$lc_stub" "$BIN" doctor < /dev/null)
 printf '%s' "$doc_cloud" | grep -q -F 'session: cloud-hosted' \
@@ -965,7 +877,7 @@ printf '%s' "$cur_host" | grep -q -F 'cursor 7d ~11%' \
 cur_report=$(LIMITLINE_TOOL=cursor LIMITLINE_CURSOR_LOG="$FIX/providers/cursor-usage.jsonl" "$BIN" report)
 printf '%s' "$cur_report" | grep -q -F '~11% estimate' \
   && check "cursor-estimate-report" "yes" "yes" || check "cursor-estimate-report" "$cur_report" "~11% estimate"
-cur_nudge=$(NO_COLOR=1 LIMITLINE_NUDGES=1 LIMITLINE_CURSOR_LOG="$FIX/providers/cursor-usage.jsonl" LIMITLINE_CODEX_DIR="$TEST_HOME/no-codex" "$BIN" < "$FIX/over_80.json" | strip_ansi)
+cur_nudge=$(NO_COLOR=1 LIMITLINE_NUDGES=1 LIMITLINE_PHAROS_USAGE="$(LIMITLINE_CURSOR_LOG="$FIX/providers/cursor-usage.jsonl" LIMITLINE_CODEX_DIR="$TEST_HOME/no-codex" pharos_usage codex cursor)" "$BIN" < "$FIX/over_80.json" | strip_ansi)
 printf '%s' "$cur_nudge" | grep -q -F '→ cursor ~11% estimate' \
   && check "cursor-estimate-nudge" "yes" "yes" || check "cursor-estimate-nudge" "$cur_nudge" "→ cursor ~11% estimate"
 
@@ -1016,7 +928,7 @@ printf '%s' "$plan_line" | grep -q -F $'\033[33m+74%' \
   && check "plan-status-line-colour" "yes" "yes" || check "plan-status-line-colour" "$(printf '%s' "$plan_line" | cat -v)" "coloured live percent"
 plan_seg=$(NO_COLOR=1 LIMITLINE_SEGMENTS="model,cursor+grok" "$BIN" < "$FIX/no_rate_limits.json")
 check "plan-segment-alias" "$plan_seg" 'Opus 5.5 │ cursor+grok +74% · Fri 05:22 · grok 7d 14 tok'
-plan_nudge=$(NO_COLOR=1 LIMITLINE_NUDGES=1 "$BIN" < "$FIX/over_80.json" | strip_ansi)
+plan_nudge=$(NO_COLOR=1 LIMITLINE_NUDGES=1 LIMITLINE_PHAROS_USAGE="$(pharos_usage cursor grok xai-plan)" "$BIN" < "$FIX/over_80.json" | strip_ansi)
 printf '%s' "$plan_nudge" | grep -q -F '→ cursor ok' \
   && check "plan-nudge-no-cursor-ok" "no" "yes" || check "plan-nudge-no-cursor-ok" "yes" "yes"
 
@@ -1118,17 +1030,14 @@ rm -rf "$plan_home"
 unset LIMITLINE_TOOL
 unset LIMITLINE_XAI_PLAN LIMITLINE_GROK_LINE LIMITLINE_CURSOR_LOG LIMITLINE_GROK_DIR LIMITLINE_GROK_LOG
 
-# Background jobs (0.5): one JSON per job, reported by any script.
-export LIMITLINE_JOBS_DIR="$TEST_HOME/jobs"
-export LIMITLINE_JOBS_LINE="$TEST_HOME/jobs.line"
-export LIMITLINE_HOST=mini
-job_out=$("$BIN" job update mining --done 62 --total 1842 --status running)
-check "job-update" "$job_out" 'mining 62/1842'
-check "job-file" "$(python3 -c 'import json,sys; d=json.load(open(sys.argv[1])); print(d["name"], d["machine"], d["done"], d["total"], d["status"], d["started_at"], d["updated_at"])' "$LIMITLINE_JOBS_DIR/mining.json")" 'mining mini 62 1842 running 1762056000 1762056000'
-LIMITLINE_NOW=1762056060 "$BIN" job update mining --done 70 --failed 3 >/dev/null
-check "job-merge" "$(python3 -c 'import json,sys; d=json.load(open(sys.argv[1])); print(d["done"], d["total"], d["failed"], d["started_at"], d["updated_at"])' "$LIMITLINE_JOBS_DIR/mining.json")" '70 1842 3 1762056000 1762056060'
-"$BIN" job update backup --status ok >/dev/null
-check "jobs-line" "$(cat "$LIMITLINE_JOBS_LINE")" 'jobs mining 70/1842 ✗3 · backup ok 04:00'
+# Reported jobs moved to Pharos (`pharos job update`); limitline shows them from summary.json.
+job_moved=$("$BIN" job update mining --done 1 2>&1); job_code=$?
+[[ "$job_code" -ne 0 ]] && printf '%s' "$job_moved" | grep -q -F 'pharos job update' \
+  && check "job-moved-to-pharos" "yes" "yes" || check "job-moved-to-pharos" "$job_code $job_moved" "points at pharos job"
+make_summary "$TEST_HOME/s-jobs.json" '{"running":3,"failed":1}' '[]' '[{"name":"mining","machine":"mini","status":"running","kind":"active","done":70,"total":1842,"failed":3,"text":"mining 70/1842 ✗3","log":"mining.log"},{"name":"backup","machine":"mini","status":"ok","kind":"ok","text":"backup ok 04:00"}]'
+export LIMITLINE_PHAROS_SUMMARY="$TEST_HOME/s-jobs.json"
+"$BIN" refresh >/dev/null
+check "jobs-line" "$(cat "$XDG_CACHE_HOME/limitline/jobs.line")" 'jobs mining 70/1842 ✗3 · backup ok 04:00'
 jobs_line=$(NO_COLOR=1 "$BIN" < "$FIX/no_rate_limits.json")
 check "jobs-status-line" "$jobs_line" 'Opus 5.5 │ ctx ▓▓░░░ ·41% │ $0.12 │ jobs mining 70/1842 ✗3 · backup ok 04:00'
 jobs_off=$(NO_COLOR=1 LIMITLINE_JOBS=off "$BIN" < "$FIX/no_rate_limits.json")
@@ -1137,209 +1046,40 @@ jobs_two=$(NO_COLOR=1 LIMITLINE_LINES=2 "$BIN" < "$FIX/full.json" | tail -n 1)
 printf '%s' "$jobs_two" | grep -q -F 'jobs mining' && check "jobs-line-two" "yes" "yes" || check "jobs-line-two" "$jobs_two" "jobs on line 2"
 jobs_status=$("$BIN" status)
 printf '%s' "$jobs_status" | grep -q -F 'jobs: mining 70/1842 ✗3 · backup ok 04:00' \
-  && printf '%s' "$jobs_status" | grep -q -F 'mining  mini  running  70/1842  3 failed  updated ' \
-  && check "jobs-status-block" "yes" "yes" || check "jobs-status-block" "$jobs_status" "Jobs block"
+  && printf '%s' "$jobs_status" | grep -q -F 'mining  mini  running  70/1842  mining.log' \
+  && check "jobs-status-block" "yes" "yes" || check "jobs-status-block" "$jobs_status" "Jobs block from Pharos"
+export LIMITLINE_PHAROS_SUMMARY="$summary_fix"
+"$BIN" refresh >/dev/null
 
-# A pid that is gone makes an unfinished job "dead"; a live pid stays running.
-sleep 0 &
-dead_pid=$!
-wait "$dead_pid" 2>/dev/null
-"$BIN" job update zombie --done 5 --total 10 --pid "$dead_pid" >/dev/null
-"$BIN" job update alive --pid "$$" >/dev/null
-"$BIN" job update finished --status ok --pid "$dead_pid" >/dev/null
-dead_list=$("$BIN" job list)
-printf '%s' "$dead_list" | grep -q -F 'zombie  mini  dead  5/10' \
-  && printf '%s' "$dead_list" | grep -q -F 'alive  mini  running' \
-  && printf '%s' "$dead_list" | grep -q -F 'finished  mini  ok' \
-  && check "job-dead-pid" "yes" "yes" || check "job-dead-pid" "$dead_list" "dead, running, ok"
-other=$(LIMITLINE_HOST=worker "$BIN" job list)
-printf '%s' "$other" | grep -q -F 'zombie  mini  running' \
-  && check "job-other-machine-pid" "yes" "yes" || check "job-other-machine-pid" "$other" "no pid check for another machine"
-python3 "$ROOT/lib/refresh.py"
-printf '%s' "$(cat "$LIMITLINE_JOBS_LINE")" | grep -q -F 'zombie dead 5/10' \
-  && check "jobs-refresh-dead" "yes" "yes" || check "jobs-refresh-dead" "$(cat "$LIMITLINE_JOBS_LINE")" "zombie dead"
+# Watch (read-only): rows from Pharos's summary, logs in a pager, and keys that would act say so.
+pharos_spy="$TEST_HOME/pharos-spy"
+mkdir -p "$pharos_spy"
+printf '#!/bin/sh\necho "$@" >> "%s/calls"\n' "$pharos_spy" > "$pharos_spy/pharos"; chmod +x "$pharos_spy/pharos"
+tui_out=$(PATH="$pharos_spy:$PATH" LIMITLINE_PAGER=cat LIMITLINE_WATCH_KEYS="l r down s P l q" "$BIN" watch)
+printf '%s' "$tui_out" | grep -q -F '› run-a  cursor  demo  running  12m' \
+  && printf '%s' "$tui_out" | grep -q -F '> logs run-a' && printf '%s' "$tui_out" | grep -q -x 'ok' \
+  && printf '%s' "$tui_out" | grep -q -F '> read-only: use Pharos (pharos resume|stop run-a' \
+  && printf '%s' "$tui_out" | grep -q -F '> run-d: no log file here' \
+  && check "tui-read-only" "yes" "yes" || check "tui-read-only" "$tui_out" "rows, log, read-only messages"
+[[ ! -e "$pharos_spy/calls" ]] && check "tui-never-runs-pharos" "yes" "yes" || check "tui-never-runs-pharos" "$(cat "$pharos_spy/calls")" "no pharos call"
+tui_none=$(LIMITLINE_PHAROS_SUMMARY="$TEST_HOME/none.json" LIMITLINE_WATCH_KEYS="q" "$BIN" watch)
+printf '%s' "$tui_none" | grep -q -F '(no recent Pharos runs or jobs)' \
+  && check "tui-no-pharos" "yes" "yes" || check "tui-no-pharos" "$tui_none" "empty list"
+pty_got=$(HOME="$TEST_HOME" python3 "$ROOT/tests/pty_watch.py" "$BIN")
+check "tui-pty" "$pty_got" "exited selected-second cursor-restored"
 
-# A recycled pid (0.9.0): the process start time is stored with the pid, and a live
-# process that started later than the recorded one is not the job.
-sleep 30 &
-reuse_pid=$!
-"$BIN" job update reused --done 1 --total 9 --pid "$reuse_pid" >/dev/null
-"$BIN" job update samepid --done 1 --total 9 --pid "$reuse_pid" >/dev/null
-recorded=$(python3 -c 'import json,sys; d=json.load(open(sys.argv[1])); print(isinstance(d.get("pid_start"), int) and d["pid_start"] > 0)' "$LIMITLINE_JOBS_DIR/reused.json")
-check "job-pid-start-recorded" "$recorded" 'True'
-python3 -c 'import json,sys; p=sys.argv[1]; d=json.load(open(p)); d["pid_start"] -= 1000; json.dump(d, open(p, "w"))' "$LIMITLINE_JOBS_DIR/reused.json"
-reuse_list=$("$BIN" job list)
-printf '%s' "$reuse_list" | grep -q -F 'reused  mini  dead  1/9' \
-  && printf '%s' "$reuse_list" | grep -q -F 'samepid  mini  running  1/9' \
-  && check "job-pid-reused-dead" "yes" "yes" || check "job-pid-reused-dead" "$reuse_list" "reused dead, samepid running"
-kill "$reuse_pid" 2>/dev/null; wait "$reuse_pid" 2>/dev/null
-"$BIN" job rm reused >/dev/null; "$BIN" job rm samepid >/dev/null
-
-# Finished jobs leave the line after fleet_window; job list still has them.
-printf '%s\n' '{"name": "old", "machine": "mini", "status": "ok", "started_at": 1762000000, "updated_at": 1762000000}' > "$LIMITLINE_JOBS_DIR/old.json"
-"$BIN" status | grep -q -F 'old  mini' && check "job-old-hidden" "shown" "hidden" || check "job-old-hidden" "hidden" "hidden"
-"$BIN" job list | grep -q -F 'old  mini  ok' && check "job-list-all" "yes" "yes" || check "job-list-all" "no" "yes"
-if "$BIN" job update ../escape --done 1 >/dev/null 2>&1; then check "job-name-check" "accepted" "refused"; else check "job-name-check" "refused" "refused"; fi
-if "$BIN" job update ok-name --done many >/dev/null 2>&1; then check "job-number-check" "accepted" "refused"; else check "job-number-check" "refused" "refused"; fi
-"$BIN" job rm old && [[ ! -f "$LIMITLINE_JOBS_DIR/old.json" ]] && check "job-rm" "yes" "yes" || check "job-rm" "no" "yes"
-rm -rf "$LIMITLINE_JOBS_DIR" "$LIMITLINE_JOBS_LINE"
-unset LIMITLINE_JOBS_DIR LIMITLINE_JOBS_LINE LIMITLINE_HOST
-
-# Interactive watch (0.7). Keys are replayed without a terminal; a fake pharos records calls.
-tui_home="$TEST_HOME/tui"
-mkdir -p "$tui_home"
-printf '#!/bin/sh\necho "$@" >> "%s/calls"\nif [ "$1" = logs ]; then echo "log line for $2"; else echo "ok $*"; fi\n' "$tui_home" > "$tui_home/pharos"
-chmod +x "$tui_home/pharos"
-tui() { LIMITLINE_PHAROS="$tui_home/pharos" LIMITLINE_PAGER=cat LIMITLINE_JOBS_DIR="$tui_home/jobs" LIMITLINE_JOBS_LINE="$tui_home/jobs.line" LIMITLINE_HOST=mini LIMITLINE_WATCH_KEYS="$1" "$BIN" watch; }
-tui_out=$(LIMITLINE_PHAROS_RUNS="$FIX/fleet/runs" tui "r down s y s n p P U l q")
-check "tui-calls" "$(cat "$tui_home/calls" | tr '\n' ',')" 'resume run-a,stop run-b,pause,unpause,logs run-b,'
-printf '%s' "$tui_out" | grep -q -F '› run-a  cursor  demo  running' \
-  && printf '%s' "$tui_out" | grep -q -F '> stop run run-b? y/n' \
-  && printf '%s' "$tui_out" | grep -q -F '> cancelled' \
-  && printf '%s' "$tui_out" | grep -q -F '> Pharos has no per-run pause; P pauses new runs, s stops this one' \
-  && printf '%s' "$tui_out" | grep -q -F 'log line for run-b' \
-  && printf '%s' "$tui_out" | grep -q -F 'selected: run-b' \
-  && check "tui-runs" "yes" "yes" || check "tui-runs" "$tui_out" "run actions and messages"
-nopharos=$(PATH="$nojq" LIMITLINE_PHAROS_RUNS="$FIX/fleet/runs" LIMITLINE_WATCH_KEYS="r q" "$BIN" watch)
-printf '%s' "$nopharos" | grep -q -F '> pharos not found on PATH' \
-  && check "tui-no-pharos" "yes" "yes" || check "tui-no-pharos" "$nopharos" "pharos not found"
-
-# Jobs: SIGSTOP, SIGCONT, and SIGTERM to a live local pid, and the job file follows.
-sleep 30 &
-sleeper=$!
-printf 'line one\nline two\n' > "$tui_home/sleeper.log"
-LIMITLINE_JOBS_DIR="$tui_home/jobs" LIMITLINE_JOBS_LINE="$tui_home/jobs.line" LIMITLINE_HOST=mini "$BIN" job update sleeper --done 1 --total 4 --pid "$sleeper" --log "$tui_home/sleeper.log" >/dev/null
-export LIMITLINE_PHAROS_RUNS="$TEST_HOME/no-runs"
-paused_out=$(tui "p q")
-pstate=$(ps -o stat= -p "$sleeper" | tr -d ' ')
-printf '%s' "$paused_out" | grep -q -F "> sleeper: paused (pid $sleeper)" && [[ "$pstate" == T* ]] \
-  && grep -q '"status": "paused"' "$tui_home/jobs/sleeper.json" \
-  && check "tui-job-pause" "yes" "yes" || check "tui-job-pause" "$paused_out $pstate" "stopped process"
-resumed_out=$(tui "r l q")
-pstate=$(ps -o stat= -p "$sleeper" | tr -d ' ')
-printf '%s' "$resumed_out" | grep -q -F "> sleeper: resumed (pid $sleeper)" && [[ "$pstate" != T* ]] \
-  && printf '%s' "$resumed_out" | grep -q -F 'line two' \
-  && check "tui-job-resume-logs" "yes" "yes" || check "tui-job-resume-logs" "$resumed_out $pstate" "running again, log shown"
-stopped_out=$(tui "s y q")
-wait "$sleeper" 2>/dev/null
-if kill -0 "$sleeper" 2>/dev/null; then alive=yes; else alive=no; fi
-printf '%s' "$stopped_out" | grep -q -F "> sleeper: stopped (pid $sleeper)" && [[ "$alive" == no ]] \
-  && grep -q '"status": "stopped"' "$tui_home/jobs/sleeper.json" \
-  && check "tui-job-stop" "yes" "yes" || check "tui-job-stop" "$stopped_out alive=$alive" "terminated"
-LIMITLINE_JOBS_DIR="$tui_home/jobs" LIMITLINE_JOBS_LINE="$tui_home/jobs.line" "$BIN" job update remote --pid "$$" --machine worker >/dev/null
-remote_out=$(tui "p q")
-printf '%s' "$remote_out" | grep -q -F '> remote: no live pid on this machine' \
-  && check "tui-job-other-machine" "yes" "yes" || check "tui-job-other-machine" "$remote_out" "refused"
-# A recycled pid is never signalled: the pid's process started after the recorded one.
-sleep 30 &
-victim=$!
-LIMITLINE_JOBS_DIR="$tui_home/jobs" LIMITLINE_JOBS_LINE="$tui_home/jobs.line" LIMITLINE_HOST=mini "$BIN" job update recycled --done 1 --total 4 --pid "$victim" >/dev/null
-python3 -c 'import json,sys; p=sys.argv[1]; d=json.load(open(p)); d["pid_start"] -= 1000; json.dump(d, open(p, "w"))' "$tui_home/jobs/recycled.json"
-LIMITLINE_JOBS_DIR="$tui_home/jobs" "$BIN" job rm remote >/dev/null
-recycled_out=$(tui "s y q")
-if kill -0 "$victim" 2>/dev/null; then alive=yes; else alive=no; fi
-printf '%s' "$recycled_out" | grep -q -F '> recycled: no live pid on this machine' && [[ "$alive" == yes ]] \
-  && ! grep -q '"status": "stopped"' "$tui_home/jobs/recycled.json" \
-  && check "tui-job-recycled-pid" "yes" "yes" || check "tui-job-recycled-pid" "$recycled_out alive=$alive" "refused, process untouched"
-# The job file changed after watch loaded it (same pid, new started_at): no signal.
-LIMITLINE_JOBS_DIR="$tui_home/jobs" "$BIN" job rm recycled >/dev/null
-moved=$(LIMITLINE_JOBS_DIR="$tui_home/jobs" LIMITLINE_JOBS_LINE="$tui_home/jobs.line" LIMITLINE_HOST=mini LIMITLINE_NOW=1762056000 python3 -c '
-import os, signal, sys
-sys.path.insert(0, sys.argv[1])
-import jobs, tui
-pid = int(sys.argv[2])
-jobs.update("moved", {"pid": pid, "done": 1})
-job = jobs.read_job(jobs.path_for("moved"))
-os.environ["LIMITLINE_NOW"] = "1762056100"
-jobs.update("moved", {"status": "ok"})
-jobs.update("moved", {"status": "running", "pid": pid})
-print(tui.job_signal(job, signal.SIGSTOP, "paused", "paused"))
-print(jobs.read_job(jobs.path_for("moved"))["status"])
-' "$ROOT/lib" "$victim")
-pstate=$(ps -o stat= -p "$victim" | tr -d ' ')
-check "tui-job-file-changed" "$moved|${pstate:0:1}" "$(printf '%s\n%s' 'moved: the job file changed; not paused' 'running')|S"
-# A restart lands between the signal and the status update: the new file is left alone.
-raced=$(LIMITLINE_JOBS_DIR="$tui_home/jobs" LIMITLINE_JOBS_LINE="$tui_home/jobs.line" LIMITLINE_HOST=mini python3 -c '
-import os, signal, sys
-sys.path.insert(0, sys.argv[1])
-import jobs, tui
-pid = int(sys.argv[2])
-os.environ["LIMITLINE_NOW"] = "1762056200"
-jobs.update("raced", {"pid": pid, "done": 1})
-job = jobs.read_job(jobs.path_for("raced"))
-real_kill = os.kill
-def kill_then_restart(target, sig):
-    real_kill(target, sig)
-    os.environ["LIMITLINE_NOW"] = "1762056300"
-    jobs.update("raced", {"status": "ok"})
-    jobs.update("raced", {"status": "running", "pid": os.getpid()})
-tui.os.kill = kill_then_restart
-print(tui.job_signal(job, signal.SIGCONT, "running", "resumed"))
-after = jobs.read_job(jobs.path_for("raced"))
-print(after["status"], after["pid"] == os.getpid(), after["started_at"])
-' "$ROOT/lib" "$victim")
-check "tui-job-update-after-restart" "$raced" "$(printf '%s\n%s' "raced: resumed (pid $victim); the job restarted, its file was left as is" 'running True 1762056300')"
-kill "$victim" 2>/dev/null; wait "$victim" 2>/dev/null
-unset LIMITLINE_PHAROS_RUNS
-once_watch=$(LIMITLINE_WATCH_ONCE=1 "$BIN" watch)
-printf '%s' "$once_watch" | grep -q -F 'Runs and jobs' \
-  && check "watch-once-not-interactive" "interactive" "plain" || check "watch-once-not-interactive" "plain" "plain"
-
-printf 'pharos = "%s"\n' "$tui_home/pharos" > "$tui_home/config.toml"
-cfg_pharos=$(LIMITLINE_CONFIG="$tui_home/config.toml" LIMITLINE_PHAROS_RUNS="$FIX/fleet/runs" LIMITLINE_WATCH_KEYS="r q" "$BIN" watch)
-printf '%s' "$cfg_pharos" | grep -q -F '> pharos resume run-a: ok resume run-a' \
-  && check "tui-pharos-config" "yes" "yes" || check "tui-pharos-config" "$cfg_pharos" "pharos from config"
-pty_got=$(LIMITLINE_PHAROS_RUNS="$FIX/fleet/runs" HOME="$TEST_HOME" python3 "$ROOT/tests/pty_watch.py" "$BIN")
-check "tui-pty" "$pty_got" "exited selected-b cursor-restored"
-
-# 30-day history (0.8): plan samples, sparklines, the weekly report, and jobs per machine.
-hist_home="$TEST_HOME/hist"
-mkdir -p "$hist_home/plans"
-export LIMITLINE_HISTORY_DIR="$hist_home/plans" LIMITLINE_JOBS_HISTORY="$hist_home/jobs-history.jsonl"
-export LIMITLINE_JOBS_DIR="$hist_home/jobs" LIMITLINE_JOBS_LINE="$hist_home/jobs.line" LIMITLINE_HOST=mini
-LIMITLINE_TOOL=codex LIMITLINE_CLAUDE_SNAPSHOT="$TEST_HOME/claude-snapshot.json" LIMITLINE_CODEX_DIR="$codex_prov" LIMITLINE_CURSOR_LOG="$FIX/providers/cursor-usage.jsonl" "$BIN" status >/dev/null
-check "history-record-plans" "$(ls "$hist_home/plans" | tr '\n' ' ')" 'claude-5h.tsv claude-7d.tsv codex-5h.tsv codex-7d.tsv '
-check "history-record-line" "$(cat "$hist_home/plans/codex-7d.tsv")" '1762056000 55 1762419600'
-LIMITLINE_NOW=1762056300 LIMITLINE_TOOL=codex LIMITLINE_CLAUDE_SNAPSHOT="$TEST_HOME/claude-snapshot.json" LIMITLINE_CODEX_DIR="$codex_prov" "$BIN" status >/dev/null
-check "history-ten-minute-gap" "$(wc -l < "$hist_home/plans/codex-7d.tsv" | tr -d ' ')" '1'
-LIMITLINE_NOW=1762056700 LIMITLINE_TOOL=codex LIMITLINE_CLAUDE_SNAPSHOT="$TEST_HOME/claude-snapshot.json" LIMITLINE_CODEX_DIR="$codex_prov" "$BIN" status >/dev/null
-check "history-second-sample" "$(wc -l < "$hist_home/plans/codex-7d.tsv" | tr -d ' ')" '2'
-rm -f "$hist_home/plans/"*.tsv
-printf '%s\n' '1758000000 99 -' '1761645600 92 1761850000' '1761649200 70 1761850000' '1761818400 40 1761850000' \
-  '1761890400 10 1762419600' '1761980400 60 1762419600' '1762052400 58 1762419600' > "$hist_home/plans/claude-7d.tsv"
-hist_got=$("$BIN" history | sed -n 4p)
-check "history-spark" "$hist_got" '  claude-7d  ........................█.▄▁▅▅  peak 92% Oct 28 · last 58%'
-hist_week=$("$BIN" report --week | sed -n 4p)
-check "report-week-plan" "$hist_week" '  claude-7d  .█.▄▁▅▅  peak 92% Oct 28 · avg 52% · 1 day over 80% · 1 reset seen'
-check "history-days" "$("$BIN" history --days 7 | sed -n 4p)" '  claude-7d  .█.▄▁▅▅  peak 92% Oct 28 · last 58%'
-LIMITLINE_NOW=1762059600 "$BIN" status >/dev/null
-check "history-prunes-30d" "$(head -n 1 "$hist_home/plans/claude-7d.tsv" | cut -d' ' -f1)" '1761645600'
-
-# Finished jobs are kept once each, per machine; a dead pid is history too.
-"$BIN" job update backup --status ok --done 120 >/dev/null
-"$BIN" job update backup --status ok >/dev/null
-"$BIN" job update mining --machine worker --done 1800 --total 1842 --failed 42 --status failed >/dev/null
-sleep 0 &
-gone=$!
-wait "$gone" 2>/dev/null
-"$BIN" job update crawler --done 3 --pid "$gone" >/dev/null
-python3 "$ROOT/lib/refresh.py"
-check "jobs-history-once" "$(wc -l < "$hist_home/jobs-history.jsonl" | tr -d ' ')" '3'
-grep -q '"name": "crawler".*"status": "dead"' "$hist_home/jobs-history.jsonl" \
-  && check "jobs-history-dead" "yes" "yes" || check "jobs-history-dead" "$(cat "$hist_home/jobs-history.jsonl")" "dead recorded"
-jobs_hist=$("$BIN" history | sed -n '/^jobs by machine/,$p')
-check "history-jobs-by-machine" "$jobs_hist" "$(printf '%s\n' 'jobs by machine' '  mini    2 jobs · 1 ok · 1 dead · 123 items · last crawler dead Nov 2 04:00' '  worker  1 job · 1 failed · 1800 items · 42 item failures · last mining failed Nov 2 04:00')"
-md_week=$("$BIN" report --week --md)
-printf '%s' "$md_week" | grep -q -F '| claude-7d `.█.▄▁▅▅` | 5 | 92% on Oct 28 | 52% | 1 | 1 |' \
-  && printf '%s' "$md_week" | grep -q -F -- '- worker  1 job · 1 failed' \
-  && check "report-week-md" "yes" "yes" || check "report-week-md" "$md_week" "markdown table and jobs"
-empty_hist=$(LIMITLINE_HISTORY_DIR="$hist_home/none" LIMITLINE_JOBS_HISTORY="$hist_home/none.jsonl" "$BIN" history)
-printf '%s' "$empty_hist" | grep -q -F 'no samples yet' && printf '%s' "$empty_hist" | grep -q -F 'no finished jobs yet' \
-  && check "history-empty" "yes" "yes" || check "history-empty" "$empty_hist" "empty messages"
-# A cursor estimate is never recorded as history.
-LIMITLINE_CURSOR_LOG="$FIX/providers/cursor-usage.jsonl" LIMITLINE_NOW=1762070000 "$BIN" status >/dev/null
-[[ -e "$hist_home/plans/cursor-7d.tsv" ]] && check "history-skips-estimate" "recorded" "skipped" || check "history-skips-estimate" "skipped" "skipped"
-rm -rf "$hist_home"
+# History is Pharos's (`pharos usage --report`); limitline shows ~/.pharos/usage-report.json.
+report_fix="$TEST_HOME/usage-report.json"
+printf '%s\n' '{"generated_at":1762056000,"since":"2025-10-06","plans":[{"plan":"claude","weeks":[{"week":"2025-10-20","peak_pct":40},{"week":"2025-10-27","peak_pct":100},{"week":"2025-11-03","peak_pct":70}],"weeks_measured":3,"avg_peak_pct":70,"weeks_at_limit":1,"weeks_over_cap":1,"price_month":200,"unused_month":60}]}' > "$report_fix"
+check "history-from-pharos" "$(LIMITLINE_PHAROS_REPORT="$report_fix" "$BIN" history | sed -n 3p)" 'claude       ▄█▆  avg peak 70% · 1 at limit · 1 over 75% · $60/month unused'
+check "report-week-plan" "$(LIMITLINE_PHAROS_REPORT="$report_fix" "$BIN" report --week | sed -n 3p)" "claude: this week's peak 70%, 1 weeks at the limit of 3 measured"
+LIMITLINE_PHAROS_REPORT="$report_fix" "$BIN" report --week --md | grep -q -F "# limitline weekly report" \
+  && check "report-week-md" "yes" "yes" || check "report-week-md" "no" "markdown"
+LIMITLINE_PHAROS_REPORT="$TEST_HOME/none.json" "$BIN" history | grep -q -F 'no usage history from Pharos yet' \
+  && check "history-empty" "yes" "yes" || check "history-empty" "no" "empty message"
+hist_spy="$TEST_HOME/hist-spy"
+LIMITLINE_HISTORY_DIR="$hist_spy" LIMITLINE_TOOL=codex LIMITLINE_CLAUDE_SNAPSHOT="$TEST_HOME/claude-snapshot.json" LIMITLINE_CODEX_DIR="$codex_prov" "$BIN" status >/dev/null
+[[ ! -e "$hist_spy" ]] && check "status-keeps-no-plan-history" "yes" "yes" || check "status-keeps-no-plan-history" "wrote $(ls "$hist_spy")" "no plan history in limitline"
 unset LIMITLINE_HISTORY_DIR LIMITLINE_JOBS_HISTORY LIMITLINE_JOBS_DIR LIMITLINE_JOBS_LINE LIMITLINE_HOST
 
 # Typical speed without the Codex scan: average of 8 runs after one warmup.
@@ -1364,7 +1104,7 @@ else
 fi
 
 # Warm fleet and machine caches, still with no ssh and no provider scan.
-LIMITLINE_PHAROS_RUNS="$FIX/fleet/runs" LIMITLINE_HOSTS=mini LIMITLINE_MACHINE_DIR="$FIX/machines" "$BIN" refresh
+"$BIN" refresh
 warm_ms=$(BIN="$BIN" python3 -c '
 import subprocess, time, os
 bin = os.environ["BIN"]

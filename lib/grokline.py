@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """Grok plan and 7-day token text. Grok has no local quota, so this is never a percent."""
-import json, os, subprocess
+import os
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
@@ -48,17 +48,7 @@ def brief(data, long=False):
     return " · ".join(parts)
 
 
-def provider_data():
-    path = os.path.join(ROOT, "providers", "grok")
-    try:
-        proc = subprocess.run([path], capture_output=True, timeout=5, env=os.environ.copy())
-        data = json.loads(proc.stdout.decode() or "{}")
-    except Exception:
-        data = {}
-    return data if isinstance(data, dict) else {}
-
-
-def segment(data=None):
-    """The status-line text: `grok SuperGrok Plus · 7d 1.2M tok`."""
-    text = brief(provider_data() if data is None else data)
+def segment(data):
+    """The status-line text: `grok SuperGrok Plus · 7d 1.2M tok`, from a reading Pharos gave."""
+    text = brief(data or {})
     return ("grok " + text) if text else ""

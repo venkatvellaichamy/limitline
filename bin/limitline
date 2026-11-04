@@ -84,7 +84,6 @@ VALUE_MODE=""
 VITALS_MODE=""
 ALERTS_MODE="off"
 QUIET=""
-SYNC_DIR=""
 PACE_SET=0
 SPARK_SET=0
 NUDGE_SET=0
@@ -160,7 +159,6 @@ load_config() {
       vitals) VITALS_MODE="$val"; VITALS_SET=1 ;;
       alerts) ALERTS_MODE="$val" ;;
       quiet|quiet_hours) QUIET="$val" ;;
-      sync_dir) SYNC_DIR="$val" ;;
       fleet) FLEET_MODE="$val"; FLEET_SET=1 ;;
       machines) MACHINES_MODE="$val"; MACHINES_SET=1 ;;
       hosts) HOSTS_RAW="$val" ;;
@@ -224,7 +222,6 @@ if [[ -n "${LIMITLINE_VALUE:-}" ]]; then VALUE_MODE="$LIMITLINE_VALUE"; VALUE_SE
 if [[ -n "${LIMITLINE_VITALS:-}" ]]; then VITALS_MODE="$LIMITLINE_VITALS"; VITALS_SET=1; fi
 if [[ -n "${LIMITLINE_ALERTS:-}" ]]; then ALERTS_MODE="$LIMITLINE_ALERTS"; fi
 if [[ -n "${LIMITLINE_QUIET:-}" ]]; then QUIET="$LIMITLINE_QUIET"; fi
-if [[ -n "${LIMITLINE_SYNC_DIR:-}" ]]; then SYNC_DIR="$LIMITLINE_SYNC_DIR"; fi
 if [[ -n "${LIMITLINE_FLEET:-}" ]]; then FLEET_MODE="$LIMITLINE_FLEET"; FLEET_SET=1; fi
 if [[ -n "${LIMITLINE_MACHINES:-}" ]]; then MACHINES_MODE="$LIMITLINE_MACHINES"; MACHINES_SET=1; fi
 if [[ -n "${LIMITLINE_FLEET_TTL:-}" ]]; then FLEET_TTL="$LIMITLINE_FLEET_TTL"; fi
@@ -1050,13 +1047,6 @@ if [[ "$ON_VITALS" == "1" && -n "$cost_usd" ]]; then
   append_sample "$cost_file" "$NOW" "$cost_usd"
 fi
 
-if [[ -n "$SYNC_DIR" ]]; then
-  snap="${LIMITLINE_CLAUDE_SNAPSHOT:-$cache_dir/claude.json}"
-  if [[ -f "$snap" ]]; then
-    LIMITLINE_SYNC_DIR="$SYNC_DIR" python3 "$LIMITLINE_ROOT/lib/sync.py" publish claude < "$snap" 2>/dev/null || true
-  fi
-fi
-
 if [[ -n "$cwd" && "$cwd" != "$HOME" ]]; then
   project=${cwd##*/}
   case "$project" in
@@ -1194,9 +1184,8 @@ if [[ "$ON_GROK" == "1" ]]; then
 fi
 # Background jobs from limitline job update. Nothing is read until a job was reported.
 jobs_text=""
-jobs_dir="${LIMITLINE_JOBS_DIR:-$cache_dir/jobs}"
 jobs_file="${LIMITLINE_JOBS_LINE:-$cache_dir/jobs.line}"
-if [[ "$ON_JOBS" == "1" && -d "$jobs_dir" ]]; then
+if [[ "$ON_JOBS" == "1" ]]; then
   if [[ -f "$jobs_file" ]]; then
     jobs_text=$(fresh_line "$jobs_file" "$JOBS_TTL")
     if [[ -z "$jobs_text" && -s "$jobs_file" ]]; then

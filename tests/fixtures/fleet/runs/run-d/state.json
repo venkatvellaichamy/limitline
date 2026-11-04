@@ -1,7 +1,0 @@
-{
-  "id": "run-d",
-  "status": "failed",
-  "tool": "grok",
-  "repo": "/var/builds/widget",
-  "started_at": "2025-11-02T03:30:00"
-}
