@@ -434,7 +434,27 @@ def fleet_doctor():
     return lines
 
 
+# Settings that moved to Pharos (~/.pharos/usage.toml) or were removed with the split.
+OBSOLETE_KEYS = {
+    "hosts": "set hosts in ~/.pharos/usage.toml", "ssh_timeout": "Pharos probes hosts",
+    "mem_free_warn": "Pharos probes hosts", "sync_dir": "removed; other Macs come through Pharos",
+    "fleet_window": "Pharos decides what is recent", "xai_ttl": "Pharos fetches the Grok plan",
+    "agy_ttl": "Pharos runs agy /usage", "agy": "Pharos runs agy /usage", "agy_fetch": "Pharos runs agy /usage",
+    "pharos": "limitline no longer runs pharos",
+}
+
+
+def obsolete_notices():
+    try:
+        found = load_lib("config").values()
+    except Exception:
+        return []
+    return ["config: %s is no longer used (%s)" % (key, OBSOLETE_KEYS[key]) for key in sorted(found) if key in OBSOLETE_KEYS]
+
+
 def cmd_doctor():
+    for line in obsolete_notices():
+        print(line)
     for tool in ("jq", "python3", "awk", "git"):
         found = shutil.which(tool)
         print("%s: %s" % (tool, "yes" if found else "no"))

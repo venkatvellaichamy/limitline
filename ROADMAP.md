@@ -34,8 +34,8 @@ If a feature measures, stores, or decides, it belongs in Pharos.
 |---|---|---|
 | 0.1.0 – 0.9.0 | Status line, themes, fleet, watch, history, live Cursor+Grok | Shipped |
 | **0.10.0** | Display only: the five-line view, Pharos as the source | Merged, **needs tag** |
-| **0.11.0** | Live, but quiet | Built on a branch |
-| **0.12.0** | Finish the split | Planned |
+| **0.11.0** | Live, but quiet | Merged (PR #11), **needs tag** |
+| **0.12.0** | Finish the split | This PR (version files bumped to 0.12.0) |
 | **0.13.0** | Display hardening | Planned |
 | **0.14.0** | Every surface shows the same thing | Planned |
 | **1.0.0** | Stable display of a versioned Pharos contract | Planned |
@@ -65,7 +65,7 @@ Already on `main` (PRs #9 and #10) but still labelled 0.9.0. Release it as-is.
 - agy `/usage`, the Grok plan fetch, the hosts ssh probe and the cross-tool readers moved to `pharos usage`.
 - Review fixes F1–F5 and the owner items O1–O3 from the 2026-11-03 whole-repo review.
 
-### 0.11.0 — Live, but quiet (branch `feat/live-events`)
+### 0.11.0 — Live, but quiet (merged, PR #11, needs tag)
 
 - The `▶` turns while jobs run and stands still when nothing runs.
 - A new Pharos event (run merged or failed, a plan crossing 75/90/100%, a host offline) shows dimmed for 30 seconds.
@@ -73,25 +73,24 @@ Already on `main` (PRs #9 and #10) but still labelled 0.9.0. Release it as-is.
 - The `left` line shows the age of Pharos's reading when it is over 5 minutes old.
 - `animate = "off"` keeps the information and drops the motion.
 
-### 0.12.0 — Finish the split
+### 0.12.0 — Finish the split (this PR)
 
-Remove what still measures or decides, after Pharos has an equivalent. Each item is either moved to Pharos or deleted; nothing is removed before Pharos covers it.
+Done here, each with Pharos covering it first (Pharos 0.7.0):
 
-**The two modes, exactly.** Today, with Pharos present, the Claude row still comes from the status line input (`lib/fivelines.py` `claude_cells`), and limitline copies that reading into `~/.pharos/inbox/claude.json` (`bin/limitline`, "Relay them, as-is, to Pharos"). Both change:
+- Fleet, Runs, jobs, `watch`, and the job lines read Pharos's `summary.json` (v1, with `recent` and `jobs`). No run-file parsing, process scan, or fleet window.
+- The jobs registry moved to Pharos: `pharos job update|list|rm`. `limitline job` only points there.
+- History and the weekly report: Pharos stores them (`usage-report.json`); `limitline history` and `report --week` draw them. limitline keeps no plan or job history.
+- Nudges read the other tools' numbers from `usage.json`; without Pharos there is no tool nudge.
+- Sync between machines (`sync_dir`) is removed; other Macs come through Pharos.
+- Machine probes are gone from limitline; hosts come from `usage.json`.
+- `watch` is read-only: it lists runs and jobs and opens a log. Acting on runs is Pharos's (its CLI or Console); the keys say so and run nothing. (The owner chose read-only over "call Pharos commands".)
+- The Cursor reader no longer reads Pharos's run logs. Pharos makes that estimate.
+- Old config keys (`hosts`, `sync_dir`, `fleet_window`, `ssh_timeout`, `xai_ttl`, `agy_ttl`, `pharos`, ...) get a one-line notice in `limitline doctor`.
+- The background refresher stays, but only re-reads Pharos's files into the status line's small caches; Pharos's own launchd job does all measuring. The value meter stays: it reads Claude Code's own `~/.claude/stats-cache.json`, the tool limitline runs in.
 
-- With Pharos, the Claude row comes from `usage.json` like every other plan.
-- limitline stops writing to `~/.pharos/inbox`. Claude Code gives its limits only to the status line command, so Pharos captures them itself: **depends on Pharos** providing a `pharos statusline` command that saves Claude's reading and then hands the same input to limitline to draw. `pharos install` sets the status line to it.
-- Without Pharos, nothing changes: the Claude row comes from the status line input.
-- Tests cover both modes, and the switch between them when Pharos is installed or removed.
+Still open, because it depends on Pharos 0.8.0 (`pharos statusline`):
 
-- Providers (`providers/claude`, `codex`, `cursor`, `grok`, `spend`, `xai-plan`): keep only what the stand-alone "the tool I run in" mode needs.
-- Background refresher and its schedule: Pharos owns refresh.
-- History and the weekly report: Pharos stores history; limitline draws it.
-- Nudges and the value meter: advice comes from Pharos.
-- Sync between machines (`sync_dir`): Pharos owns it.
-- Machine probes and the jobs registry: read from Pharos.
-- `watch` actions (stop, verify, retry): call Pharos commands instead of acting on runs directly.
-- Drop config keys that no longer do anything, with a one-line notice when an old key is found.
+- With Pharos, the Claude row should come from `usage.json`, and limitline should stop writing `~/.pharos/inbox/claude.json`. Claude Code gives its limits only to the status-line command, so this needs Pharos to own that slot and pass the same input to limitline to draw. Until then the relay stays, and it is the one file limitline writes.
 
 ### 0.13.0 — Display hardening
 

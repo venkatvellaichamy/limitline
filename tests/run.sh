@@ -1192,5 +1192,13 @@ PATH="$spy:$PATH" "$BIN" refresh >/dev/null 2>&1
 [[ ! -e "$ROOT/providers/antigravity" && ! -e "$ROOT/providers/gemini" && ! -e "$ROOT/lib/xai_fetch.py" ]] \
   && check "cross-tool-readers-gone" "yes" "yes" || check "cross-tool-readers-gone" "still there" "moved to Pharos"
 
+# Old settings that moved to Pharos get a one-line notice from doctor.
+old_cfg="$TEST_HOME/old.toml"
+printf '%s\n' 'hosts = ["mini=me@mini"]' 'sync_dir = "/x"' 'theme = "emoji"' > "$old_cfg"
+old_doc=$(LIMITLINE_CONFIG="$old_cfg" "$BIN" doctor < /dev/null)
+printf '%s' "$old_doc" | grep -q -F 'config: hosts is no longer used (set hosts in ~/.pharos/usage.toml)' \
+  && printf '%s' "$old_doc" | grep -q -F 'config: sync_dir is no longer used' && ! printf '%s' "$old_doc" | grep -q -F 'config: theme' \
+  && check "doctor-obsolete-keys" "yes" "yes" || check "doctor-obsolete-keys" "$old_doc" "notices for moved keys only"
+
 printf '\n%d passed, %d failed\n' "$pass" "$fail"
 [[ "$fail" -eq 0 ]]
