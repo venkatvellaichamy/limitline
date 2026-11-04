@@ -156,6 +156,8 @@ older ✋ 5 need you │ ✗ 2 failed │ ⏸ 1 waiting on limit │ oldest 1d (
 hosts mini 82% mem free · 25% cpu │ macbook 34% · 52% │ silver 73% · 13%
 ```
 
+While Pharos jobs run, `▶` turns slowly (◐ ◓ ◑ ◒). A new Pharos event (a run merged or failed, a plan crossing 75/90/100%, a host offline) shows dimmed at the end of `today` for 30 seconds, a plan number that just moved is bold for 20 seconds, and a Pharos reading older than 5 minutes adds its age to `left`. `animate = "off"` drops the motion. Claude Code redraws on activity and every `refreshInterval` seconds; 10 keeps the motion visible at about 0.2 s of CPU per redraw.
+
 Every plan number on `left` is the amount left. The reset (`→`) appears at 25% or less. Job counts follow Pharos: done is done, merged, or a run with no changes; need you is a run with commits waiting for a check, or a failed check; retried is a run another run replaced. `older` only counts open jobs from the last 7 days. Hosts use the nicknames in `hosts = ["studio=local", "backup=user@host"]`. When the terminal is narrow, `left` drops reset times first, then the agy claude+gpt bucket; `older` drops the oldest-job note; `hosts` drops CPU load. `marks = "none"` prints plain names.
 
 A second line is `lines = 2` or `LIMITLINE_LINES=2`. When `COLUMNS` or `LIMITLINE_COLUMNS` is set, the lowest-priority segments drop until the row fits.

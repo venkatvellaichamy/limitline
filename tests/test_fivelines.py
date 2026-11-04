@@ -124,6 +124,7 @@ class FiveLines(unittest.TestCase):
         self.assertTrue(left.startswith("left  claude 7d 30%"))
 
     def test_today_and_older_from_pharos_summary(self):
+        os.environ["LL_ANIMATE"] = "off"
         self.summary(today={"running": 2, "done": 2, "need_you": 1, "retried": 1, "waiting_limit": 1},
                      older={"need_you": 1}, oldest={"id": "h", "repo": "pharos", "age_hours": 32})
         lines = plain(fivelines.build(now=NOW))
@@ -150,6 +151,48 @@ class FiveLines(unittest.TestCase):
         self.usage["generated_at"] = NOW - 3600
         self.write_usage()
         self.assertIn("✦ agy gemini —", plain(fivelines.build(now=NOW))[0])
+
+    # ---- live feel: spinner, event note, change highlight, stale age --------------------
+
+    def event(self, kind, data, ts, subject="s"):
+        folder = self.pharos / "events"
+        folder.mkdir(exist_ok=True)
+        path = folder / (datetime.fromtimestamp(ts).strftime("%Y-%m-%d") + ".jsonl")
+        with path.open("a") as handle:
+            handle.write(json.dumps({"id": 1, "ts": ts, "kind": kind, "subject": subject, "data": data}) + "\n")
+
+    def test_spinner_turns_only_while_running(self):
+        self.summary(today={"running": 1})
+        frames = {plain(fivelines.build(now=NOW + 2 * i))[1].split()[1] for i in range(4)}
+        self.assertEqual(frames, set("◐◓◑◒"))
+        self.summary(today={"running": 0})
+        self.assertEqual(plain(fivelines.build(now=NOW))[1].split()[1], "▶")
+        os.environ["LL_ANIMATE"] = "off"
+        self.summary(today={"running": 1})
+        self.assertEqual(plain(fivelines.build(now=NOW))[1].split()[1], "▶")
+
+    def test_event_note_for_30_seconds(self):
+        self.summary(today={"done": 1})
+        self.event("run.status", {"status": "merged", "repo": "pharos"}, NOW - 5)
+        self.assertTrue(plain(fivelines.build(now=NOW))[1].endswith(" · ✓ pharos merged"))
+        self.assertFalse(plain(fivelines.build(now=NOW + 40))[1].endswith("merged"))
+
+    def test_event_texts(self):
+        self.assertEqual(fivelines.event_text({"kind": "usage.threshold", "data": {"plan": "claude", "window": "7d", "threshold": 75}}), "⚠ claude 7d 75% used")
+        self.assertEqual(fivelines.event_text({"kind": "host.offline", "data": {"host": "mini"}}), "mini offline")
+        self.assertIsNone(fivelines.event_text({"kind": "usage.changed", "data": {}}), "routine moves are not announced")
+
+    def test_changed_number_is_bold_briefly(self):
+        os.environ["LL_COLOR"] = "1"
+        fivelines.build(now=NOW)
+        os.environ["LL_CLAUDE7"] = "75"
+        self.assertIn("\x1b[1;33m25%", fivelines.build(now=NOW + 5)[0], "a moved number is bold (and keeps its colour)")
+        self.assertNotIn("\x1b[1;", fivelines.build(now=NOW + 30)[0], "then plain again")
+
+    def test_old_pharos_reading_says_its_age(self):
+        self.usage["generated_at"] = NOW - 600
+        self.write_usage()
+        self.assertTrue(plain(fivelines.build(now=NOW))[0].endswith(" · 10m old"))
 
     def test_hosts_use_nicknames_and_offline(self):
         hosts = plain(fivelines.build(now=NOW))[-1]
