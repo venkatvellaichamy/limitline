@@ -79,7 +79,7 @@ def channel_of(ref):
     for name, branch in CHANNELS.items():
         if ref == branch:
             return name
-    return "dev" if ref in ("", None) else f"custom ({ref})"
+    return "dev" if ref in ("", None) else "custom"
 
 
 def current():
