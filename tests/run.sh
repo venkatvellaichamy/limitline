@@ -1163,7 +1163,9 @@ five_out=$(printf '%s' "$five_in" | NO_COLOR=1 XDG_CACHE_HOME="$five_cache" LIMI
 five_l1=$(printf '%s\n' "$five_out" | sed -n 1p)
 five_l2=$(printf '%s\n' "$five_out" | sed -n 2p)
 check "five-line1-session-only" "$([[ "$five_l1" == *Opus* && "$five_l1" != *7d* ]] && echo yes || echo no)" "yes"
-check "five-line2-left" "$([[ "$five_l2" == "left  ✻ claude 7d 30%"* && "$five_l2" == *"cursor+grok 19%"* ]] && echo yes || echo no)" "yes"
+check "five-line2-used" "$([[ "$five_l2" == "used  ✻ claude 7d ███▌░"* && "$five_l2" == *"cursor+grok ████░"* ]] && echo yes || echo no)" "yes"
+five_pct=$(printf '%s' "$five_in" | NO_COLOR=1 XDG_CACHE_HOME="$five_cache" LIMITLINE_PHAROS_HOME="$TEST_HOME/five-pharos" LIMITLINE_LINES=5 LIMITLINE_REFRESH=0 LIMITLINE_USED=both "$BIN" | sed -n 2p)
+check "five-line2-both" "$([[ "$five_pct" == *"claude 7d ███▌░ 70%"* ]] && echo yes || echo no)" "yes"
 check "five-hosts-line" "$(printf '%s\n' "$five_out" | tail -1)" "hosts studio 82% mem free · 22% cpu"
 check "two-lines-unchanged" "$(printf '%s' "$five_in" | NO_COLOR=1 XDG_CACHE_HOME="$five_cache" LIMITLINE_LINES=2 LIMITLINE_REFRESH=0 "$BIN" | grep -c 'left ')" "0"
 if python3 -m unittest -q "$ROOT/tests/test_fivelines.py" >/dev/null 2>&1; then

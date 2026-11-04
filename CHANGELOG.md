@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.12.1 - 2026-11-04
+
+- **Line 2 is now `used`, drawn as small bars.** It used to print what was left, which read backwards next to the context meter, and made Antigravity look inverted (`gemini 100%` meant untouched, `argon 0%` meant spent). Every plan now shows how much is used, as a 5-cell bar in eighths with the same colours as the line 1 meters: `✻ claude 7d ███▌░ │ ⬡ cursor+grok ████▏ │ ✦ agy gemini ░░░░░ · argon █████`.
+- `used = "both"` adds the number after each bar; `used = "pct"` shows numbers only (`LIMITLINE_USED` overrides). The ascii theme draws `###--`.
+- The refill time (`→`) now appears at 75% used or more (Pharos's default cap), instead of at 25% left.
+- On a narrow terminal the bars shrink to 3 cells after the refill times and the agy claude+gpt bucket are dropped.
+
 ## 0.12.0 - 2026-11-03
 
 - **The split is complete: limitline shows, Pharos owns the data.** limitline now reads only Pharos's documented files (`usage.json`, `summary.json`, `usage-report.json`, the tail of today's event file) and writes only Claude's own reading to Pharos's inbox. It runs no Pharos command, reads no Pharos run file, scans no processes, and runs no ssh.

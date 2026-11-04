@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # limitline — local usage-limit status line for Claude Code.
 # Reads one JSON object on stdin. No network. Always exits 0.
-# Version: 0.12.0
+# Version: 0.12.1
 
 _here=${0%/*}
 [[ "$_here" == "$0" ]] && _here="."
@@ -172,6 +172,7 @@ load_config() {
       jobs_ttl) JOBS_TTL="$val" ;;
       marks) MARKS_MODE="$val" ;;
       animate) ANIMATE_MODE="$val" ;;
+      used) USED_MODE="$val" ;;
     esac
   done < "$cfg"
 }
@@ -1762,7 +1763,7 @@ END {
 '
 
 if [[ "$LINES" -ge 5 ]]; then
-  LL_COLOR="$USE_COLOR" LL_THEME="$THEME" LL_MARKS="${MARKS_MODE:-unicode}" LL_ANIMATE="${LIMITLINE_ANIMATE:-${ANIMATE_MODE:-on}}" LL_COLUMNS="$max_cols" \
+  LL_COLOR="$USE_COLOR" LL_THEME="$THEME" LL_MARKS="${MARKS_MODE:-unicode}" LL_ANIMATE="${LIMITLINE_ANIMATE:-${ANIMATE_MODE:-on}}" LL_USED="${LIMITLINE_USED:-${USED_MODE:-bar}}" LL_COLUMNS="$max_cols" \
   LL_CLAUDE5="$five_pct" LL_CLAUDE5_RESET="$five_epoch" LL_CLAUDE7="$seven_pct" LL_CLAUDE7_RESET="$seven_epoch" \
   LL_CODEX5="$codex5" LL_CODEX5_RESET="$codex5_raw" LL_CODEX7="$codex7" LL_CODEX7_RESET="$codex7_raw" \
   LL_CODEX_CACHE="$(codex_cache_file)" \

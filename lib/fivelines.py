@@ -1,12 +1,14 @@
 #!/usr/bin/env python3
 """Lines 2-5 of the five-line status line (`lines = 5`).
 
-    left  ✻ claude 7d 30% →Wed 04:00 │ ◎ codex 5h 1% →18:14 · 7d 31% │ ⬡ cursor+grok 19% →Thu │ ✦ agy gemini 100% · claude+gpt 93% · argon 0% →Fri
+    used  ✻ claude 7d ███▌░ │ ◎ codex 5h ░░░░░ · 7d ███▌░ │ ⬡ cursor+grok ████▏ →Thu │ ✦ agy gemini ░░░░░ · claude+gpt ▍░░░░ · argon █████ →Fri
     today ▶ 1 running │ ✓ 5 done │ ✋ 3 need you │ ✗ 2 failed · ↻ 1 retried │ ⏸ 1 waiting on limit
     older ✋ 4 need you │ ✗ 1 failed │ oldest 6d (pharos-reviews)
     hosts studio 82% free · 22% cpu │ laptop 49% · 45% │ backup 73% · 16%
 
-Every plan number is the amount LEFT (100 - used). Pharos measures; this only draws:
+Every plan bar is the amount USED, like the context meter on line 1: an empty bar is a
+fresh allowance, a full bar is spent. `used = "both"` adds the number, `"pct"` shows only
+the number. Pharos measures; this only draws:
 plans and hosts come from ~/.pharos/usage.json and job counts from ~/.pharos/summary.json.
 Without Pharos only Claude's own line is shown (from the status-line input) and the job
 and host lines are left out. Nothing here runs a model CLI, ssh, or the network. Inputs
@@ -81,9 +83,12 @@ class Style:
         theme = env("LL_MARKS", "unicode").strip().lower() or "unicode"
         self.marks = MARKS.get(theme, MARKS["unicode"])
         self.animate = env("LL_ANIMATE", "on").strip().lower() not in ("0", "off", "false", "no")
+        used = env("LL_USED", "bar").strip().lower()
+        self.used = used if used in ("bar", "both", "pct") else "bar"
+        self.ascii = env("LL_THEME") == "ascii"
 
     def paint(self, code, text):
-        return f"\x1b[{code}m{text}\x1b[0m" if self.color and code else text
+        return f"\x1b[{code}m{text}\x1b[0m" if self.color and code and text else text
 
     def mark(self, key):
         glyph = self.marks.get(key, "")
@@ -99,14 +104,34 @@ def width(text):
     return total
 
 
-def left_code(left):
-    if left is None:
+def used_code(used):
+    """The same colours as the meters on line 1: green, yellow from 50, red above 80."""
+    if used is None:
         return "2"
-    if left <= 10:
+    if used > 80:
         return "31"
-    if left <= 25:
+    if used >= 50:
         return "33"
-    return ""
+    return "32"
+
+
+EIGHTHS = " ▏▎▍▌▋▊▉"
+BAR_WIDTH = 5
+RESET_FROM = 75  # show when a window refills once it is this full (Pharos's default cap)
+
+
+def used_bar(used, cells=BAR_WIDTH, ascii=False):
+    """A small meter in eighths of a cell, so 70% and 82% look different in 5 cells."""
+    used = min(100.0, max(0.0, used))
+    if ascii:
+        full = int(used * cells / 100 + 0.5)
+        return "#" * full, "-" * (cells - full)
+    steps = int(used * cells * 8 / 100 + 0.5)
+    full, part = divmod(steps, 8)
+    if full >= cells:
+        return "█" * cells, ""
+    filled = "█" * full + (EIGHTHS[part] if part else "")
+    return filled, "░" * (cells - full - (1 if part else 0))
 
 
 def reset_label(epoch, now):
@@ -127,27 +152,36 @@ def age_label(seconds):
 
 
 class Cell:
-    """One plan window. `left` None means no reading."""
+    """One plan window. `used` None means no reading."""
 
-    def __init__(self, name, left, reset=None, age=None, estimate=False):
-        self.name, self.left, self.reset, self.age, self.estimate = name, left, reset, age, estimate
+    def __init__(self, name, used, reset=None, age=None, estimate=False):
+        self.name, self.used, self.reset, self.age, self.estimate = name, used, reset, age, estimate
         self.fresh_change = False  # set by mark_changes: shown bold for a short while
 
-    def text(self, style, now, resets=True):
-        if self.left is None:
+    def text(self, style, now, resets=True, cells=BAR_WIDTH):
+        if self.used is None:
             age = f" {age_label(self.age)} ago" if self.age else ""
             return f"{self.name} " + style.paint("2", "—" + age)
-        pct = f"{'~' if self.estimate else ''}{int(round(self.left))}%"
-        code = left_code(self.left)
+        code = used_code(self.used)
         if self.fresh_change and style.animate:
-            code = ("1;" + code) if code else "1"
-        out = f"{self.name} " + style.paint(code, pct)
-        if resets and self.reset and self.left <= 25:
+            code = "1;" + code
+        pct = f"{'~' if self.estimate else ''}{int(round(self.used))}%"
+        if style.used == "pct":
+            body = style.paint(code, pct)
+        else:
+            filled, empty = used_bar(self.used, cells, style.ascii)
+            body = style.paint(code, filled) + style.paint("2", empty)
+            if self.estimate and style.used == "bar":
+                body = style.paint("2", "~") + body
+            if style.used == "both":
+                body += " " + style.paint(code, pct)
+        out = f"{self.name} " + body
+        if resets and self.reset and self.used >= RESET_FROM:
             out += " " + style.paint("2", "→" + reset_label(self.reset, now))
         return out
 
 
-# ---- line 2: what's left ---------------------------------------------------------------
+# ---- line 2: what's used ---------------------------------------------------------------
 
 
 def window_cell(name, used, reset, now):
@@ -155,7 +189,7 @@ def window_cell(name, used, reset, now):
     reset = int(num(reset) or 0) or None
     if used is None or (reset and reset <= now):
         return None
-    return Cell(name, max(0.0, 100.0 - used), reset)
+    return Cell(name, min(100.0, max(0.0, used)), reset)
 
 
 def claude_cells(now):
@@ -210,7 +244,7 @@ def cursor_cell(now):
         reset = next_weekday(match.group(1), int(match.group(2)), int(match.group(3)), now)
     if used is None:
         return Cell("cursor+grok", None, age=age)
-    return Cell("cursor+grok", max(0.0, 100.0 - used), reset, estimate=estimate)
+    return Cell("cursor+grok", min(100.0, max(0.0, used)), reset, estimate=estimate)
 
 
 def next_weekday(day, hour, minute, now):
@@ -257,14 +291,14 @@ def agy_cells(now, usage=None):
             if not isinstance(bucket, dict) or bucket.get("group") != group:
                 continue
             cell = window_cell(name, bucket.get("used_pct"), bucket.get("resets_at"), now)
-            if cell and (best is None or cell.left < best.left):
+            if cell and (best is None or cell.used > best.used):
                 best = cell
         if best:
             cells.append(best)
     return cells or [Cell("gemini", None)]
 
 
-def left_parts(now):
+def used_parts(now):
     """[(mark key, label, [cells])] in the fixed order. Without Pharos, Claude only."""
     parts = [("claude", "claude", claude_cells(now))]
     usage = read_usage(now)
@@ -279,7 +313,7 @@ def left_parts(now):
 
 
 CHANGE_SHOW_S = 20  # a number that just moved is bold for this long, then plain again
-STALE_NOTE_S = 300  # older than this, the left line says how old Pharos's reading is
+STALE_NOTE_S = 300  # older than this, the used line says how old Pharos's reading is
 
 
 def mark_changes(parts, now):
@@ -291,10 +325,10 @@ def mark_changes(parts, now):
     dirty = False
     for key, _label, cells in parts:
         for cell in cells:
-            if cell.left is None:
+            if cell.used is None:
                 continue
-            slot = f"{key}/{cell.name}"
-            value = int(round(cell.left))
+            slot = f"{key}/{cell.name}/used"
+            value = int(round(cell.used))
             before = seen.get(slot)
             if not isinstance(before, list) or len(before) != 2:
                 seen[slot] = [value, 0]
@@ -314,16 +348,15 @@ def mark_changes(parts, now):
             pass
 
 
-def render_left(style, now, resets=True, drop_agy_3p=False):
-    out = []
-    parts = left_parts(now)
+def render_used(style, now, resets=True, drop_agy_3p=False, cells=BAR_WIDTH):
+    out, bar = [], cells
+    parts = used_parts(now)
     mark_changes(parts, now)
     for key, label, cells in parts:
-        if drop_agy_3p:
-            cells = [c for c in cells if c.name != "claude+gpt"]
-        body = " · ".join(c.text(style, now, resets) for c in cells)
+        shown = [c for c in cells if c.name != "claude+gpt"] if drop_agy_3p else cells
+        body = " · ".join(c.text(style, now, resets, bar) for c in shown)
         out.append(style.mark(key) + (label + " " if label else "") + body)
-    line = style.paint("2", "left ") + " " + SEP.join(out)
+    line = style.paint("2", "used ") + " " + SEP.join(out)
     usage = read_usage(now)
     if usage is not None:
         age = now - int(num(usage.get("generated_at")) or now)
@@ -505,9 +538,10 @@ def build(now=None, columns=None):
         columns = int(num(env("LL_COLUMNS")) or 0)
     style = Style()
     lines = [fit([
-        render_left(style, now),
-        render_left(style, now, resets=False),
-        render_left(style, now, resets=False, drop_agy_3p=True),
+        render_used(style, now),
+        render_used(style, now, resets=False),
+        render_used(style, now, resets=False, drop_agy_3p=True),
+        render_used(style, now, resets=False, drop_agy_3p=True, cells=3),
     ], columns)]
     summary = job_summary(now)
     if summary:

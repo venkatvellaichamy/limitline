@@ -150,15 +150,15 @@ Five lines are `lines = 5`:
 
 ```
 🧠 Opus 5.5 │ 🪟 ctx ▓▓▓░░ +58% 84k left │ ♥ session 2h10m · +312 -40 · $4.20
-left  ✻ claude 7d 30% │ ◎ codex 5h 1% →18:14 · 7d 31% │ ⬡ cursor+grok 19% →Thu 23:22 │ ✦ agy gemini 100% · claude+gpt 93% · argon 0% →Fri 15:35
+used  ✻ claude 7d ███▌░ │ ◎ codex 5h ░░░░░ · 7d ███▌░ │ ⬡ cursor+grok ████▏ →Thu 23:22 │ ✦ agy gemini ░░░░░ · claude+gpt ▍░░░░ · argon █████ →Fri 15:35
 today ▶ 0 running │ ✓ 7 done │ ✋ 6 need you │ ✗ 3 failed · ↻ 0 retried │ ⏸ 1 waiting on limit
 older ✋ 5 need you │ ✗ 2 failed │ ⏸ 1 waiting on limit │ oldest 1d (website)
 hosts mini 82% mem free · 25% cpu │ macbook 34% · 52% │ silver 73% · 13%
 ```
 
-While Pharos jobs run, `▶` turns slowly (◐ ◓ ◑ ◒). A new Pharos event (a run merged or failed, a plan crossing 75/90/100%, a host offline) shows dimmed at the end of `today` for 30 seconds, a plan number that just moved is bold for 20 seconds, and a Pharos reading older than 5 minutes adds its age to `left`. `animate = "off"` drops the motion. Claude Code redraws on activity and every `refreshInterval` seconds; 10 keeps the motion visible at about 0.2 s of CPU per redraw.
+While Pharos jobs run, `▶` turns slowly (◐ ◓ ◑ ◒). A new Pharos event (a run merged or failed, a plan crossing 75/90/100%, a host offline) shows dimmed at the end of `today` for 30 seconds, a plan number that just moved is bold for 20 seconds, and a Pharos reading older than 5 minutes adds its age to `used`. `animate = "off"` drops the motion. Claude Code redraws on activity and every `refreshInterval` seconds; 10 keeps the motion visible at about 0.2 s of CPU per redraw.
 
-Every plan number on `left` is the amount left. The reset (`→`) appears at 25% or less. Job counts follow Pharos: done is done, merged, or a run with no changes; need you is a run with commits waiting for a check, or a failed check; retried is a run another run replaced. `older` only counts open jobs from the last 7 days. Hosts use the nicknames set in Pharos (`hosts = [...]` in `~/.pharos/usage.toml`). When the terminal is narrow, `left` drops reset times first, then the agy claude+gpt bucket; `older` drops the oldest-job note; `hosts` drops CPU load. `marks = "none"` prints plain names.
+Every bar on `used` is the amount used, like the context meter on line 1: empty is a fresh allowance, full is spent, and the colours are the same (green, yellow from 50%, red above 80%). Each bar is 5 cells in eighths, so 70% (`███▌░`) and 82% (`████▏`) look different. `used = "both"` adds the number after each bar and `used = "pct"` shows only numbers. The refill time (`→`) appears at 75% used or more, Pharos's default cap. Job counts follow Pharos: done is done, merged, or a run with no changes; need you is a run with commits waiting for a check, or a failed check; retried is a run another run replaced. `older` only counts open jobs from the last 7 days. Hosts use the nicknames set in Pharos (`hosts = [...]` in `~/.pharos/usage.toml`). When the terminal is narrow, `used` drops refill times first, then the agy claude+gpt bucket, then shortens the bars to 3 cells; `older` drops the oldest-job note; `hosts` drops CPU load. `marks = "none"` prints plain names.
 
 A second line is `lines = 2` or `LIMITLINE_LINES=2`. When `COLUMNS` or `LIMITLINE_COLUMNS` is set, the lowest-priority segments drop until the row fits.
 
@@ -213,7 +213,8 @@ Hosts, plan prices, and every measuring setting are Pharos's (`~/.pharos/usage.t
 # vitals = "on"
 # alerts = "off"
 # quiet = "22-7"
-# lines = 5                       # session, what's left, today, older, hosts (needs Pharos for 3-5)
+# lines = 5                       # session, what's used, today, older, hosts (needs Pharos for 3-5)
+# used = "bar"                    # line 2: "bar", "both" (bar and number) or "pct"
 # animate = "off"
 # fleet = "on"                    # these four show what Pharos measured
 # machines = "on"

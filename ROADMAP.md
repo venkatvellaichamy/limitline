@@ -35,7 +35,8 @@ If a feature measures, stores, or decides, it belongs in Pharos.
 | 0.1.0 – 0.9.0 | Status line, themes, fleet, watch, history, live Cursor+Grok | Shipped |
 | **0.10.0** | Display only: the five-line view, Pharos as the source | Merged, **needs tag** |
 | **0.11.0** | Live, but quiet | Merged (PR #11), **needs tag** |
-| **0.12.0** | Finish the split | This PR (version files bumped to 0.12.0) |
+| **0.12.0** | Finish the split | Merged (PR #13), **needs tag** |
+| **0.12.1** | Line 2 shows used, as bars | This PR |
 | **0.13.0** | Display hardening | Planned |
 | **0.14.0** | Every surface shows the same thing | Planned |
 | **1.0.0** | Stable display of a versioned Pharos contract | Planned |
@@ -73,7 +74,11 @@ Already on `main` (PRs #9 and #10) but still labelled 0.9.0. Release it as-is.
 - The `left` line shows the age of Pharos's reading when it is over 5 minutes old.
 - `animate = "off"` keeps the information and drops the motion.
 
-### 0.12.0 — Finish the split (this PR)
+### 0.12.1 — Line 2 shows used, as bars (this PR)
+
+Line 2 read "left" while the context meter on line 1 reads "used", and Antigravity's numbers looked inverted next to the others. Line 2 is now `used`, with a 5-cell bar per window in eighths, the line 1 colours, and `used = "both" | "pct"` for numbers. The refill time shows at 75% used.
+
+### 0.12.0 — Finish the split
 
 Done here, each with Pharos covering it first (Pharos 0.7.0):
 
