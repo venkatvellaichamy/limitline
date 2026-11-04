@@ -39,6 +39,7 @@ class FiveLines(unittest.TestCase):
             "XDG_CACHE_HOME": str(base / "cache"),
             "LIMITLINE_PHAROS_HOME": str(self.pharos),
             "LL_COLOR": "0",
+            "LL_PLAN_RESETS": "near-cap",  # the view tests below predate "always"; see test_resets_*
             "LL_CLAUDE7": "70", "LL_CLAUDE7_RESET": str(NOW + 11 * 3600),
             "LL_CODEX5": "99", "LL_CODEX5_RESET": str(NOW + 3600),
             "LL_CODEX7": "69", "LL_CODEX7_RESET": str(NOW + 4 * 86400),
@@ -166,6 +167,19 @@ class FiveLines(unittest.TestCase):
                     cell = fivelines.Cell("7d", used, reset=NOW + 3600)
                     cell.trend = [None, 0, used, None, 100, 50, used]
                     self.assertTrue(cell.text(style, NOW))
+
+    def test_resets_always_by_default(self):
+        del os.environ["LL_PLAN_RESETS"]
+        line = plain(fivelines.build(now=NOW))[0]
+        self.assertIn("claude 7d ███▌░ →Wed 04:00", line, "Claude at 70% still shows when it refills")
+        self.assertIn("codex 5h █████ →18:00 · 7d ███▌░ →Sat 17:00", line)
+        self.assertIn("gemini ░░░░░ →Fri 17:00", line, "even an unused window says when it refills")
+
+    def test_resets_dropped_first_when_narrow(self):
+        del os.environ["LL_PLAN_RESETS"]
+        line = plain(fivelines.build(now=NOW, columns=110))[0]
+        self.assertNotIn("→", line)
+        self.assertIn("claude 7d ███▌░", line)
 
     def test_reset_only_shown_at_75_or_more(self):
         line = plain(fivelines.build(now=NOW))[0]

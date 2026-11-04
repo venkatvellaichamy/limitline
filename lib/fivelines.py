@@ -87,6 +87,8 @@ class Style:
         self.view = view if view in VIEWS else "bar"
         self.numbers = self.view == "none" or env("LL_PLAN_NUMBERS", "off").strip().lower() in ("1", "on", "true", "yes")
         self.left = env("LL_PLAN_SHOW", "used").strip().lower() == "left"
+        # When to print a window's refill time: "always" (default) or "near-cap" (at the cap)
+        self.resets = "near-cap" if env("LL_PLAN_RESETS", "always").strip().lower() in ("near-cap", "cap") else "always"
         self.ascii = env("LL_THEME") == "ascii"
 
     def paint(self, code, text):
@@ -253,7 +255,7 @@ class Cell:
                 parts.append(style.paint("33", "▲"))
         out = f"{self.name} " + " ".join(p for p in parts if p)
         threshold = self.cap if self.cap is not None else RESET_FROM
-        if resets and self.reset and self.used >= threshold:
+        if resets and self.reset and (style.resets == "always" or self.used >= threshold):
             out += " " + style.paint("2", "→" + reset_label(self.reset, now))
         return out
 

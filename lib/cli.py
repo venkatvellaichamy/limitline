@@ -540,6 +540,7 @@ def cmd_config():
     print('# plan_view = "bar"     # line 2: bar, gauge, dots, trend, cap, or none (numbers only)')
     print('# plan_numbers = "off"  # "on" adds the percent after each view')
     print('# plan_show = "used"    # or "left" (100 - used); colours and the cap still follow used')
+    print('# plan_resets = "always"  # or "near-cap": the refill time only at the plan\'s cap')
     print('# animate = "off"')
     print("# Inside Cursor or Grok without Pharos (LIMITLINE_TOOL=cursor): the token estimate budget")
     print("# cursor_week_tokens = 1000000")
