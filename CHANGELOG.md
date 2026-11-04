@@ -1,5 +1,29 @@
 # Changelog
 
+## 0.14.0 - unreleased
+
+### The display stays honest when Pharos's files are bad
+
+Every case has a test in `tests/test_hardening.py` (synthetic files in a temp `LIMITLINE_PHAROS_HOME` and `XDG_CACHE_HOME`; nothing reads the real `~/.pharos`), run by `tests/run.sh` as `hardening-unit`. The display changes below are to lines 2-5 of the five-line view (`lines = 5`). Line 1, and the one- and two-line modes, get the same version and clock-skew rules through `pharos_view` (a newer or future `usage.json` is not used for their Codex, Grok, and hosts segments) but no new wording.
+
+- **Pharos files missing.** With a Pharos home but no `usage.json`, the used line ends `· pharos not running`; Claude's own window still shows from the status-line input. With no Pharos home at all, nothing changes: Claude only, no note.
+- **Old reading.** When `usage.json` is over 15 minutes old, every plan but Claude, and the hosts line, show `—` with the age (`codex 7d — 1h ago`, `hosts — 1h ago`), never the old percent. A plan Pharos marks `stale` does the same with its own age. A plan's `observed_at` alone does not make it old (Codex's is its last rate-limit event, valid until the window resets): Pharos decides. The cursor+grok cell follows line 1's `grok_ttl` (180 s) for `grok.line`, which the refresher rewrites on every run; it used to keep its percent however old the file was. The cached Claude snapshot, used when the session input has no limits, is `—` with its age after 15 minutes.
+- **Reset time already passed.** The window says `5h reset, no newer reading` (`5h reset` when the terminal is narrow) instead of disappearing. With Pharos, Codex now comes from Pharos's own reading in `usage.json`, so this also works through `bin/limitline` (`LIMITLINE_LINES=5`).
+- **Partial or invalid JSON.** An unreadable field is `—` (`claude+gpt —`, `✓ — done`, `studio —`); a bool, NaN, infinity, or a negative number is not a reading. A truncated `usage.json` says `· pharos usage.json unreadable`. A bad field in `summary.json` (`older` not an object, `oldest_open` not an object) no longer blanks lines 2-5: each line is drawn on its own.
+- **Unknown fields or a newer format.** Unknown fields are ignored. A `usage.json` with `version` above 1 is not drawn and the used line says `· pharos format v2 is newer than this limitline`; the line-1 caches (`pharos_view`) skip it too. A newer `summary.json` shows `today — pharos summary format vN is newer than this limitline`.
+- **Clock skew.** A reading more than 2 minutes in the future is not fresh: plans show `—`, the line says `· pharos clock ahead`, and no age is negative. A future `summary.json` is not today's, and a future event is not shown as new. `limitline doctor` says so too.
+- **Narrow terminal.** After the existing steps (refill times, the agy claude+gpt bucket, 3-cell bars), the used line drops whole plans from the right (agy, then cursor+grok, then codex; Claude stays), `today` and `older` keep only non-zero counts and then drop retried, done, waiting, running, failed in that order, and `hosts` drops hosts from the right. Every line fits when it can.
+- **Slow disk.** Each Pharos file is read at most once per render (it was read up to 7 times while fitting), lines are only drawn as far as the fit needs, and only regular files under 4 MB are read, opened non-blocking, so a FIFO in place of `usage.json` cannot hang the status line. A render with 6 ms per file read stays under 50 ms.
+
+### Linux
+
+The first CI run on Ubuntu (2026-11-04) passed 215 of 226 checks. Every failing segment reads its cache through one function, and that function broke under GNU stat (reproduced on a Mac with GNU-style wrappers; the fix still needs its first Linux CI run to confirm): `bin/limitline` read a cache file's mtime with `stat -f %m FILE || stat -c %Y FILE` in one capture. On macOS (BSD stat) the first form works. GNU stat reads `-f` as `--file-system` and `%m` as a second file, so it printed FILE's file-system block to stdout and exited 1; the fallback then appended the mtime, and the combined text failed the "is a number" check. `fresh_line` treated every cache as missing, so the Grok/plan segment, the fleet and machines segments, the jobs segment on lines 1 and 2, and the two-line fit lost their segment, and `kick_refresh` saw its lock as ancient on every render.
+
+- A new `file_mtime` tries `stat -c %Y` and `stat -f %m` separately and keeps only a numeric answer, so it works with BSD stat, GNU stat, and GNU coreutils on a Mac.
+- The other platform-sensitive calls were checked: `date -j` and `date -r EPOCH` already fall back to GNU `date -d`, and the awk code uses no GNU-only features. No `sed -i`, `readlink -f`, or `grep -P` is used.
+- `tests/run.sh` adds `gnu-*` checks that rerun the failing segments through GNU-style `stat` and `date` wrappers on macOS (on Linux the real tools run), so this is caught on a Mac before CI.
+- The Linux CI job is now required (no `continue-on-error`) and also runs `tests/test_hardening.py`.
+
 ## 0.13.1 - 2026-11-04
 
 - **`plan_resets = "always"`** (or `LIMITLINE_PLAN_RESETS=always`) shows when every window refills (`→04:00`, `→Thu 23:22`), not only windows at the cap. The default stays `"near-cap"`: the refill time appears once a plan reaches its cap. On a narrow terminal refill times are still the first thing dropped.

@@ -23,18 +23,17 @@ jobs:
       - name: Shell syntax
         run: bash -n bin/limitline
       - name: Unit tests
-        run: python3 -m unittest -v tests/test_fivelines.py tests/test_release.py
+        run: python3 -m unittest -v tests/test_fivelines.py tests/test_hardening.py tests/test_release.py
       - name: Full suite
         run: bash tests/run.sh
 
   linux:
     # limitline is built on macOS; Linux is checked so the status line stays portable.
-    # Not required until it has passed for a while.
-    name: tests (Linux, advisory)
+    # Required since 0.14.0 (GNU stat no longer drops segments).
+    name: tests (Linux)
     runs-on: ubuntu-latest
-    continue-on-error: true
     steps:
       - uses: actions/checkout@v4
       - run: sudo apt-get update -q && sudo apt-get install -yq jq gawk
-      - run: python3 -m unittest -v tests/test_fivelines.py
+      - run: python3 -m unittest -v tests/test_fivelines.py tests/test_hardening.py
       - run: bash tests/run.sh

@@ -393,11 +393,13 @@ def fleet_doctor():
     view = load_lib("pharos_view")
     usage = view.read_usage()
     if usage is None:
-        lines.append("pharos usage: not found at %s; only Claude%s is shown (install Pharos for every plan and host)"
-                     % (view.usage_path(), (" and " + os.environ["LIMITLINE_TOOL"]) if os.environ.get("LIMITLINE_TOOL") else ""))
+        problem = "not found" if not os.path.exists(view.usage_path()) else "unreadable or a newer format"
+        lines.append("pharos usage: %s at %s; only Claude%s is shown (install Pharos for every plan and host)"
+                     % (problem, view.usage_path(), (" and " + os.environ["LIMITLINE_TOOL"]) if os.environ.get("LIMITLINE_TOOL") else ""))
     else:
         names = ", ".join(str(p.get("label") or p.get("provider")) for p in usage.get("plans") or [])
-        lines.append("pharos usage: %ss old%s; %s" % (usage.get("age"), " (stale)" if usage.get("stale") else "", names or "no plans"))
+        when = ("from the future (clock skew)" if usage.get("skew") else "no time") if usage.get("age") is None else "%ss old" % usage["age"]
+        lines.append("pharos usage: %s%s; %s" % (when, " (stale)" if usage.get("stale") else "", names or "no plans"))
     relay = os.path.join(view.pharos_home(), "inbox", "claude.json")
     age = cache_age(relay)
     lines.append("claude relay to pharos: %s" % ("%ds old" % age if age is not None else "not written yet"))

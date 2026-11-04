@@ -106,6 +106,63 @@ check() {
   fi
 }
 
+# GNU coreutils as on Linux, for the checks that broke there (CI, 2026-11-04). On a Mac
+# these wrappers make stat and date answer the way GNU does; on Linux the real tools are used.
+GNU_PATH="$PATH"
+if [[ "$(uname -s)" == "Darwin" ]]; then
+  gnu_bin="$TEST_HOME/gnubin"
+  mkdir -p "$gnu_bin"
+  cat > "$gnu_bin/stat" << 'SH'
+#!/bin/sh
+# GNU stat: -c FORMAT prints file fields; -f means --file-system and takes no argument,
+# so `stat -f %m FILE` reports the file system of "%m" (missing) and of FILE, and exits 1.
+if [ "$1" = "-c" ]; then
+  [ "$2" = "%Y" ] || exit 1
+  shift 2
+  exec /usr/bin/stat -f %m "$@"
+fi
+if [ "$1" = "-f" ]; then
+  shift
+  rc=0
+  for f in "$@"; do
+    if [ -e "$f" ]; then
+      printf '  File: "%s"\n    ID: 0 Namelen: 255 Type: ext2/ext3\n' "$f"
+    else
+      echo "stat: cannot read file system information for '$f'" >&2
+      rc=1
+    fi
+  done
+  exit $rc
+fi
+exec /usr/bin/stat "$@"
+SH
+  cat > "$gnu_bin/date" << 'SH'
+#!/bin/sh
+# GNU date: no -j; -r names a reference FILE; -d @EPOCH formats an epoch.
+prev=""
+for a in "$@"; do
+  case "$a" in -j|-j*|-*j) echo "date: invalid option -- 'j'" >&2; exit 1 ;; esac
+  if [ "$prev" = "-r" ] && [ ! -e "$a" ]; then echo "date: $a: No such file or directory" >&2; exit 1; fi
+  prev="$a"
+done
+# Rotate the arguments, rewriting `-d @EPOCH` to BSD `-r EPOCH`; other -d forms are not emulated.
+n=$#
+i=0
+while [ "$i" -lt "$n" ]; do
+  a=$1; shift; i=$((i + 1))
+  if [ "$a" = "-d" ]; then
+    v=$1; shift; i=$((i + 1))
+    case "$v" in @*) set -- "$@" -r "${v#@}" ;; *) exit 1 ;; esac
+    continue
+  fi
+  set -- "$@" "$a"
+done
+exec /bin/date "$@"
+SH
+  chmod +x "$gnu_bin/stat" "$gnu_bin/date"
+  GNU_PATH="$gnu_bin:$PATH"
+fi
+
 render() {
   "$BIN" 2>"$TEST_HOME/err"
 }
@@ -482,6 +539,7 @@ grok_off=$(XDG_CACHE_HOME="$grok_cache" NO_COLOR=1 "$BIN" < "$FIX/no_rate_limits
 check "grok-segment-off-by-default" "$grok_off" 'Opus 5.5 │ ctx ▓▓░░░ ·41% │ $0.12'
 grok_on=$(XDG_CACHE_HOME="$grok_cache" LIMITLINE_GROK=1 NO_COLOR=1 "$BIN" < "$FIX/no_rate_limits.json" | strip_ansi)
 check "grok-segment-env" "$grok_on" 'Opus 5.5 │ ctx ▓▓░░░ ·41% │ $0.12 │ grok SuperGrok Plus · 7d 1.2M tok'
+check "gnu-grok-segment-env" "$(PATH="$GNU_PATH" XDG_CACHE_HOME="$grok_cache" LIMITLINE_GROK=1 NO_COLOR=1 "$BIN" < "$FIX/no_rate_limits.json" | strip_ansi)" "$grok_on"
 grok_cfg="$TEST_HOME/grok.toml"
 printf '%s\n' 'grok = "on"' > "$grok_cfg"
 grok_cfg_got=$(XDG_CACHE_HOME="$grok_cache" LIMITLINE_CONFIG="$grok_cfg" NO_COLOR=1 "$BIN" < "$FIX/no_rate_limits.json" | strip_ansi)
@@ -786,6 +844,8 @@ check "machines-from-pharos" "$(cat "$XDG_CACHE_HOME/limitline/machines.line")" 
 hot_payload='{"model":{"display_name":"Claude Opus 5.5"}}'
 hot_got=$(printf '%s' "$hot_payload" | NO_COLOR=1 LIMITLINE_SEGMENTS=machines,fleet,model "$BIN" | strip_ansi)
 check "hot-fleet-machines" "$hot_got" 'mini 41% free · qwen3:14b / worker-1 ∅ │ ⚙ 3 run · 1 ✗ │ Opus 5.5'
+gnu_hot=$(printf '%s' "$hot_payload" | PATH="$GNU_PATH" NO_COLOR=1 LIMITLINE_SEGMENTS=machines,fleet,model "$BIN" | strip_ansi)
+check "gnu-hot-fleet-machines" "$gnu_hot" "$hot_got"
 
 swift_runs=$("$BIN" --host swiftbar)
 printf '%s' "$swift_runs" | grep -q -F 'Fleet' && printf '%s' "$swift_runs" | grep -q -F 'bash=/usr/bin/open' \
@@ -825,6 +885,8 @@ if printf '%s' "$line_one" | grep -q -F 'ctx' && printf '%s' "$line_one" | grep 
 else
   check "two-line-fit" "$two_fit" "ctx and 7d on line 1, fleet and machines on line 2, each <= 80"
 fi
+gnu_two=$(PATH="$GNU_PATH" NO_COLOR=1 LIMITLINE_LINES=2 LIMITLINE_COLUMNS=80 LIMITLINE_FLEET=1 LIMITLINE_MACHINES=1 LIMITLINE_THEME=emoji "$BIN" < "$FIX/seven_day_only.json" | strip_ansi)
+check "gnu-two-line-fit" "$gnu_two" "$two_fit"
 one_fit=$(NO_COLOR=1 LIMITLINE_COLUMNS=64 "$BIN" < "$FIX/seven_day_only.json" | strip_ansi)
 printf '%s' "$one_fit" | grep -q -F 'ctx' && printf '%s' "$one_fit" | grep -q -F '7d' \
   && check "ctx-before-spark" "yes" "yes" || check "ctx-before-spark" "$one_fit" "ctx and 7d kept at 64 columns"
@@ -1043,6 +1105,7 @@ export LIMITLINE_PHAROS_SUMMARY="$TEST_HOME/s-jobs.json"
 check "jobs-line" "$(cat "$XDG_CACHE_HOME/limitline/jobs.line")" 'jobs mining 70/1842 ✗3 · backup ok 04:00'
 jobs_line=$(NO_COLOR=1 "$BIN" < "$FIX/no_rate_limits.json")
 check "jobs-status-line" "$jobs_line" 'Opus 5.5 │ ctx ▓▓░░░ ·41% │ $0.12 │ jobs mining 70/1842 ✗3 · backup ok 04:00'
+check "gnu-jobs-status-line" "$(PATH="$GNU_PATH" NO_COLOR=1 "$BIN" < "$FIX/no_rate_limits.json")" "$jobs_line"
 jobs_off=$(NO_COLOR=1 LIMITLINE_JOBS=off "$BIN" < "$FIX/no_rate_limits.json")
 check "jobs-off" "$jobs_off" 'Opus 5.5 │ ctx ▓▓░░░ ·41% │ $0.12'
 jobs_two=$(NO_COLOR=1 LIMITLINE_LINES=2 "$BIN" < "$FIX/full.json" | tail -n 1)
@@ -1160,6 +1223,7 @@ fi
 # Five lines: line 1 is the session only; lines 2-5 come from lib/fivelines.py.
 five_cache="$TEST_HOME/five-cache"; mkdir -p "$five_cache/limitline" "$TEST_HOME/five-pharos/runs"
 printf 'cursor+grok 81%% · Thu 23:22 · grok 7d 1M tok\n81 0 live\n' > "$five_cache/limitline/grok.line"
+touch -t 202511020359 "$five_cache/limitline/grok.line"  # a minute before LIMITLINE_NOW (TZ=UTC)
 printf '%s' '{"version":1,"generated_at":1762056000,"plans":[],"hosts":{"hosts":[{"name":"studio","free_pct":82,"load_pct":22,"reachable":true}]}}' > "$TEST_HOME/five-pharos/usage.json"
 five_in='{"model":{"display_name":"Opus"},"context_window":{"used_percentage":40},"rate_limits":{"seven_day":{"used_percentage":70,"resets_at":1762100000}}}'
 five_out=$(printf '%s' "$five_in" | NO_COLOR=1 XDG_CACHE_HOME="$five_cache" LIMITLINE_PHAROS_HOME="$TEST_HOME/five-pharos" LIMITLINE_LINES=5 LIMITLINE_REFRESH=0 "$BIN")
@@ -1170,11 +1234,30 @@ check "five-line2-used" "$([[ "$five_l2" == "used  ✻ claude 7d ███▌░
 five_pct=$(printf '%s' "$five_in" | NO_COLOR=1 XDG_CACHE_HOME="$five_cache" LIMITLINE_PHAROS_HOME="$TEST_HOME/five-pharos" LIMITLINE_LINES=5 LIMITLINE_REFRESH=0 LIMITLINE_PLAN_NUMBERS=on "$BIN" | sed -n 2p)
 check "five-line2-both" "$([[ "$five_pct" == *"claude 7d ███▌░ 70%"* ]] && echo yes || echo no)" "yes"
 check "five-hosts-line" "$(printf '%s\n' "$five_out" | tail -1)" "hosts studio 82% mem free · 22% cpu"
+# Hardening, end to end: Pharos installed but not running, and a Codex window that reset.
+mkdir -p "$TEST_HOME/five-down"
+five_down=$(printf '%s' "$five_in" | NO_COLOR=1 XDG_CACHE_HOME="$five_cache" LIMITLINE_PHAROS_HOME="$TEST_HOME/five-down" LIMITLINE_LINES=5 LIMITLINE_REFRESH=0 "$BIN")
+check "five-pharos-not-running" "$five_down" "$(printf '%s\n' "$five_l1" 'used  ✻ claude 7d ███▌░ · pharos not running')"
+printf '%s' '{"version":1,"generated_at":1762056000,"plans":[{"provider":"codex","observed_at":1762055900,"windows":[{"name":"5h","used_pct":90,"resets_at":1762055000},{"name":"7d","used_pct":40,"resets_at":1762400000}]}]}' > "$TEST_HOME/five-pharos/usage.json"
+five_reset=$(printf '%s' "$five_in" | NO_COLOR=1 LIMITLINE_CODEX=1 XDG_CACHE_HOME="$five_cache" LIMITLINE_PHAROS_HOME="$TEST_HOME/five-pharos" LIMITLINE_LINES=5 LIMITLINE_REFRESH=0 "$BIN" | sed -n 2p)
+check "five-codex-reset-passed" "$([[ "$five_reset" == *"codex 5h reset, no newer reading · 7d ██░░░"* ]] && echo yes || echo "$five_reset")" "yes"
+# A Codex reading from 30 minutes ago is still current when Pharos does not call it stale.
+printf '%s' '{"version":1,"generated_at":1762056000,"plans":[{"provider":"codex","observed_at":1762054200,"stale":false,"windows":[{"name":"7d","used_pct":40,"resets_at":1762400000}]}]}' > "$TEST_HOME/five-pharos/usage.json"
+five_old_obs=$(printf '%s' "$five_in" | NO_COLOR=1 LIMITLINE_CODEX=1 XDG_CACHE_HOME="$five_cache" LIMITLINE_PHAROS_HOME="$TEST_HOME/five-pharos" LIMITLINE_LINES=5 LIMITLINE_REFRESH=0 "$BIN" | sed -n 2p)
+check "five-codex-observed-30m" "$([[ "$five_old_obs" == *"codex 7d ██░░░"* ]] && echo yes || echo "$five_old_obs")" "yes"
 check "two-lines-unchanged" "$(printf '%s' "$five_in" | NO_COLOR=1 XDG_CACHE_HOME="$five_cache" LIMITLINE_LINES=2 LIMITLINE_REFRESH=0 "$BIN" | grep -c 'left ')" "0"
-if python3 -m unittest -q "$ROOT/tests/test_fivelines.py" >/dev/null 2>&1; then
+if five_unit=$(python3 -m unittest -q "$ROOT/tests/test_fivelines.py" 2>&1); then
   check "fivelines-unit" "ok" "ok"
 else
   check "fivelines-unit" "failed" "ok"
+  printf '%s\n' "$five_unit" | grep -E '^(FAIL|ERROR):|Error: |^Ran|^FAILED' >&2
+fi
+# 0.14.0: the display stays honest when Pharos's files are bad (synthetic files only).
+if hard_out=$(python3 -m unittest -q "$ROOT/tests/test_hardening.py" 2>&1); then
+  check "hardening-unit" "ok" "ok"
+else
+  check "hardening-unit" "failed" "ok"
+  printf '%s\n' "$hard_out" | grep -E '^(FAIL|ERROR):|Error: |^Ran|^FAILED' >&2
 fi
 if python3 -m unittest -q "$ROOT/tests/test_release.py" >/dev/null 2>&1; then
   check "release-unit" "ok" "ok"
