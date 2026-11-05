@@ -27,6 +27,10 @@ export LIMITLINE_NOW=1762056000
 export LIMITLINE_CONFIG=/dev/null
 export LIMITLINE_CODEX=0
 export LIMITLINE_GIT=0
+# The folder segment is on by default; fixtures predate it, so it is opted into where tested.
+export LIMITLINE_DIR=0
+unset LIMITLINE_PRESET LIMITLINE_DIR_STYLE LIMITLINE_LINE1 LIMITLINE_LINE2 LIMITLINE_LINE3 \
+  LIMITLINE_LINE4 LIMITLINE_LINE5
 export TZ=UTC
 export LC_ALL=C
 unset NO_COLOR LIMITLINE_DEBUG LIMITLINE_DEBUG_FILE LIMITLINE_CODEX_DIR LIMITLINE_BAR_WIDTH LIMITLINE_NOCACHE \
@@ -239,7 +243,7 @@ check "iso-reset" "$iso_got" "Opus 5.5 │ 5h ▓▓▓░░ +62% ↻1h42m"
 # Alternate context field name.
 alt_got=$(printf '%s' '{"context":{"used_percentage":12}}' | "$BIN" | strip_ansi)
 alt_got=${alt_got%$'\n'}
-check "alt-context" "$alt_got" "ctx ▓░░░░ ·12%"
+check "alt-context" "$alt_got" "ctx ▓░░░░ 12%"
 
 # Spend computed from dollars when the percentage is absent.
 spend_got=$(printf '%s' '{"rate_limits":{"spend_limit":{"used_usd":2,"limit_usd":8}}}' | "$BIN" | strip_ansi)
@@ -280,7 +284,7 @@ color = on
 EOF
 cfg_got=$(LIMITLINE_CONFIG="$cfg" LIMITLINE_CODEX=0 "$BIN" < "$FIX/full.json" | strip_ansi)
 cfg_got=${cfg_got%$'\n'}
-check "config-bar-width" "$cfg_got" 'Opus 5.5 │ ctx ░ ·41% │ 5h ▓ +62% ↻1h42m │ 7d ░ ·38% ↻Thu 09:00 │ $1.25'
+check "config-bar-width" "$cfg_got" 'Opus 5.5 │ ctx ░ 41% │ 5h ▓ +62% ↻1h42m │ 7d ░ ·38% ↻Thu 09:00 │ $1.25'
 
 env_got=$(LIMITLINE_CONFIG="$cfg" LIMITLINE_BAR_WIDTH=5 LIMITLINE_CODEX=0 "$BIN" < "$FIX/full.json" | strip_ansi)
 env_got=${env_got%$'\n'}
@@ -291,14 +295,14 @@ cache="$TMPDIR/limitline-codex-$(id -u).cache"
 printf '%s\n' "$(date +%s) 1 12 - 55 -" > "$cache"
 cached_got=$(LIMITLINE_CONFIG=/dev/null LIMITLINE_CODEX=1 "$BIN" < "$FIX/no_rate_limits.json" | strip_ansi)
 cached_got=${cached_got%$'\n'}
-check "codex-cache" "$cached_got" 'Opus 5.5 │ ctx ▓▓░░░ ·41% │ $0.12 │ codex 5h ·12% · 7d +55%'
+check "codex-cache" "$cached_got" 'Opus 5.5 │ ctx ▓▓░░░ 41% │ $0.12 │ codex 5h ·12% · 7d +55%'
 rm -f "$cache"
 
 # Debug dump writes stdin and does not change the line.
 debug_file="$TEST_HOME/debug.json"
 debug_got=$(LIMITLINE_DEBUG=1 LIMITLINE_DEBUG_FILE="$debug_file" "$BIN" < "$FIX/no_rate_limits.json" | strip_ansi)
 debug_got=${debug_got%$'\n'}
-check "debug-stdout" "$debug_got" 'Opus 5.5 │ ctx ▓▓░░░ ·41% │ $0.12'
+check "debug-stdout" "$debug_got" 'Opus 5.5 │ ctx ▓▓░░░ 41% │ $0.12'
 if cmp -s "$FIX/no_rate_limits.json" "$debug_file"; then
   check "debug-file" "match" "match"
 else
@@ -335,7 +339,7 @@ check "python-fallback-codex" "$py_codex" "$example_want"
 # Themes, width, burn, git, and the other providers.
 ascii_got=$(NO_COLOR=1 LIMITLINE_THEME=ascii "$BIN" < "$FIX/full.json" | strip_ansi)
 ascii_got=${ascii_got%$'\n'}
-check "theme-ascii" "$ascii_got" 'Opus 5.5 | ctx ##--- ·41% | 5h ###-- +62% in 1h42m | 7d ##--- ·38% in Thu 09:00 | $1.25'
+check "theme-ascii" "$ascii_got" 'Opus 5.5 | ctx ##--- 41% | 5h ###-- +62% in 1h42m | 7d ##--- ·38% in Thu 09:00 | $1.25'
 
 ascii_env=$(NO_COLOR=1 LIMITLINE_ASCII=1 "$BIN" < "$FIX/full.json" | strip_ansi)
 ascii_env=${ascii_env%$'\n'}
@@ -343,7 +347,7 @@ check "theme-ascii-env" "$ascii_env" "$ascii_got"
 
 power_got=$(NO_COLOR=1 LIMITLINE_THEME=powerline "$BIN" < "$FIX/full.json" | strip_ansi)
 power_got=${power_got%$'\n'}
-check "theme-powerline" "$power_got" 'Opus 5.5  ctx ██░░░ ·41%  5h ███░░ +62% ↻1h42m  7d ██░░░ ·38% ↻Thu 09:00  $1.25'
+check "theme-powerline" "$power_got" 'Opus 5.5  ctx ██░░░ 41%  5h ███░░ +62% ↻1h42m  7d ██░░░ ·38% ↻Thu 09:00  $1.25'
 
 two_got=$(NO_COLOR=1 LIMITLINE_LINES=2 "$BIN" < "$FIX/full.json" | strip_ansi)
 printf '%s' "$two_got" | grep -q $'\n' && printf '%s' "$two_got" | grep -q -F '5h' \
@@ -406,6 +410,72 @@ if ab_render | grep -q $'\t'; then check "git-no-tabs" "tab in output" "no tabs"
 gitc branch -q -f base main
 check "git-even" "$(ab_render)" "main"
 
+# 0.15 line 1: folder, git, model, context first, plain labels.
+rich="$FIX/rich.json"
+r15() { NO_COLOR=1 "$@" < "$rich" | strip_ansi; }
+check "default-order" "$(LIMITLINE_DIR=1 r15 "$BIN")" \
+  'demo │ Opus 5.5 │ ctx ▓▓░░░ 32% · 678k left │ Explanatory │ 5h ▓▓▓░░ +62% ↻1h42m │ 7d ▓▓░░░ ·38% ↻Thu 09:00 │ $276.92 60h32m +17,898 −506 │ PR #19 pending │ vim INSERT'
+check "default-order-dir-off" "$(r15 "$BIN")" \
+  'Opus 5.5 │ ctx ▓▓░░░ 32% · 678k left │ Explanatory │ 5h ▓▓▓░░ +62% ↻1h42m │ 7d ▓▓░░░ ·38% ↻Thu 09:00 │ $276.92 60h32m +17,898 −506 │ PR #19 pending │ vim INSERT'
+check "ascii-minus" "$(LIMITLINE_THEME=ascii LIMITLINE_SEGMENTS= LIMITLINE_DIR=1 r15 "$BIN")" \
+  'demo | Opus 5.5 | ctx ##--- 32% · 678k left | Explanatory | 5h ###-- +62% in 1h42m | 7d ##--- ·38% in Thu 09:00 | $276.92 60h32m +17,898 -506 | PR #19 pending | vim INSERT'
+
+# The owner's line: emoji theme, five lines, vitals on, in a repo 2 commits behind.
+own_root="$TEST_HOME/own"
+own="$own_root/pharos"
+mkdir -p "$own"
+ogit() { git -C "$own" -c user.name=limitline -c user.email=limitline@example.com "$@"; }
+ogit init -q -b main
+ogit commit -q --allow-empty -m one
+ogit commit -q --allow-empty -m two
+ogit commit -q --allow-empty -m three
+ogit branch -q up
+ogit reset -q --hard HEAD~2
+ogit branch -q -u up main
+own_cfg="$TEST_HOME/own.toml"
+printf '%s\n' 'theme = "emoji"' 'lines = 5' 'vitals = "on"' > "$own_cfg"
+own_payload=$(printf '{"model":{"display_name":"Opus 5.5"},"workspace":{"current_dir":"%s"},"cost":{"total_cost_usd":276.92,"total_duration_ms":217920000,"total_lines_added":17898,"total_lines_removed":506},"context_window":{"used_percentage":32,"context_window_size":1000000,"total_input_tokens":322000}}' "$own")
+own_got=$(printf '%s' "$own_payload" | env -u LIMITLINE_GIT -u LIMITLINE_DIR LIMITLINE_CONFIG="$own_cfg" LIMITLINE_PHAROS_HOME="$TEST_HOME/no-pharos" NO_COLOR=1 "$BIN" | strip_ansi | head -n 1)
+check "owner-line-1" "$own_got" '📁 pharos │ 🌿 main ↓2 │ 🧠 Opus 5.5 │ 🪟 ctx ▓▓░░░ 32% · 678k left │ ⏱ 60h32m · +17,898 −506 · $276.92'
+
+# dir: the folder name, or the path from ~ with dir_style = "home".
+mkdir -p "$TEST_HOME/projects/pharos"
+dir_home=$(printf '{"workspace":{"current_dir":"%s"}}' "$TEST_HOME/projects/pharos" | LIMITLINE_DIR=1 LIMITLINE_DIR_STYLE=home LIMITLINE_SEGMENTS=dir NO_COLOR=1 "$BIN" | strip_ansi)
+check "dir-home" "$dir_home" '~/projects/pharos'
+check "dir-name" "$(printf '{"workspace":{"current_dir":"/work/demo/"}}' | LIMITLINE_DIR=1 LIMITLINE_SEGMENTS=dir NO_COLOR=1 "$BIN")" 'demo'
+check "dir-cwd-field" "$(printf '{"cwd":"/work/other"}' | LIMITLINE_DIR=1 LIMITLINE_SEGMENTS=dir NO_COLOR=1 "$BIN")" 'other'
+check "dir-none" "$(printf '{"model":{"display_name":"Opus 5.5"}}' | LIMITLINE_DIR=1 NO_COLOR=1 "$BIN")" 'Opus 5.5'
+check "dir-off" "$(printf '{"cwd":"/work/other"}' | LIMITLINE_DIR=0 LIMITLINE_SEGMENTS=dir,model NO_COLOR=1 "$BIN")" ''
+
+# project: the repository's name when it differs from the folder (a linked worktree).
+proj_repo="$TEST_HOME/limitline"
+mkdir -p "$proj_repo"
+git -C "$proj_repo" init -q -b main
+git -C "$proj_repo" -c user.name=limitline -c user.email=limitline@example.com commit -q --allow-empty -m init
+git -C "$proj_repo" worktree add -q -b feature "$TEST_HOME/wt/feature-x" 2>/dev/null
+mkdir -p "$proj_repo/sub/dir"
+proj() { printf '{"workspace":{"current_dir":"%s"}}' "$1" | LIMITLINE_DIR=1 LIMITLINE_SEGMENTS="${2:-dir,project}" NO_COLOR=1 "$BIN" | strip_ansi; }
+check "project-worktree" "$(proj "$TEST_HOME/wt/feature-x")" 'feature-x │ limitline'
+check "project-subdir" "$(proj "$proj_repo/sub/dir")" 'dir │ limitline'
+check "project-same-as-dir" "$(proj "$proj_repo")" 'limitline'
+check "project-not-a-repo" "$(proj "$TEST_HOME/projects/pharos")" 'pharos'
+check "project-from-project-dir" "$(printf '{"workspace":{"current_dir":"/work/demo/src","project_dir":"/work/demo"}}' | LIMITLINE_DIR=1 LIMITLINE_SEGMENTS=dir,project NO_COLOR=1 "$BIN")" 'src │ demo'
+
+# Data Claude Code sends that 0.14 never showed. Each is absent without its field.
+seg() { LIMITLINE_SEGMENTS="$1" NO_COLOR=1 "$BIN" < "${2:-$rich}" | strip_ansi; }
+check "segment-version" "$(seg version)" 'v2.1.317'
+check "segment-tokens" "$(seg tokens)" '322k in · 2.4k out'
+check "segment-effort" "$(seg model,effort)" 'Opus 5.5 │ effort high'
+check "segment-title" "$(seg title)" 'statusline picker'
+check "segment-app" "$(seg app)" 'Claude Code'
+check "segment-session-id" "$(seg session-id)" 'abcdef'
+check "segment-codex-ids" "$(seg current-dir,git-branch,model-with-reasoning,context-used,codex-version)" 'Opus 5.5 │ effort high │ ctx ▓▓░░░ ·32% 678k left │ v2.1.317'
+for one in version tokens effort title; do
+  check "segment-$one-absent" "$(seg "model,$one" "$FIX/full.json")" 'Opus 5.5'
+done
+check "segment-version-nojq" "$(PATH="$nojq" seg version,tokens,effort,title)" 'v2.1.317 │ 322k in · 2.4k out │ effort high │ statusline picker'
+check "segment-emoji" "$(LIMITLINE_THEME=emoji LIMITLINE_DIR=1 seg dir,version,tokens,effort,title,app)" '📁 demo │ 🏷 v2.1.317 │ 🔢 322k in · 2.4k out │ 💭 effort high │ 📝 statusline picker │ Claude Code'
+
 toml="$TEST_HOME/.config/limitline/config.toml"
 mkdir -p "$(dirname "$toml")"
 printf '%s\n' 'theme = "ascii"' 'bar_width = 5' > "$toml"
@@ -450,7 +520,7 @@ many_got=$(LIMITLINE_CODEX_DIR="$many" "$ROOT/providers/codex")
 check "provider-codex-many-files" "$many_got" '{"observed_at":1762053600,"plan":"plus","provider":"codex","source":"session","stale":false,"windows":[{"name":"5h","resets_at":1762062120,"used_pct":30},{"name":"7d","resets_at":1762419600,"used_pct":40}]}'
 many_usage=$(LIMITLINE_CODEX_DIR="$many" pharos_usage codex)
 many_line=$(LIMITLINE_CODEX=1 LIMITLINE_PHAROS_USAGE="$many_usage" LIMITLINE_NOCACHE=1 "$BIN" < "$FIX/no_rate_limits.json" | strip_ansi)
-check "codex-many-files-jq" "$many_line" 'Opus 5.5 │ ctx ▓▓░░░ ·41% │ $0.12 │ codex 5h ·30% · 7d ·40%'
+check "codex-many-files-jq" "$many_line" 'Opus 5.5 │ ctx ▓▓░░░ 41% │ $0.12 │ codex 5h ·30% · 7d ·40%'
 many_py=$(PATH="$nojq" LIMITLINE_CODEX=1 LIMITLINE_PHAROS_USAGE="$many_usage" LIMITLINE_NOCACHE=1 "$BIN" < "$FIX/no_rate_limits.json" | strip_ansi)
 check "codex-many-files-nojq" "$many_py" "$many_line"
 many_status=$(LIMITLINE_TOOL=codex LIMITLINE_CODEX_DIR="$many" "$BIN" status | grep '^codex')
@@ -475,7 +545,7 @@ touch -t 202511010001 "$week_dir/r.jsonl"
 week_got=$(LIMITLINE_CODEX_DIR="$week_dir" "$ROOT/providers/codex")
 check "provider-codex-7d-only" "$week_got" '{"observed_at":1761955200,"provider":"codex","source":"session","stale":false,"windows":[{"name":"7d","resets_at":1762419600,"used_pct":41}]}'
 week_line=$(LIMITLINE_CODEX=1 LIMITLINE_PHAROS_USAGE="$(LIMITLINE_CODEX_DIR="$week_dir" pharos_usage codex)" LIMITLINE_NOCACHE=1 "$BIN" < "$FIX/no_rate_limits.json" | strip_ansi)
-check "codex-7d-only-line" "$week_line" 'Opus 5.5 │ ctx ▓▓░░░ ·41% │ $0.12 │ codex 7d ·41%'
+check "codex-7d-only-line" "$week_line" 'Opus 5.5 │ ctx ▓▓░░░ 41% │ $0.12 │ codex 7d ·41%'
 
 # No resets_at: the 5h reading lasts five hours from the event, the 7d reading seven days.
 nores="$TEST_HOME/codex-nores"
@@ -578,9 +648,9 @@ grok_cache="$TEST_HOME/grok-cache"
 env "${grok_env[@]}" XDG_CACHE_HOME="$grok_cache" LIMITLINE_PHAROS_USAGE="$(env "${grok_env[@]}" pharos_usage grok)" "$BIN" refresh
 check "grok-refresh-line" "$(cat "$grok_cache/limitline/grok.line")" 'grok SuperGrok Plus · 7d 1.2M tok'
 grok_off=$(XDG_CACHE_HOME="$grok_cache" NO_COLOR=1 "$BIN" < "$FIX/no_rate_limits.json" | strip_ansi)
-check "grok-segment-off-by-default" "$grok_off" 'Opus 5.5 │ ctx ▓▓░░░ ·41% │ $0.12'
+check "grok-segment-off-by-default" "$grok_off" 'Opus 5.5 │ ctx ▓▓░░░ 41% │ $0.12'
 grok_on=$(XDG_CACHE_HOME="$grok_cache" LIMITLINE_GROK=1 NO_COLOR=1 "$BIN" < "$FIX/no_rate_limits.json" | strip_ansi)
-check "grok-segment-env" "$grok_on" 'Opus 5.5 │ ctx ▓▓░░░ ·41% │ $0.12 │ grok SuperGrok Plus · 7d 1.2M tok'
+check "grok-segment-env" "$grok_on" 'Opus 5.5 │ ctx ▓▓░░░ 41% │ $0.12 │ grok SuperGrok Plus · 7d 1.2M tok'
 check "gnu-grok-segment-env" "$(PATH="$GNU_PATH" XDG_CACHE_HOME="$grok_cache" LIMITLINE_GROK=1 NO_COLOR=1 "$BIN" < "$FIX/no_rate_limits.json" | strip_ansi)" "$grok_on"
 grok_cfg="$TEST_HOME/grok.toml"
 printf '%s\n' 'grok = "on"' > "$grok_cfg"
@@ -590,7 +660,7 @@ grok_seg=$(XDG_CACHE_HOME="$grok_cache" LIMITLINE_SEGMENTS="model,grok" NO_COLOR
 check "grok-segment-named" "$grok_seg" 'Opus 5.5 │ grok SuperGrok Plus · 7d 1.2M tok'
 touch -t 202001010000 "$grok_cache/limitline/grok.line"
 grok_stale=$(XDG_CACHE_HOME="$grok_cache" LIMITLINE_GROK=1 NO_COLOR=1 "$BIN" < "$FIX/no_rate_limits.json" | strip_ansi)
-check "grok-segment-stale-hidden" "$grok_stale" 'Opus 5.5 │ ctx ▓▓░░░ ·41% │ $0.12'
+check "grok-segment-stale-hidden" "$grok_stale" 'Opus 5.5 │ ctx ▓▓░░░ 41% │ $0.12'
 
 if "$ROOT/integrations/codex/install.sh" | grep -q -F 'five-hour-limit'; then
   check "codex-install-print" "yes" "yes"
@@ -616,7 +686,7 @@ fi
 # Pace compares percent used with percent of the window already elapsed.
 pace_got=$(NO_COLOR=1 LIMITLINE_PACE=1 "$BIN" < "$FIX/full.json" | strip_ansi)
 pace_got=${pace_got%$'\n'}
-check "pace-week" "$pace_got" 'Opus 5.5 │ ctx ▓▓░░░ ·41% │ 5h ▓▓▓░░ +62% ↻1h42m │ 7d ▓▓░░░ ·38% ↻Thu 09:00 │ ~15%/day left for 4d │ $1.25'
+check "pace-week" "$pace_got" 'Opus 5.5 │ ctx ▓▓░░░ 41% │ 5h ▓▓▓░░ +62% ↻1h42m │ 7d ▓▓░░░ ·38% ↻Thu 09:00 │ ~15%/day left for 4d │ $1.25'
 
 ahead_got=$(NO_COLOR=1 LIMITLINE_PACE=1 "$BIN" < "$FIX/over_80.json" | strip_ansi)
 ahead_got=${ahead_got%$'\n'}
@@ -658,13 +728,13 @@ for offset, pct in enumerate((12, 25, 37, 50, 62, 75)):
 PY
 spark_got=$(NO_COLOR=1 LIMITLINE_SPARK=1 "$BIN" < "$FIX/full.json" | strip_ansi)
 spark_got=${spark_got%$'\n'}
-check "sparkline" "$spark_got" 'Opus 5.5 │ ctx ▓▓░░░ ·41% │ 5h ▓▓▓░░ +62% ↻1h42m │ 5h ▁▃▅▆▅ 62% │ 7d ▓▓░░░ ·38% ↻Thu 09:00 │ 7d ▁▃▃▅▅▇▄ 38% │ $1.25'
+check "sparkline" "$spark_got" 'Opus 5.5 │ ctx ▓▓░░░ 41% │ 5h ▓▓▓░░ +62% ↻1h42m │ 5h ▁▃▅▆▅ 62% │ 7d ▓▓░░░ ·38% ↻Thu 09:00 │ 7d ▁▃▃▅▅▇▄ 38% │ $1.25'
 rm -f "$XDG_CACHE_HOME/limitline/history-5h.tsv" "$XDG_CACHE_HOME/limitline/history-7d.tsv"
 
 # Reset wording, and a single sparkle on the first prompt after usage falls.
 fresh_got=$(NO_COLOR=1 LIMITLINE_FRESH=1 "$BIN" < "$FIX/full.json" | strip_ansi)
 fresh_got=${fresh_got%$'\n'}
-check "fresh-wording" "$fresh_got" 'Opus 5.5 │ ctx ▓▓░░░ ·41% │ 5h ▓▓▓░░ +62% fresh in 1h42m │ 7d ▓▓░░░ ·38% fresh Thu 09:00 │ $1.25'
+check "fresh-wording" "$fresh_got" 'Opus 5.5 │ ctx ▓▓░░░ 41% │ 5h ▓▓▓░░ +62% fresh in 1h42m │ 7d ▓▓░░░ ·38% fresh Thu 09:00 │ $1.25'
 rm -f "$XDG_CACHE_HOME/limitline/fresh.state"
 high='{"model":{"display_name":"Opus"},"rate_limits":{"five_hour":{"used_percentage":90,"resets_at":1762062120}}}'
 low='{"model":{"display_name":"Opus"},"rate_limits":{"five_hour":{"used_percentage":8,"resets_at":1762080000}}}'
@@ -716,7 +786,7 @@ printf '%s\n' "1762050000 1.00" > "$XDG_CACHE_HOME/limitline/history-cost.tsv"
 vitals_payload='{"model":{"display_name":"Opus"},"cost":{"total_cost_usd":1.25,"total_duration_ms":180000,"total_lines_added":10,"total_lines_removed":2},"context_window":{"used_percentage":40,"auto_compact_count":2}}'
 vitals_got=$(printf '%s' "$vitals_payload" | NO_COLOR=1 LIMITLINE_VITALS=1 "$BIN" | strip_ansi)
 vitals_got=${vitals_got%$'\n'}
-check "vitals" "$vitals_got" 'Opus │ ctx ▓▓░░░ ·40% │ session 3m · compact ×2 · +10 -2 · $1.25↑'
+check "vitals" "$vitals_got" 'Opus │ ctx ▓▓░░░ 40% │ session 3m · compact ×2 · +10 −2 · $1.25'
 printf '%s\n' "1762050000 1.00" > "$XDG_CACHE_HOME/limitline/history-cost.tsv"
 vitals_py=$(printf '%s' "$vitals_payload" | PATH="$nojq" NO_COLOR=1 LIMITLINE_VITALS=1 "$BIN" | strip_ansi)
 vitals_py=${vitals_py%$'\n'}
@@ -750,10 +820,10 @@ fi
 # Themes.
 pill_got=$(NO_COLOR=1 LIMITLINE_THEME=pill "$BIN" < "$FIX/full.json" | strip_ansi)
 pill_got=${pill_got%$'\n'}
-check "theme-pill" "$pill_got" '⟨Opus 5.5⟩ ⟨ctx ▓▓░░░ ·41%⟩ ⟨5h ▓▓▓░░ +62% ↻1h42m⟩ ⟨7d ▓▓░░░ ·38% ↻Thu 09:00⟩ ⟨$1.25⟩'
+check "theme-pill" "$pill_got" '⟨Opus 5.5⟩ ⟨ctx ▓▓░░░ 41%⟩ ⟨5h ▓▓▓░░ +62% ↻1h42m⟩ ⟨7d ▓▓░░░ ·38% ↻Thu 09:00⟩ ⟨$1.25⟩'
 emoji_got=$(NO_COLOR=1 LIMITLINE_THEME=emoji "$BIN" < "$FIX/full.json" | strip_ansi)
 emoji_got=${emoji_got%$'\n'}
-check "theme-emoji" "$emoji_got" '🧠 Opus 5.5 │ 🪟 ctx ▓▓░░░ ·41% │ ⏱ 5h ▓▓▓░░ +62% ⏳1h42m │ 📅 7d ▓▓░░░ ·38% ⏳Thu 09:00 │ 💵 $1.25'
+check "theme-emoji" "$emoji_got" '🧠 Opus 5.5 │ 🪟 ctx ▓▓░░░ 41% │ ⏱ 5h ▓▓▓░░ +62% ⏳1h42m │ 📅 7d ▓▓░░░ ·38% ⏳Thu 09:00 │ 💵 $1.25'
 mono_raw=$(LIMITLINE_THEME=mono "$BIN" < "$FIX/full.json")
 mono_got=$(printf '%s' "$mono_raw" | strip_ansi)
 mono_got=${mono_got%$'\n'}
@@ -823,7 +893,7 @@ check "install-refresh-interval" "$install_refresh" '2'
 seven_snap="$TEST_HOME/seven-snapshot.json"
 printf '%s\n' '{"observed_at":1762055760,"provider":"claude","source":"statusline","stale":false,"windows":[{"name":"5h","used_pct":20,"resets_at":1762062120},{"name":"7d","used_pct":67,"resets_at":1762419600}]}' > "$seven_snap"
 seven_new=$(LIMITLINE_CLAUDE_CACHE=1 LIMITLINE_CLAUDE_SNAPSHOT="$seven_snap" NO_COLOR=1 "$BIN" < "$FIX/no_rate_limits.json" | strip_ansi)
-check "claude-7d-cached-new-session" "$seven_new" 'Opus 5.5 │ ctx ▓▓░░░ ·41% │ 7d ▓▓▓░░ +67% ↻Thu 09:00 · 4m ago │ $0.12'
+check "claude-7d-cached-new-session" "$seven_new" 'Opus 5.5 │ ctx ▓▓░░░ 41% │ 7d ▓▓▓░░ +67% ↻Thu 09:00 · 4m ago │ $0.12'
 seven_nojq=$(PATH="$nojq" LIMITLINE_CLAUDE_CACHE=1 LIMITLINE_CLAUDE_SNAPSHOT="$seven_snap" NO_COLOR=1 "$BIN" < "$FIX/no_rate_limits.json" | strip_ansi)
 check "claude-7d-cached-nojq" "$seven_nojq" "$seven_new"
 # A reply that carries only the 5h window keeps the cached week, and its real age.
@@ -836,7 +906,7 @@ check "claude-7d-cached-age-kept" "$seven_again" "$seven_new"
 # Once the cached week has reset, its percent is last week's: the segment says so instead.
 printf '%s\n' '{"observed_at":1761400000,"provider":"claude","source":"statusline","stale":false,"windows":[{"name":"7d","used_pct":90,"resets_at":1761900000}]}' > "$seven_snap"
 seven_old=$(LIMITLINE_CLAUDE_CACHE=1 LIMITLINE_CLAUDE_SNAPSHOT="$seven_snap" NO_COLOR=1 "$BIN" < "$FIX/no_rate_limits.json" | strip_ansi)
-check "claude-7d-cached-reset-passed" "$seven_old" 'Opus 5.5 │ ctx ▓▓░░░ ·41% │ 7d reset Fri 08:40 · no newer reading │ $0.12'
+check "claude-7d-cached-reset-passed" "$seven_old" 'Opus 5.5 │ ctx ▓▓░░░ 41% │ 7d reset Fri 08:40 · no newer reading │ $0.12'
 seven_old_py=$(PATH="$nojq" LIMITLINE_CLAUDE_CACHE=1 LIMITLINE_CLAUDE_SNAPSHOT="$seven_snap" NO_COLOR=1 "$BIN" < "$FIX/no_rate_limits.json" | strip_ansi)
 check "claude-7d-cached-reset-passed-nojq" "$seven_old_py" "$seven_old"
 # A live 7d reading never shows an age.
@@ -1030,7 +1100,7 @@ printf '%s' "$plan_watch" | grep -q -F 'cursor+grok' && ! printf '%s' "$plan_wat
 python3 "$ROOT/lib/refresh.py" --no-fetch
 check "plan-live-grok-line" "$(cat "$LIMITLINE_GROK_LINE")" "$(printf '%s\n%s' 'cursor+grok 74% · Fri 05:22 · grok 7d 14 tok' '74 0 live')"
 plan_line=$(LIMITLINE_GROK=1 "$BIN" < "$FIX/no_rate_limits.json")
-check "plan-status-line" "$(printf '%s' "$plan_line" | strip_ansi)" 'Opus 5.5 │ ctx ▓▓░░░ ·41% │ $0.12 │ cursor+grok +74% · Fri 05:22 · grok 7d 14 tok'
+check "plan-status-line" "$(printf '%s' "$plan_line" | strip_ansi)" 'Opus 5.5 │ ctx ▓▓░░░ 41% │ $0.12 │ cursor+grok +74% · Fri 05:22 · grok 7d 14 tok'
 printf '%s' "$plan_line" | grep -q -F $'\033[33m+74%' \
   && check "plan-status-line-colour" "yes" "yes" || check "plan-status-line-colour" "$(printf '%s' "$plan_line" | cat -v)" "coloured live percent"
 plan_seg=$(NO_COLOR=1 LIMITLINE_SEGMENTS="model,cursor+grok" "$BIN" < "$FIX/no_rate_limits.json")
@@ -1146,10 +1216,10 @@ export LIMITLINE_PHAROS_SUMMARY="$TEST_HOME/s-jobs.json"
 "$BIN" refresh >/dev/null
 check "jobs-line" "$(cat "$XDG_CACHE_HOME/limitline/jobs.line")" 'jobs mining 70/1842 ✗3 · backup ok 04:00'
 jobs_line=$(NO_COLOR=1 "$BIN" < "$FIX/no_rate_limits.json")
-check "jobs-status-line" "$jobs_line" 'Opus 5.5 │ ctx ▓▓░░░ ·41% │ $0.12 │ jobs mining 70/1842 ✗3 · backup ok 04:00'
+check "jobs-status-line" "$jobs_line" 'Opus 5.5 │ ctx ▓▓░░░ 41% │ $0.12 │ jobs mining 70/1842 ✗3 · backup ok 04:00'
 check "gnu-jobs-status-line" "$(PATH="$GNU_PATH" NO_COLOR=1 "$BIN" < "$FIX/no_rate_limits.json")" "$jobs_line"
 jobs_off=$(NO_COLOR=1 LIMITLINE_JOBS=off "$BIN" < "$FIX/no_rate_limits.json")
-check "jobs-off" "$jobs_off" 'Opus 5.5 │ ctx ▓▓░░░ ·41% │ $0.12'
+check "jobs-off" "$jobs_off" 'Opus 5.5 │ ctx ▓▓░░░ 41% │ $0.12'
 jobs_two=$(NO_COLOR=1 LIMITLINE_LINES=2 "$BIN" < "$FIX/full.json" | tail -n 1)
 printf '%s' "$jobs_two" | grep -q -F 'jobs mining' && check "jobs-line-two" "yes" "yes" || check "jobs-line-two" "$jobs_two" "jobs on line 2"
 jobs_status=$("$BIN" status)
