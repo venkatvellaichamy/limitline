@@ -1367,6 +1367,37 @@ check "five-attention-reason" "$(five_attention)" 'today ▶ 0 running │ ⚙ 2
 check "five-attention-config-counts" "$(LIMITLINE_CONFIG="$TEST_HOME/attention.toml" five_attention)" 'today ▶ 0 running │ ⚙ 2 working │ ✓ 0 done │ ⛔ 1 blocked │ ✋ 1 need you │ ✗ 0 failed · ↻ 0 retried │ ⏸ 0 waiting on limit'
 make_summary "$TEST_HOME/five-pharos/summary.json" '{"running":0,"done":0,"need_you":1,"failed":0,"retried":0,"waiting_limit":0}'
 check "five-attention-legacy" "$(five_attention)" 'today ▶ 0 running │ ✓ 0 done │ ✋ 1 need you │ ✗ 0 failed · ↻ 0 retried │ ⏸ 0 waiting on limit'
+
+# 0.15 layouts: line1 = [...] ... lineN = [...], and presets that are named layouts.
+lay() { NO_COLOR=1 LIMITLINE_DIR=1 LIMITLINE_REFRESH=0 "$BIN" < "$rich" | strip_ansi; }
+check "preset-minimal" "$(LIMITLINE_PRESET=minimal lay)" 'demo │ Opus 5.5 │ ctx ▓▓░░░ 32% · 678k left'
+check "preset-default-is-default" "$(LIMITLINE_PRESET=default lay)" "$(lay)"
+check "preset-full" "$(LIMITLINE_PRESET=full lay)" "$(printf '%s\n' \
+  'demo │ Opus 5.5 │ effort high │ Explanatory │ ctx ▓▓░░░ 32% · 678k left │ 322k in · 2.4k out │ $276.92 60h32m +17,898 −506' \
+  '5h ▓▓▓░░ +62% ↻1h42m │ 7d ▓▓░░░ ·38% ↻Thu 09:00 │ PR #19 pending │ vim INSERT │ statusline picker │ v2.1.317 │ abcdef')"
+check "preset-line-override" "$(LIMITLINE_PRESET=minimal LIMITLINE_LINE2=7d,5h lay)" "$(printf '%s\n' \
+  'demo │ Opus 5.5 │ ctx ▓▓░░░ 32% · 678k left' '7d ▓▓░░░ ·38% ↻Thu 09:00 │ 5h ▓▓▓░░ +62% ↻1h42m')"
+check "preset-line-removed" "$(LIMITLINE_PRESET=full LIMITLINE_LINE2='[]' lay)" \
+  'demo │ Opus 5.5 │ effort high │ Explanatory │ ctx ▓▓░░░ 32% · 678k left │ 322k in · 2.4k out │ $276.92 60h32m +17,898 −506'
+check "preset-unknown-is-default" "$(LIMITLINE_PRESET=nope lay)" "$(lay)"
+lay_cfg="$TEST_HOME/layout.toml"
+printf '%s\n' 'line1 = ["current-dir", "git-branch", "model-with-reasoning", "context-remaining"]' 'line2 = ["vitals"]' 'colors = "off"' > "$lay_cfg"
+check "layout-config" "$(LIMITLINE_CONFIG="$lay_cfg" LIMITLINE_DIR=1 LIMITLINE_REFRESH=0 "$BIN" < "$rich")" "$(printf '%s\n' \
+  'demo │ Opus 5.5 │ effort high │ ctx ▓▓░░░ 32% · 678k left' 'session 60h32m · +17,898 −506 · $276.92')"
+if LIMITLINE_CONFIG="$lay_cfg" "$BIN" < "$rich" | grep -q $'\033\\['; then check "colors-off" "colour" "plain"; else check "colors-off" "plain" "plain"; fi
+printf '%s\n' 'colors = "on"' 'line1 = "ctx"' > "$lay_cfg"
+if LIMITLINE_CONFIG="$lay_cfg" "$BIN" < "$rich" | grep -q $'\033\\['; then check "colors-on" "colour" "colour"; else check "colors-on" "plain" "colour"; fi
+printf '%s\n' 'segments = ["model"]' 'line1 = ["ctx"]' > "$lay_cfg"
+check "layout-wins-over-segments" "$(LIMITLINE_CONFIG="$lay_cfg" lay)" 'ctx ▓▓░░░ 32% · 678k left'
+check "layout-narrow" "$(LIMITLINE_PRESET=full LIMITLINE_COLUMNS=60 lay | head -n 1)" 'demo │ Opus 5.5 │ ctx ▓▓░░░ 32% · 678k left'
+# preset "pharos" is today's five-line view: line 1, then used, today, older, hosts.
+printf '%s' '{"version":1,"generated_at":1762056000,"plans":[],"hosts":{"hosts":[{"name":"studio","free_pct":82,"load_pct":22,"reachable":true}]}}' > "$TEST_HOME/five-pharos/usage.json"
+five_lay() { printf '%s' "$five_in" | NO_COLOR=1 LIMITLINE_ANIMATE=off XDG_CACHE_HOME="$five_cache" LIMITLINE_PHAROS_HOME="$TEST_HOME/five-pharos" LIMITLINE_COLUMNS=500 LIMITLINE_REFRESH=0 "$BIN"; }
+check "preset-pharos-is-five-lines" "$(LIMITLINE_PRESET=pharos five_lay)" "$(LIMITLINE_LINES=5 five_lay)"
+check "preset-pharos-lines" "$(LIMITLINE_PRESET=pharos five_lay | wc -l | tr -d ' ')" "4"
+pharos_order=$(LIMITLINE_PRESET=pharos LIMITLINE_LINE2=hosts LIMITLINE_LINE3=used LIMITLINE_LINE4='[]' LIMITLINE_LINE5='[]' five_lay | cut -c1-5)
+check "pharos-lines-reordered" "$pharos_order" "$(printf '%s\n' 'Opus ' 'hosts' 'used ')"
+check "pharos-line-only" "$(LIMITLINE_LINE1=hosts five_lay)" 'hosts studio 82% mem free · 22% cpu'
 if five_unit=$(python3 -m unittest -q "$ROOT/tests/test_fivelines.py" 2>&1); then
   check "fivelines-unit" "ok" "ok"
 else

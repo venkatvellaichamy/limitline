@@ -954,27 +954,51 @@ def build(now=None, columns=None):
 
 
 def _build(style, now, columns):
+    return [text for _name, text in _build_named(style, now, columns) if text]
+
+
+def build_named(now=None, columns=None):
+    """[(name, text)] for used, today, older, hosts; a line with nothing to say is ""."""
+    global _memo
+    now = now_epoch() if now is None else now
+    if columns is None:
+        columns = int(num(env("LL_COLUMNS")) or 0)
+    style = Style()
+    _memo = {}
+    try:
+        return _build_named(style, now, columns)
+    finally:
+        _memo = None
+
+
+def _build_named(style, now, columns):
     drops = range(1, len(JOB_DROP))
-    lines = [safe(lambda: fit(used_variants(style, now), columns))]
+    lines = [("used", safe(lambda: fit(used_variants(style, now), columns)))]
     summary = safe(lambda: job_summary(now))
     if summary:
-        lines.append(safe(lambda: fit(
+        lines.append(("today", safe(lambda: fit(
             [lambda: render_today(style, summary, now),
              lambda: render_today(style, summary, now, with_reason=False), lambda: render_today(style, summary, now, with_event=False, with_reason=False),
              lambda: render_today(style, summary, now, with_event=False, only_nonzero=True, with_reason=False)]
-            + [lambda d=d: render_today(style, summary, now, with_event=False, only_nonzero=True, drop=d, with_reason=False) for d in drops], columns)))
-        lines.append(safe(lambda: fit(
+            + [lambda d=d: render_today(style, summary, now, with_event=False, only_nonzero=True, drop=d, with_reason=False) for d in drops], columns))))
+        lines.append(("older", safe(lambda: fit(
             [lambda: render_older(style, summary), lambda: render_older(style, summary, with_reason=False), lambda: render_older(style, summary, with_oldest=False, with_reason=False)]
-            + [lambda d=d: render_older(style, summary, with_oldest=False, drop=d, with_reason=False) for d in drops], columns)))
+            + [lambda d=d: render_older(style, summary, with_oldest=False, drop=d, with_reason=False) for d in drops], columns))))
     hosts = safe(lambda: host_count(now)) or 0
-    lines.append(safe(lambda: fit(
+    lines.append(("hosts", safe(lambda: fit(
         [lambda: render_hosts(style, now), lambda: render_hosts(style, now, with_cpu=False)]
-        + [lambda k=k: render_hosts(style, now, with_cpu=False, keep=k) for k in range(max(0, hosts - 1), 0, -1)], columns)))
-    return [line for line in lines if line]
+        + [lambda k=k: render_hosts(style, now, with_cpu=False, keep=k) for k in range(max(0, hosts - 1), 0, -1)], columns))))
+    return lines
 
 
 def main():
     try:
+        pick = [name for name in env("LL_PICK").split(",") if name]
+        if pick:
+            # A layout places these lines itself: "name<TAB>text", one per drawn line.
+            out = ["%s\t%s" % (name, text) for name, text in build_named() if name in pick and text]
+            sys.stdout.write("".join(line + "\n" for line in out))
+            return 0
         sys.stdout.write("\n".join(build()) + "\n")
     except Exception:  # the status line must never fail
         pass

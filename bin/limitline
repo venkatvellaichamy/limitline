@@ -251,6 +251,11 @@ if [[ -n "${LIMITLINE_JOBS_TTL:-}" ]]; then JOBS_TTL="$LIMITLINE_JOBS_TTL"; fi
 if [[ -n "${LIMITLINE_DIR:-}" ]]; then DIR_MODE="$LIMITLINE_DIR"; DIR_SET=1; fi
 if [[ -n "${LIMITLINE_DIR_STYLE:-}" ]]; then DIR_STYLE="$LIMITLINE_DIR_STYLE"; fi
 if [[ -n "${LIMITLINE_PROJECT:-}" ]]; then PROJECT_MODE="$LIMITLINE_PROJECT"; PROJECT_SET=1; fi
+if [[ -n "${LIMITLINE_PRESET:-}" ]]; then PRESET="$LIMITLINE_PRESET"; fi
+for _n in 1 2 3 4 5 6 7 8 9; do
+  _v="LIMITLINE_LINE$_n"
+  [[ -n "${!_v:-}" ]] && printf -v "CFG_LINE$_n" '%s' "${!_v}"
+done
 if [[ -n "${LIMITLINE_SSH_TIMEOUT:-}" ]]; then SSH_TIMEOUT="$LIMITLINE_SSH_TIMEOUT"; fi
 if [[ -n "${LIMITLINE_MEM_WARN:-}" ]]; then MEM_WARN="$LIMITLINE_MEM_WARN"; fi
 if [[ -z "${LIMITLINE_HOSTS+x}" && -n "$HOSTS_RAW" ]]; then
@@ -348,10 +353,50 @@ segment_ids() {
   done
   IFS=$old_ifs
 }
-# 0.15 changed line 1's default order and wording. A config that names its own
-# `segments` keeps 0.14's order and wording exactly.
+# Layouts (0.15): `lineN = [...]` lists the segments of line N in order, and a preset is
+# a named set of lines that `lineN` overrides one line at a time. `used`, `today`,
+# `older` and `hosts` are whole lines from Pharos. `lineN = []` drops a preset's line.
+P_LINE1=""; P_LINE2=""; P_LINE3=""; P_LINE4=""; P_LINE5=""
+case "$(printf '%s' "$PRESET" | tr -d '[:space:]')" in
+  minimal) P_LINE1="dir,git,model,ctx" ;;
+  default) P_LINE1="dir,project,git,model,ctx,style,5h,7d,spend,burn,cost,jobs,pr,cache,vim,codex" ;;
+  full)
+    P_LINE1="dir,project,git,model,effort,style,ctx,tokens,cost"
+    P_LINE2="5h,7d,spend,codex,grok,jobs,pr,cache,vim,title,version,session"
+    ;;
+  pharos)
+    P_LINE1="dir,project,git,model,ctx,style,cost,pr,cache,vim"
+    P_LINE2="used"; P_LINE3="today"; P_LINE4="older"; P_LINE5="hosts"
+    ;;
+esac
+LAYOUT=""
+LAYOUT_PHAROS=""
+for _n in 1 2 3 4 5 6 7 8 9; do
+  _c="CFG_LINE$_n"; _p="P_LINE$_n"
+  [[ -n "${!_c}${!_p}" ]] && LAYOUT="set"
+done
 FMT=new
-if [[ -n "$SEGMENTS" ]]; then
+if [[ -n "$LAYOUT" ]]; then
+  segments_off
+  LAYOUT=""
+  for _n in 1 2 3 4 5 6 7 8 9; do
+    _c="CFG_LINE$_n"; _p="P_LINE$_n"
+    _items="${!_c:-${!_p}}"
+    _items="${_items//[\[\]\"\'[:space:]]/}"
+    case "$_items" in ''|none|-) continue ;; esac
+    segment_ids "$_items"
+    # A Pharos line is the whole line: the first one named wins.
+    old_ifs=$IFS; IFS=','
+    for _id in $_items; do
+      case "$_id" in
+        used|today|older|hosts) SEG_IDS="@$_id"; LAYOUT_PHAROS="${LAYOUT_PHAROS:+$LAYOUT_PHAROS,}$_id"; break ;;
+      esac
+    done
+    IFS=$old_ifs
+    [[ -n "$SEG_IDS" ]] && LAYOUT="${LAYOUT:+$LAYOUT;}$SEG_IDS"
+  done
+  [[ -n "$LAYOUT" ]] || LAYOUT="-"
+elif [[ -n "$SEGMENTS" ]]; then
   FMT=old
   segments_off
   segment_ids "$SEGMENTS"
@@ -1385,6 +1430,36 @@ if [[ "$ON_SEVEN" == "1" && -z "$seven_pct" && -n "$seven_cached_pct" ]]; then
   fi
 fi
 
+# Lines 2-5 of the five-line view (used, today, older, hosts), from Pharos's files.
+# With LL_PICK=name,... it prints "name<TAB>text" for those lines instead.
+pharos_lines() {
+  LL_PICK="${1:-}" LL_JOBS_DETAIL="${LIMITLINE_JOBS_DETAIL:-${JOBS_DETAIL:-reason}}" LL_COLOR="$USE_COLOR" LL_THEME="$THEME" LL_MARKS="${MARKS_MODE:-unicode}" LL_ANIMATE="${LIMITLINE_ANIMATE:-${ANIMATE_MODE:-on}}" LL_PLAN_VIEW="${LIMITLINE_PLAN_VIEW:-${PLAN_VIEW:-bar}}" LL_PLAN_NUMBERS="${LIMITLINE_PLAN_NUMBERS:-${PLAN_NUMBERS:-off}}" LL_PLAN_SHOW="${LIMITLINE_PLAN_SHOW:-${PLAN_SHOW:-used}}" LL_PLAN_RESETS="${LIMITLINE_PLAN_RESETS:-${PLAN_RESETS:-near-cap}}" LL_COLUMNS="$max_cols" \
+  LL_CLAUDE5="$five_pct" LL_CLAUDE5_RESET="$five_epoch" LL_CLAUDE7="$seven_pct" LL_CLAUDE7_RESET="$seven_epoch" \
+  LL_CODEX5="$codex5" LL_CODEX5_RESET="$codex5_raw" LL_CODEX7="$codex7" LL_CODEX7_RESET="$codex7_raw" \
+  LL_CODEX_CACHE="$(codex_cache_file)" LL_GROK_TTL="$GROK_TTL" \
+    python3 "$LIMITLINE_ROOT/lib/fivelines.py" 2>/dev/null || true
+}
+
+# A layout's `@@used` (etc.) lines become the matching Pharos line, or nothing.
+layout_fill() {
+  local line name text
+  PL_used=""; PL_today=""; PL_older=""; PL_hosts=""
+  while IFS= read -r line; do
+    name="${line%%$'\t'*}"
+    text="${line#*$'\t'}"
+    case "$name" in used|today|older|hosts) printf -v "PL_$name" '%s' "$text" ;; esac
+  done < <(pharos_lines "$LAYOUT_PHAROS")
+  while IFS= read -r line; do
+    if [[ "$line" == @@* ]]; then
+      name="PL_${line#@@}"
+      [[ -n "${!name:-}" ]] && printf '%s\n' "${!name}"
+    else
+      printf '%s\n' "$line"
+    fi
+  done
+}
+
+render_main() {
 {
   emit_kv theme "$THEME"
   emit_kv lines "$LINES"
@@ -1450,6 +1525,7 @@ fi
   emit_kv app "$app_text"
   emit_kv in_tokens "$in_tokens"
   emit_kv out_tokens "$out_tokens"
+  emit_kv layout "$LAYOUT"
 } | LC_ALL=C awk '
 function val(k) { return (k in v) ? v[k] : "" }
 function pct(p) {
@@ -1849,6 +1925,7 @@ function reorder(    ord, n, i, j, m, key) {
         m++
         hold_s[m] = seg[j]
         hold_p[m] = pri_of[j]
+        hold_k[m] = kind_of[j]
       }
     }
   }
@@ -1857,12 +1934,64 @@ function reorder(    ord, n, i, j, m, key) {
     m++
     hold_s[m] = seg[j]
     hold_p[m] = pri_of[j]
+    hold_k[m] = kind_of[j]
   }
   nseg = m
   for (i = 1; i <= m; i++) {
     seg[i] = hold_s[i]
     pri_of[i] = hold_p[i]
+    kind_of[i] = hold_k[i]
     drop[i] = 0
+  }
+}
+function join_line(m,    k, out, count, sep) {
+  out = ""
+  count = 0
+  sep = sep_of()
+  for (k = 1; k <= m; k++) {
+    if (ld[k]) continue
+    out = (count == 0) ? ls[k] : out sep ls[k]
+    count++
+  }
+  return out
+}
+# One output line per layout line. A segment is used once, on the first line that names
+# it; `cost` and `vitals` name the same slot. `@used` and the like are Pharos lines,
+# filled in after awk. Each line drops its lowest-priority segments until it fits.
+function render_layout(    maxc, nl, L, i, n, ids, k, j, m, out, guard, best, bi, want) {
+  maxc = val("max_cols") + 0
+  nl = split(val("layout"), L, ";")
+  for (i = 1; i <= nl; i++) {
+    if (L[i] == "" || L[i] == "-") continue
+    if (substr(L[i], 1, 1) == "@") { print "@@" substr(L[i], 2); continue }
+    n = split(L[i], ids, ",")
+    m = 0
+    for (k = 1; k <= n; k++) {
+      want = ids[k]
+      for (j = 1; j <= nseg; j++) {
+        if (used_seg[j]) continue
+        if (kind_of[j] == want || (want == "cost" && kind_of[j] == "vitals") || (want == "vitals" && kind_of[j] == "cost")) {
+          used_seg[j] = 1
+          m++
+          ls[m] = seg[j]
+          lp[m] = pri_of[j]
+          ld[m] = 0
+        }
+      }
+    }
+    if (m == 0) continue
+    guard = 0
+    while (maxc > 0 && guard < 40) {
+      guard++
+      if (plain_len(join_line(m)) <= maxc) break
+      best = 999
+      bi = 0
+      for (k = 1; k <= m; k++) if (!ld[k] && lp[k] < best) { best = lp[k]; bi = k }
+      if (bi == 0) break
+      ld[bi] = 1
+    }
+    out = join_line(m)
+    if (out != "") print out
   }
 }
 function join_range(lo, hi,    i, out, count, sep) {
@@ -1962,7 +2091,9 @@ END {
   push(3, "version", themed("version", val("version")))
   push(2, "app", themed("app", val("app")))
   reorder()
-  if (val("lines") + 0 >= 5) {
+  if (val("layout") != "") {
+    render_layout()
+  } else if (val("lines") + 0 >= 5) {
     # Five lines: line 1 is this session only. Lines 2-5 come from lib/fivelines.py.
     for (i = 1; i <= nseg; i++)
       if (!(kind_of[i] in session_kinds)) drop[i] = 1
@@ -1983,13 +2114,16 @@ END {
   }
 }
 '
+}
 
-if [[ "$LINES" -ge 5 ]]; then
-  LL_JOBS_DETAIL="${LIMITLINE_JOBS_DETAIL:-${JOBS_DETAIL:-reason}}" LL_COLOR="$USE_COLOR" LL_THEME="$THEME" LL_MARKS="${MARKS_MODE:-unicode}" LL_ANIMATE="${LIMITLINE_ANIMATE:-${ANIMATE_MODE:-on}}" LL_PLAN_VIEW="${LIMITLINE_PLAN_VIEW:-${PLAN_VIEW:-bar}}" LL_PLAN_NUMBERS="${LIMITLINE_PLAN_NUMBERS:-${PLAN_NUMBERS:-off}}" LL_PLAN_SHOW="${LIMITLINE_PLAN_SHOW:-${PLAN_SHOW:-used}}" LL_PLAN_RESETS="${LIMITLINE_PLAN_RESETS:-${PLAN_RESETS:-near-cap}}" LL_COLUMNS="$max_cols" \
-  LL_CLAUDE5="$five_pct" LL_CLAUDE5_RESET="$five_epoch" LL_CLAUDE7="$seven_pct" LL_CLAUDE7_RESET="$seven_epoch" \
-  LL_CODEX5="$codex5" LL_CODEX5_RESET="$codex5_raw" LL_CODEX7="$codex7" LL_CODEX7_RESET="$codex7_raw" \
-  LL_CODEX_CACHE="$(codex_cache_file)" LL_GROK_TTL="$GROK_TTL" \
-    python3 "$LIMITLINE_ROOT/lib/fivelines.py" 2>/dev/null || true
+if [[ -n "$LAYOUT_PHAROS" ]]; then
+  render_main | layout_fill
+else
+  render_main
+fi
+
+if [[ -z "$LAYOUT" && "$LINES" -ge 5 ]]; then
+  pharos_lines
 fi
 
 exit 0
