@@ -1078,9 +1078,11 @@ if [[ "$ON_GIT" == "1" && ( -n "$cwd" || -n "$repo" ) ]]; then
       dirty="*"
     fi
     counts=$(git -C "$target" rev-list --left-right --count '@{upstream}...HEAD' 2>/dev/null || true)
+    # "BEHIND<TAB>AHEAD" (upstream is the left side). Keep only plain numbers.
     if [[ -n "$counts" ]]; then
-      behind=${counts%% *}
-      ahead=${counts##* }
+      read -r behind ahead _ <<< "$counts"
+      case "$behind" in ''|*[!0-9]*) behind="" ;; esac
+      case "$ahead" in ''|*[!0-9]*) ahead="" ;; esac
     fi
   fi
   git_text="$repo"

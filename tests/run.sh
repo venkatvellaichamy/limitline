@@ -379,6 +379,33 @@ git_got=$(printf '%s' "$git_payload" | LIMITLINE_GIT=1 NO_COLOR=1 "$BIN" | strip
 git_got=${git_got%$'\n'}
 check "git-branch" "$git_got" "example/demo demo*"
 
+# Ahead/behind: `git rev-list --left-right --count` prints "BEHIND<TAB>AHEAD". 0.14 split
+# on a space, so the raw "0<TAB>2" landed in both slots (`main ↑2	0 ↓2	0`).
+ab_repo="$TEST_HOME/ab"
+mkdir -p "$ab_repo"
+gitc() { git -C "$ab_repo" -c user.name=limitline -c user.email=limitline@example.com "$@"; }
+gitc init -q -b main
+gitc commit -q --allow-empty -m one
+gitc branch base
+gitc commit -q --allow-empty -m two
+gitc commit -q --allow-empty -m three
+gitc branch -q -u base main
+ab_render() { printf '{"workspace":{"current_dir":"%s"}}' "$ab_repo" | LIMITLINE_GIT=1 LIMITLINE_SEGMENTS=git NO_COLOR=1 "$BIN" | strip_ansi; }
+check "git-ahead-2" "$(ab_render)" "main ↑2"
+gitc branch -q -f base main
+gitc commit -q --allow-empty -m four
+gitc commit -q --allow-empty -m five
+gitc commit -q --allow-empty -m six
+check "git-ahead-3" "$(ab_render)" "main ↑3"
+gitc branch -q -f base main
+gitc reset -q --hard base~2
+check "git-behind-2" "$(ab_render)" "main ↓2"
+gitc commit -q --allow-empty -m diverge
+check "git-ahead-behind" "$(ab_render)" "main ↑1 ↓2"
+if ab_render | grep -q $'\t'; then check "git-no-tabs" "tab in output" "no tabs"; else check "git-no-tabs" "no tabs" "no tabs"; fi
+gitc branch -q -f base main
+check "git-even" "$(ab_render)" "main"
+
 toml="$TEST_HOME/.config/limitline/config.toml"
 mkdir -p "$(dirname "$toml")"
 printf '%s\n' 'theme = "ascii"' 'bar_width = 5' > "$toml"
