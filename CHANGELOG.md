@@ -12,7 +12,7 @@
 - **Folder first.** New `dir` segment (the folder name; `dir_style = "home"` for `~/projects/app`) and `project` segment (the repository's name when it differs from the folder, as in a linked worktree; from `git rev-parse`, or `.workspace.project_dir` outside git). Both are on by default; `project` hides itself when it equals the folder.
 - **Order.** Without a `segments` list, line 1 is folder, project, git, model, context, then everything else. This includes the five-line view's line 1. Git now ranks just below the folder, so with `lines = 2` it stays on line 1 and is no longer the first segment dropped on a narrow terminal.
 - **Plain labels.** Context reads `ctx ▓▓░░░ 32% · 678k left` (the colour carries the level; plan windows keep their `·`/`+`/`!` marks), line counts get thousands separators and a real minus (`+17,898 −506`; ascii keeps `-`), and in the emoji theme vitals is `⏱ 60h32m · …` instead of `♥ session …`, without the cost trend arrow.
-- **Old configs.** A config that names its own `segments` keeps 0.14's order and wording byte for byte. `tests/fixtures/legacy/` holds 0.14.0's output for four such configs; `tests/run.sh` compares against it. That includes a 0.14 quirk kept on purpose: a `segments` list naming `vitals` without `cost` shows no vitals (the layouts below do not have it).
+- **Old configs.** A config that names its own `segments` keeps 0.14's order and wording byte for byte. `tests/fixtures/legacy/` holds 0.14.0's output for four such configs; `tests/layout.sh` compares against it. That includes a 0.14 quirk kept on purpose: a `segments` list naming `vitals` without `cost` shows no vitals (the layouts below do not have it).
 
 ### Codex-style status line configuration
 
@@ -24,6 +24,7 @@
 
 ### Also
 
+- The 0.15 checks live in a new `tests/layout.sh`, which CI and the release workflow run after `tests/run.sh`. `tests/run.sh` keeps 0.14's checks. Its only edits: it pins `LIMITLINE_DIR=0`, because its fixtures send `cwd` and predate the folder segment, and it clears the new layout variables. Its expectations for the default line now read `ctx … 41%` without the dot, `−` for removed lines, and vitals without the cost arrow, as the new line 1 specifies.
 - `reorder()` in the renderer now moves each segment's kind with it (the five-line view's line-1 filter read stale kinds after a reorder).
 - `lib/fivelines.py` takes `LL_PICK=used,hosts` to print chosen lines by name.
 - `limitline preview` / `theme` no longer write their sample 62%/38% into the cached Claude reading or relay it to `~/.pharos/inbox` (they now render with `LIMITLINE_PREVIEW=1`).

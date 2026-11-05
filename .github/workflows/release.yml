@@ -36,6 +36,7 @@ jobs:
         run: |
           python3 -m unittest tests/test_fivelines.py
           bash tests/run.sh
+          bash tests/layout.sh
       - name: GitHub release
         env:
           GH_TOKEN: ${{ github.token }}

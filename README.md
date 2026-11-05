@@ -516,6 +516,9 @@ limitline reads the status JSON a host already pipes in, an optional local confi
 
 ```bash
 tests/run.sh
+bash tests/layout.sh
 ```
+
+`tests/layout.sh` holds the 0.15 checks: line 1's order, git ahead/behind against a real repo, `dir`, `project` and the other new segments with and without their fields, per-line layouts, presets, `colors`, the `limitline statusline` picker, and `tests/fixtures/legacy/`, which holds configs rendered by 0.14.0 that must still render byte for byte.
 
 Fixtures cover a full payload, no rate limits, spend only, a near reset, usage over 80%, a context window near auto-compact, a cold prompt cache, a 60-column row, and every theme. The same script covers pace, sparklines, fresh wording, nudges, the value estimate, session vitals, alerts, the report, watch, and a two-machine merge. Fleet, machine, Cursor, Antigravity, Grok, and ledger fixtures are synthetic and use names such as `mini` and `worker-1`. ANSI colour codes are stripped before the comparison. The same fixtures are rendered once with `jq` and once with the python3 fallback. Codex fixtures cover many session files of mixed ages, a newest file with no event, a malformed last line, a second limit id, a 7-day window that outlives its 5-hour one, and events with no reset time. The shared plan has fixtures for a fresh, stale, reset, and week-old reading; jobs have fixtures for merging updates, a dead pid, a reused pid, another machine's pid, the finished-job window, and bad names. History has fixtures for the 10-minute sample gap, 30-day pruning, daily peaks, the weekly table, and jobs per machine, including a dead pid. The interactive watch is driven with replayed keys against a fake `pharos` and a real `sleep` process for job signals, and once in a pseudo-terminal. A warm status line, including a warm fleet, machine, or jobs cache, stays under 50 ms.
