@@ -9,10 +9,10 @@ A status line for AI plan limits. limitline **shows** usage; it does not measure
 Nothing in this tool opens a network connection, runs ssh, or starts another tool's CLI.
 
 ```
-Opus 5.5 │ ctx ▓▓░░░ ·41% │ 5h ▓▓▓░░ +62% ↻1h42m │ 7d ▓▓░░░ ·38% ↻Thu 09:00 │ $1.25 │ codex 5h ·12% · 7d +55%
+demo │ main ↓2 │ Opus 5.5 │ ctx ▓▓░░░ 41% · 590k left │ 5h ▓▓▓░░ +62% ↻1h42m │ 7d ▓▓░░░ ·38% ↻Thu 09:00 │ $1.25 │ codex 5h ·12% · 7d +55%
 ```
 
-Green is under 50% (`·`), yellow is 50–80% (`+`), and red is over 80% (`!`). The mark stays when `NO_COLOR` strips the colour. Reset times are relative under 24 hours (`↻1h42m`) and a weekday plus local time after that (`↻Thu 09:00`).
+Line 1 starts with the folder, the git branch (only non-zero `↑ahead ↓behind`, `*` when dirty), the model, and the context. Green is under 50% (`·`), yellow is 50–80% (`+`), and red is over 80% (`!`). The mark on the plan windows stays when `NO_COLOR` strips the colour. Reset times are relative under 24 hours (`↻1h42m`) and a weekday plus local time after that (`↻Thu 09:00`).
 
 Missing fields are skipped. Empty input still exits 0.
 
@@ -23,31 +23,31 @@ See [ROADMAP.md](ROADMAP.md) for shipped releases, hardening, and planned work.
 `minimal` (default):
 
 ```
-Opus 5.5 │ ctx ▓▓░░░ ·41% │ 5h ▓▓▓░░ +62% ↻1h42m │ 7d ▓▓░░░ ·38% ↻Thu 09:00 │ $1.25
+Opus 5.5 │ ctx ▓▓░░░ 41% │ 5h ▓▓▓░░ +62% ↻1h42m │ 7d ▓▓░░░ ·38% ↻Thu 09:00 │ $1.25
 ```
 
 `powerline`:
 
 ```
-Opus 5.5  ctx ██░░░ ·41%  5h ███░░ +62% ↻1h42m  7d ██░░░ ·38% ↻Thu 09:00  $1.25
+Opus 5.5  ctx ██░░░ 41%  5h ███░░ +62% ↻1h42m  7d ██░░░ ·38% ↻Thu 09:00  $1.25
 ```
 
 `ascii`, also forced by `LIMITLINE_ASCII=1`:
 
 ```
-Opus 5.5 | ctx ##--- ·41% | 5h ###-- +62% in 1h42m | 7d ##--- ·38% in Thu 09:00 | $1.25
+Opus 5.5 | ctx ##--- 41% | 5h ###-- +62% in 1h42m | 7d ##--- ·38% in Thu 09:00 | $1.25
 ```
 
 `pill` puts each segment in a rounded chip:
 
 ```
-⟨Opus 5.5⟩ ⟨ctx ▓▓░░░ ·41%⟩ ⟨5h ▓▓▓░░ +62% ↻1h42m⟩ ⟨7d ▓▓░░░ ·38% ↻Thu 09:00⟩ ⟨$1.25⟩
+⟨Opus 5.5⟩ ⟨ctx ▓▓░░░ 41%⟩ ⟨5h ▓▓▓░░ +62% ↻1h42m⟩ ⟨7d ▓▓░░░ ·38% ↻Thu 09:00⟩ ⟨$1.25⟩
 ```
 
 `emoji`:
 
 ```
-🧠 Opus 5.5 │ 🪟 ctx ▓▓░░░ ·41% │ ⏱ 5h ▓▓▓░░ +62% ⏳1h42m │ 📅 7d ▓▓░░░ ·38% ⏳Thu 09:00 │ 💵 $1.25
+🧠 Opus 5.5 │ 🪟 ctx ▓▓░░░ 41% │ ⏱ 5h ▓▓▓░░ +62% ⏳1h42m │ 📅 7d ▓▓░░░ ·38% ⏳Thu 09:00 │ 💵 $1.25
 ```
 
 `mono` is plain text. It stays plain even when colour is on:
@@ -56,12 +56,12 @@ Opus 5.5 | ctx ##--- ·41% | 5h ###-- +62% in 1h42m | 7d ##--- ·38% in Thu 09:0
 Opus 5.5  ctx 41%  5h 62% in 1h42m  7d 38% in Thu 09:00  $1.25
 ```
 
-Presets live in `examples/`. `limitline preview` and `limitline theme` print every theme from the same sample. `/limitline:theme` is the same picker inside Claude Code.
+Example configs live in `examples/`. `limitline preview` and `limitline theme` print every theme from the same sample. `/limitline:theme` is the same picker inside Claude Code.
 
 With pace, sparklines, and fresh wording turned on, the same session looks like this:
 
 ```
-Opus 5.5 │ ctx ▓▓░░░ ·41% │ 5h ▓▓▓░░ +62% fresh in 1h42m │ 5h ▁▃▅▆▅ 62% │ 7d ▓▓░░░ ·38% fresh Thu 09:00 │ 7d ▁▃▃▅▅▇▄ 38% │ ~15%/day left for 4d │ $1.25
+Opus 5.5 │ ctx ▓▓░░░ 41% │ 5h ▓▓▓░░ +62% fresh in 1h42m │ 5h ▁▃▅▆▅ 62% │ 7d ▓▓░░░ ·38% fresh Thu 09:00 │ 7d ▁▃▃▅▅▇▄ 38% │ ~15%/day left for 4d │ $1.25
 ```
 
 
@@ -145,18 +145,25 @@ echo '{"model":{"display_name":"Opus 5.5"},"rate_limits":{"five_hour":{"used_per
 
 ## What the Claude Code line can show
 
-Each segment can be turned off or reordered with `segments` in the config file.
+Each line's segments and their order are set with `line1` ... `line9`, a `preset`, or `/limitline:statusline` (see [Choosing what each line shows](#choosing-what-each-line-shows)).
 
 | Segment | Source |
 | --- | --- |
+| Folder (`dir`) | the last part of `.workspace.current_dir` (or `.cwd`): `📁 pharos`. `dir_style = "home"` shows the path from your home folder (`~/projects/pharos`). On by default; `dir = "off"` hides it |
+| Project (`project`) | the repository's name when it differs from the folder, as in a linked worktree (`feature-x │ limitline`) or a subfolder. From `git rev-parse` (the shared `.git` directory names the repository); outside git, the last part of `.workspace.project_dir`. On by default; hidden when it equals the folder |
 | Model | `.model.display_name`, with a leading `Claude ` removed |
+| Effort (`effort`) | `.effort.level`: `effort high`. Off until named. Codex's `model-with-reasoning` is `model` then `effort` |
+| Tokens (`tokens`) | `.context_window.total_input_tokens` and `total_output_tokens`: `322k in · 2.4k out`. Off until named |
+| Title (`title`) | `.session_name` (the `/rename` name or the AI title), cut at 40 characters. Off until named |
+| Version (`version`) | `.version`, Claude Code's version: `v2.1.317`. Off until named |
+| App (`app`) | `Claude Code`. Off until named |
 | Style | `.output_style.name` when it is not `default` |
 | Context | used percent, a bar, tokens left when the window size is known, and `↯ auto-compact in ~N%` once usage reaches the warn line (default 80, compact default 95) |
 | `5h` / `7d` | `.rate_limits.five_hour` and `.seven_day`. Claude Code sends each window only when the account reports it, so a line can show `7d` alone. A new session gets no `rate_limits` until its first reply, so `7d` then shows the last reading any session cached in `~/.cache/limitline/claude.json`, with its age: `7d 67% · 4m ago`. A reply that carries only the 5-hour window keeps that cached week and its age. A cached week whose reset has passed is last week's number, so the segment says `7d reset Fri 08:40 · no newer reading` instead of a percent. `LIMITLINE_CLAUDE_CACHE=0` turns the fallback off |
 | Spend | `.rate_limits.spend_limit` when present |
 | Pace | projection from local 5-hour snapshots, such as `pace ~1h35m` |
 | Cost | `.cost.total_cost_usd`, duration, and lines added or removed. `$0` is omitted |
-| Git | branch, dirty `*`, ahead and behind, from the workspace directory. Cached with the rest of the short-lived files |
+| Git | branch, dirty `*`, and only the non-zero counts of commits ahead (`↑3`) and behind (`↓2`) the upstream, from the workspace directory |
 | PR | `.pr.number` and review state. OSC 8 links only when `links` is on |
 | Cache | `cache cold: <cause>` only when the prompt cache is cold |
 | Vim | `.vim.mode` |
@@ -171,12 +178,12 @@ Each segment can be turned off or reordered with `segments` in the config file.
 | Fleet | `⚙ 3 run · 1 ✗`: Pharos's open work from `summary.json` (running, needs review, failed). `⚠` when a run waits on a plan limit. Off until named |
 | Machines | `mini 29% free · qwen3:14b`: free memory, then the loaded Ollama model. Hosts are split by ` / `. Unreachable is `mini ∅`. A loaded model that would leave under 15% free memory adds `⚠`. Off until named |
 | Value | `≈ $412 of value this week`, an estimate. Off until `value = "on"` |
-| Vitals | session duration, auto-compactions, lines, and the cost trend. Off until `vitals = "on"` |
+| Vitals | how long the session has run, auto-compactions, lines changed, and cost: `session 60h32m · +17,898 −506 · $276.92` (`⏱ 60h32m · …` in the emoji theme). It takes the cost segment's place. Off until `vitals = "on"` |
 
 Five lines are `lines = 5`:
 
 ```
-🧠 Opus 5.5 │ 🪟 ctx ▓▓▓░░ +58% 84k left │ ♥ session 2h10m · +312 -40 · $4.20
+📁 pharos │ 🌿 main ↓2 │ 🧠 Opus 5.5 │ 🪟 ctx ▓▓▓░░ 58% · 84k left │ ⏱ 2h10m · +312 −40 · $4.20
 used  ✻ claude 7d ███▌░ │ ◎ codex 5h ░░░░░ · 7d ███▌░ │ ⬡ cursor+grok ████▏ →Thu 23:22 │ ✦ agy gemini ░░░░░ · claude+gpt ▍░░░░ · argon █████ →Fri 15:35
 today ▶ 0 running │ ✓ 7 done │ ✋ 6 need you │ ✗ 3 failed · ↻ 0 retried │ ⏸ 1 waiting on limit
 older ✋ 5 need you │ ✗ 2 failed │ ⏸ 1 waiting on limit │ oldest 1d (website)
@@ -201,6 +208,75 @@ Every view on `used` shows the amount used, like the context meter on line 1: em
 With `lines = 5`, limitline never shows a number it cannot vouch for. When Pharos's `usage.json` is over 15 minutes old, or Pharos marks a plan stale, the plan shows `—` and its age (`codex 7d — 1h ago`); cursor+grok follows `grok_ttl` like line 1; a window whose reset time has passed says `5h reset, no newer reading`; an unreadable field is `—`; a reading more than 2 minutes in the future is not fresh (`· pharos clock ahead`). The end of `used` says when Pharos is installed but not running (`· pharos not running`), when `usage.json` is unreadable, and when its format is newer than this limitline understands (`version` above 1; unknown fields are ignored). Each Pharos file is read once per redraw, and only if it is a regular file.
 
 A second line is `lines = 2` or `LIMITLINE_LINES=2`. When `COLUMNS` or `LIMITLINE_COLUMNS` is set, the lowest-priority segments drop until the row fits.
+
+## Choosing what each line shows
+
+Like Codex's `/statusline`, you pick the items on each line and their order.
+
+```toml
+# ~/.config/limitline/config.toml
+preset = "full"                              # a named layout (below)
+line1 = ["dir", "git", "model", "ctx"]       # overrides the preset's line 1
+line2 = ["5h", "7d", "cost"]
+line3 = []                                   # drops the preset's line 3
+colors = "on"                                # or "off", like Codex's status_line_use_colors
+```
+
+- `lineN = [...]` lists line N's items in order (`line1` to `line9`; a comma string works too). Items are limitline ids or Codex ids (table below). Only listed items show; `cost` and `vitals` share one slot, so `vitals = "on"` fills a `cost` slot. Each line drops its lowest-priority items when the terminal is narrow.
+- `used`, `today`, `older`, and `hosts` are whole lines from Pharos (the five-line view's lines 2-5); a line that names one is that line.
+- A layout (`preset` or any `lineN`) wins over `segments` and `lines`. `LIMITLINE_PRESET` and `LIMITLINE_LINE1` ... `LIMITLINE_LINE9` override the file.
+- Without a layout, line 1 is folder, project, git, model, context, then everything else, with the wording shown above (`ctx ▓▓░░░ 32% · 678k left`, `+17,898 −506`).
+- **A config with its own `segments` list renders exactly as before 0.15**: its order, and 0.14's wording (`ctx ▓▓░░░ ·32% 678k left`, `+17898 -506`). `tests/fixtures/legacy/` holds 0.14.0's output for such configs.
+
+### Presets
+
+| `preset` | Lines |
+| --- | --- |
+| `minimal` | 1: `dir`, `git`, `model`, `ctx` |
+| `default` | 1: `dir`, `project`, `git`, `model`, `ctx`, `style`, `5h`, `7d`, `spend`, `burn`, `cost`, `jobs`, `pr`, `cache`, `vim`, `codex` (the same as no layout, without the opt-in extras) |
+| `full` | 1: `dir`, `project`, `git`, `model`, `effort`, `style`, `ctx`, `tokens`, `cost` · 2: `5h`, `7d`, `spend`, `codex`, `grok`, `jobs`, `pr`, `cache`, `vim`, `title`, `version`, `session` |
+| `pharos` | the five-line view: 1: `dir`, `project`, `git`, `model`, `ctx`, `style`, `cost`, `pr`, `cache`, `vim` · 2: `used` · 3: `today` · 4: `older` · 5: `hosts` |
+
+### Every item, and Codex's names for it
+
+Codex 0.166's `/statusline` items, and what limitline shows for each in Claude Code. Every limitline id also works in `segments`.
+
+| limitline id | Codex item | Data |
+| --- | --- | --- |
+| `dir` | `current-dir` | `.workspace.current_dir` (`.cwd`) |
+| `project` | `project`, `project-name` | `git rev-parse --show-toplevel --git-common-dir`; else `.workspace.project_dir` |
+| `git` | `git-branch` | `git` in the current folder |
+| `model` | `model-with-reasoning` (= `model`, `effort`) | `.model.display_name` |
+| `effort` | `reasoning` | `.effort.level` |
+| `ctx` | `context-remaining`, `context-used`, `context-window-size` | `.context_window.used_percentage`, `context_window_size`, `total_input_tokens`: used % and tokens left in one segment |
+| `5h` | `five-hour-limit` | `.rate_limits.five_hour` |
+| `7d` | `weekly-limit` | `.rate_limits.seven_day` (or the last cached reading) |
+| `tokens` | `used-tokens`, `total-input-tokens`, `total-output-tokens` | `.context_window.total_input_tokens`, `total_output_tokens` |
+| `cost` | `estimated-thread-cost` | `.cost.total_cost_usd`, `total_duration_ms`, lines |
+| `session` | `session-id` | `.session_id` (first 6 characters) |
+| `title` | `thread-title` | `.session_name` |
+| `version` | `codex-version` | `.version` (Claude Code's version) |
+| `app` | `app-name` | `Claude Code` (the only host of this status line) |
+| `style`, `spend`, `vitals`, `pr`, `cache`, `vim`, `burn`, `pace`, `spark`, `codex`, `grok`, `jobs`, `fleet`, `machines`, `nudge`, `value` | none | see the table above |
+| `used`, `today`, `older`, `hosts` | none | whole Pharos lines |
+| not available | `run-state` | Claude Code's status-line input has no running/idle state, and limitline does not read the transcript |
+| not available | `task-progress` | the input has no task list or progress |
+| not available | `thread-credits` | Claude Code has no credit balance; `spend` shows a spend limit when the account has one |
+
+### The picker
+
+`/limitline:statusline` lists the items, shows a live preview, asks for a preset, the items on each line, and colours, previews the result, and saves it. `/limitline:statusline --clear` goes back to the default line; `/limitline:statusline line1=dir,git,model,ctx` sets it directly. The same, without Claude Code:
+
+```sh
+limitline statusline list                                   # every item, its Codex id, presets, and the current layout
+limitline statusline preview                                # the line as configured, for a sample session in this folder
+limitline statusline preview line1=dir,git,model,ctx        # with changes, not saved
+limitline statusline set line1=dir,git,model,ctx line2=5h,7d colors=off
+limitline statusline set preset=pharos
+limitline statusline --clear                                # removes preset, line1-9, segments, lines, colors
+```
+
+`set` and `--clear` change only those keys in the config file limitline reads (`config.toml`, or the older `config` when that is the only one), keep every other setting and comment, save the previous file as `config.toml.bak`, and replace the file in one step. An unknown item is refused and nothing is written. The preview renders a sample session (in the folder you run it from) and writes nothing: no cache, history, Claude snapshot, or Pharos inbox file.
 
 ## Other tools
 
@@ -239,7 +315,10 @@ bar_width = 5
 lines = 1
 auto_compact = 95
 auto_compact_warn = 80
-segments = ["model", "style", "context", "limits", "burn", "cost", "git", "pr", "cache", "vim"]
+# preset = "minimal"                       # minimal, default, full, pharos
+# line1 = ["dir", "git", "model", "ctx"]   # what each line shows, in order
+# dir_style = "home"                       # ~/projects/app instead of app
+# colors = "off"
 ```
 
 Hosts, plan prices, and every measuring setting are Pharos's (`~/.pharos/usage.toml`), not limitline's. `limitline config` prints that template and does not write it. The block below is the quiet default. `examples/delight.toml` turns on pace, sparklines, fresh wording, nudges, and vitals.
