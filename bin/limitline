@@ -115,6 +115,7 @@ ORDER_LIST=""
 DIR_MODE=""
 DIR_SET=0
 DIR_STYLE=name
+CTX_SIZE_MODE=off
 PROJECT_MODE=""
 PROJECT_SET=0
 PRESET=""
@@ -193,6 +194,7 @@ load_config() {
       plan_resets) PLAN_RESETS="$val" ;;
       dir|folder) DIR_MODE="$val"; DIR_SET=1 ;;
       dir_style) DIR_STYLE="$val" ;;
+      ctx_size|context_size) CTX_SIZE_MODE="$val" ;;
       project) PROJECT_MODE="$val"; PROJECT_SET=1 ;;
       preset) PRESET="$val" ;;
       line[1-9]) printf -v "CFG_LINE${key#line}" '%s' "$val" ;;
@@ -317,7 +319,8 @@ segment_on() {
     model-with-reasoning) ON_MODEL=1; ON_EFFORT=1; seg_add model; seg_add effort ;;
     effort|reasoning) ON_EFFORT=1; seg_add effort ;;
     style) ON_STYLE=1; seg_add style ;;
-    context|ctx|context-remaining|context-used|context-window-size) ON_CTX=1; seg_add ctx ;;
+    context|ctx|context-remaining|context-used) ON_CTX=1; seg_add ctx ;;
+    context-window-size) ON_CTX=1; CTX_SIZE_MODE=on; seg_add ctx ;;
     5h|five-hour-limit) ON_FIVE=1; seg_add 5h ;;
     7d|weekly-limit) ON_SEVEN=1; seg_add 7d ;;
     spend) ON_SPEND=1; seg_add spend ;;
@@ -363,7 +366,12 @@ segment_ids() {
 # a named set of lines that `lineN` overrides one line at a time. `used`, `today`,
 # `older` and `hosts` are whole lines from Pharos. `lineN = []` drops a preset's line.
 P_LINE1=""; P_LINE2=""; P_LINE3=""; P_LINE4=""; P_LINE5=""
-case "$(printf '%s' "$PRESET" | tr -d '[:space:]')" in
+PRESET="${PRESET//[[:space:]]/}"
+# With lines = 5 and no preset, a lineN changes that line of the five-line view only.
+if [[ -z "$PRESET" && "$LINES" -ge 5 && -n "$CFG_LINE1$CFG_LINE2$CFG_LINE3$CFG_LINE4$CFG_LINE5$CFG_LINE6$CFG_LINE7$CFG_LINE8$CFG_LINE9" ]]; then
+  PRESET=pharos
+fi
+case "$PRESET" in
   minimal) P_LINE1="dir,git,model,ctx" ;;
   default) P_LINE1="dir,project,git,model,ctx,style,5h,7d,spend,burn,cost,jobs,pr,cache,vim,codex" ;;
   full)
@@ -1534,6 +1542,7 @@ render_main() {
   emit_kv in_tokens "$in_tokens"
   emit_kv out_tokens "$out_tokens"
   emit_kv layout "$LAYOUT"
+  flag_on "$CTX_SIZE_MODE" && emit_kv ctx_show_size 1
 } | LC_ALL=C awk '
 function val(k) { return (k in v) ? v[k] : "" }
 function pct(p) {
@@ -1723,6 +1732,7 @@ function ctx_note(pct, size, tokens, at, warn,    left, extra, gap, note) {
     else left = size * (100 - pct) / 100
     if (left >= 1000) extra = sprintf("%.0fk left", left / 1000)
     else if (left > 0) extra = sprintf("%.0f left", left)
+    if (extra != "" && val("ctx_show_size") == "1") extra = extra " of " tok(size)
   }
   if (pct + 0 >= warn + 0) {
     gap = int((at + 0) - (pct + 0) + 0.5)
@@ -2079,7 +2089,8 @@ END {
     push(50, "vitals", themed("vitals", vitals_seg(val("cost_ms"), val("lines_added"), val("lines_removed"), val("cost_usd"), val("compactions"), val("cost_trend"))))
   else
     push(50, "cost", themed("cost", cost_seg(val("cost_usd"), val("cost_ms"), val("lines_added"), val("lines_removed"))))
-  push(40, "git", themed("git", val("git")))
+  # 0.15 keeps git beside the folder on line 1 (two-line bands and narrow terminals).
+  push(newfmt() ? 92 : 40, "git", themed("git", val("git")))
   push(58, "fleet", themed("fleet", val("fleet")))
   push(56, "machines", themed("machines", val("machines")))
   push(57, "jobs", themed("jobs", val("jobs")))

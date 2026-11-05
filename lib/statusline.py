@@ -4,7 +4,7 @@
     limitline statusline list                       every item, its Codex id, and the presets
     limitline statusline preview [KEY=VALUE ...]    the line as configured (or with changes, unsaved)
     limitline statusline set KEY=VALUE ...          write the changes to the config file
-    limitline statusline --clear                    back to the default line
+    limitline statusline --clear                    back to the default line (keeps `lines`)
 
 KEY is line1 ... line9 (comma-separated item ids, in order), preset, or colors (on/off).
 `lineN=none` drops that line of a preset; `lineN=` removes the key. Item ids are limitline's
@@ -94,7 +94,8 @@ PRESETS = [
 
 COLOR_KEYS = ("colors", "color", "colour", "colours")
 LINE_KEYS = tuple("line%d" % n for n in range(1, 10))
-CLEAR_KEYS = ("preset", "segments", "lines") + LINE_KEYS + COLOR_KEYS
+# `lines` (how many lines, e.g. 5 for the Pharos view) is the user's, not an item choice.
+CLEAR_KEYS = ("preset", "segments") + LINE_KEYS + COLOR_KEYS
 
 
 class Usage(Exception):
@@ -199,7 +200,11 @@ def target_path():
     path = config.config_path()
     if not path or path == os.devnull:
         raise Usage("LIMITLINE_CONFIG points at %s; set it to a file to save changes" % (path or "nothing"))
-    return path
+    if os.environ.get("LIMITLINE_CONFIG") is None and not os.path.exists(path):
+        # No config yet: start config.toml, not the older key=value `config`.
+        path = os.path.join(os.path.dirname(path), "config.toml")
+    # A symlinked config (dotfiles) is edited where it lives; the link stays.
+    return os.path.realpath(path)
 
 
 def write_config(changes, remove=()):
@@ -317,7 +322,7 @@ def main(argv):
             return 0
         if cmd in ("--clear", "clear"):
             path = write_config({}, remove=CLEAR_KEYS)
-            print("cleared preset, line1-9, segments, lines and colors in %s (previous file: %s.bak)" % (path, path))
+            print("cleared preset, line1-9, segments and colors in %s (previous file: %s.bak)" % (path, path))
             preview({})
             return 0
         raise Usage("unknown command %r" % cmd)

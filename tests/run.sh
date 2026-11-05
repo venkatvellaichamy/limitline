@@ -1398,6 +1398,18 @@ check "preset-pharos-lines" "$(LIMITLINE_PRESET=pharos five_lay | wc -l | tr -d 
 pharos_order=$(LIMITLINE_PRESET=pharos LIMITLINE_LINE2=hosts LIMITLINE_LINE3=used LIMITLINE_LINE4='[]' LIMITLINE_LINE5='[]' five_lay | cut -c1-5)
 check "pharos-lines-reordered" "$pharos_order" "$(printf '%s\n' 'Opus ' 'hosts' 'used ')"
 check "pharos-line-only" "$(LIMITLINE_LINE1=hosts five_lay)" 'hosts studio 82% mem free · 22% cpu'
+# With lines = 5 and no preset, a lineN changes only its line: the Pharos lines stay.
+five_own=$(LIMITLINE_CONFIG="$own_cfg" LIMITLINE_LINE1=model five_lay)
+check "lines5-line1-keeps-pharos" "$(printf '%s\n' "$five_own" | sed -n 1p; printf '%s\n' "$five_own" | wc -l | tr -d ' ')" \
+  "$(printf '%s\n' '🧠 Opus' "$(LIMITLINE_CONFIG="$own_cfg" five_lay | wc -l | tr -d ' ')")"
+check "lines5-line1-hosts-last" "$(printf '%s\n' "$five_own" | tail -n 1 | cut -c1-5)" 'hosts'
+# context-window-size shows the window's size after what is left.
+check "ctx-window-size-legacy" "$(seg context-window-size)" 'ctx ▓▓░░░ ·32% 678k left of 1M'
+check "ctx-window-size-layout" "$(LIMITLINE_LINE1=context-window-size lay)" 'ctx ▓▓░░░ 32% · 678k left of 1M'
+check "ctx-size-config" "$(printf 'ctx_size = "on"\n' > "$lay_cfg"; LIMITLINE_CONFIG="$lay_cfg" lay | awk -F ' │ ' '{ print $3 }')" 'ctx ▓▓░░░ 32% · 678k left of 1M'
+# Two lines without a layout: folder, git, model, context stay together on line 1.
+two_git=$(printf '%s' "$own_payload" | LIMITLINE_DIR=1 LIMITLINE_GIT=1 LIMITLINE_LINES=2 NO_COLOR=1 "$BIN" | strip_ansi | head -n 1)
+check "two-lines-git-on-line-1" "$two_git" 'pharos │ main ↓2 │ Opus 5.5 │ ctx ▓▓░░░ 32% · 678k left'
 
 # limitline statusline: the non-interactive side of /limitline:statusline.
 pick_dir="$TEST_HOME/picker"
@@ -1435,8 +1447,17 @@ mkdir -p "$TEST_HOME/picker-pharos"
 (cd "$TEST_HOME/projects/pharos" && XDG_CACHE_HOME="$pick_cache" LIMITLINE_PHAROS_HOME="$TEST_HOME/picker-pharos" LIMITLINE_CONFIG="$pick_cfg" "$BIN" statusline preview >/dev/null)
 check "statusline-preview-writes-nothing" "$(find "$pick_cache" "$TEST_HOME/picker-pharos" -type f | wc -l | tr -d ' ')" "0"
 pick --clear > /dev/null 2>&1
-check "statusline-clear" "$(cat "$pick_cfg")" "$(printf '%s\n' '# my settings' 'theme = "ascii"   # keep me')"
-check "statusline-clear-renders-default" "$(LIMITLINE_CONFIG="$pick_cfg" LIMITLINE_DIR=1 NO_COLOR=1 "$BIN" < "$rich" | cut -c1-40)" 'demo | Opus 5.5 | ctx ##--- 32% · 678k '
+check "statusline-clear" "$(cat "$pick_cfg")" "$(printf '%s\n' '# my settings' 'theme = "ascii"   # keep me' 'lines = 2')"
+check "statusline-clear-renders-default" "$(LIMITLINE_CONFIG="$pick_cfg" LIMITLINE_DIR=1 NO_COLOR=1 "$BIN" < "$rich" | head -n 1 | cut -c1-40)" 'demo | Opus 5.5 | ctx ##--- 32% · 678k '
+fresh_xdg="$pick_dir/fresh-xdg"
+mkdir -p "$fresh_xdg"
+(cd "$TEST_HOME" && env -u LIMITLINE_CONFIG XDG_CONFIG_HOME="$fresh_xdg" "$BIN" statusline set preset=minimal > /dev/null 2>&1)
+check "statusline-first-set-is-toml" "$(ls "$fresh_xdg/limitline"; cat "$fresh_xdg/limitline/config.toml")" "$(printf '%s\n' 'config.toml' 'preset = "minimal"')"
+mkdir -p "$pick_dir/dotfiles"
+printf 'theme = "mono"\n' > "$pick_dir/dotfiles/limitline.toml"
+ln -s "$pick_dir/dotfiles/limitline.toml" "$pick_dir/linked.toml"
+LIMITLINE_CONFIG="$pick_dir/linked.toml" "$BIN" statusline set line1=model > /dev/null 2>&1
+check "statusline-keeps-symlink" "$([[ -L "$pick_dir/linked.toml" ]] && echo link || echo file) $(grep -c '^line1' "$pick_dir/dotfiles/limitline.toml")" 'link 1'
 check "statusline-help" "$(pick 2>&1 | grep -c 'statusline set')" "1"
 legacy_only="$pick_dir/xdg"
 mkdir -p "$legacy_only/limitline"

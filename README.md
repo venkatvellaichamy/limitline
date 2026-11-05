@@ -224,7 +224,7 @@ colors = "on"                                # or "off", like Codex's status_lin
 
 - `lineN = [...]` lists line N's items in order (`line1` to `line9`; a comma string works too). Items are limitline ids or Codex ids (table below). Only listed items show; `cost` and `vitals` share one slot, so `vitals = "on"` fills a `cost` slot. Each line drops its lowest-priority items when the terminal is narrow.
 - `used`, `today`, `older`, and `hosts` are whole lines from Pharos (the five-line view's lines 2-5); a line that names one is that line.
-- A layout (`preset` or any `lineN`) wins over `segments` and `lines`. `LIMITLINE_PRESET` and `LIMITLINE_LINE1` ... `LIMITLINE_LINE9` override the file.
+- A layout (`preset` or any `lineN`) wins over `segments` and `lines`, with one exception: with `lines = 5` and no `preset`, `lineN` changes only that line of the five-line view (the `pharos` preset). `LIMITLINE_PRESET` and `LIMITLINE_LINE1` ... `LIMITLINE_LINE9` override the file.
 - Without a layout, line 1 is folder, project, git, model, context, then everything else, with the wording shown above (`ctx ▓▓░░░ 32% · 678k left`, `+17,898 −506`).
 - **A config with its own `segments` list renders exactly as before 0.15**: its order, and 0.14's wording (`ctx ▓▓░░░ ·32% 678k left`, `+17898 -506`). `tests/fixtures/legacy/` holds 0.14.0's output for such configs.
 
@@ -248,7 +248,7 @@ Codex 0.166's `/statusline` items, and what limitline shows for each in Claude C
 | `git` | `git-branch` | `git` in the current folder |
 | `model` | `model-with-reasoning` (= `model`, `effort`) | `.model.display_name` |
 | `effort` | `reasoning` | `.effort.level` |
-| `ctx` | `context-remaining`, `context-used`, `context-window-size` | `.context_window.used_percentage`, `context_window_size`, `total_input_tokens`: used % and tokens left in one segment |
+| `ctx` | `context-remaining`, `context-used`, `context-window-size` | `.context_window.used_percentage`, `context_window_size`, `total_input_tokens`: used % and tokens left in one segment. `context-window-size` (or `ctx_size = "on"`) adds the window: `678k left of 1M` |
 | `5h` | `five-hour-limit` | `.rate_limits.five_hour` |
 | `7d` | `weekly-limit` | `.rate_limits.seven_day` (or the last cached reading) |
 | `tokens` | `used-tokens`, `total-input-tokens`, `total-output-tokens` | `.context_window.total_input_tokens`, `total_output_tokens` |
@@ -273,10 +273,10 @@ limitline statusline preview                                # the line as config
 limitline statusline preview line1=dir,git,model,ctx        # with changes, not saved
 limitline statusline set line1=dir,git,model,ctx line2=5h,7d colors=off
 limitline statusline set preset=pharos
-limitline statusline --clear                                # removes preset, line1-9, segments, lines, colors
+limitline statusline --clear                                # removes preset, line1-9, segments, colors (keeps lines)
 ```
 
-`set` and `--clear` change only those keys in the config file limitline reads (`config.toml`, or the older `config` when that is the only one), keep every other setting and comment, save the previous file as `config.toml.bak`, and replace the file in one step. An unknown item is refused and nothing is written. The preview renders a sample session (in the folder you run it from) and writes nothing: no cache, history, Claude snapshot, or Pharos inbox file.
+`set` and `--clear` change only those keys in the config file limitline reads (`config.toml`, the older `config` when that is the only one, or a new `config.toml` when there is none; a symlinked file is edited where it lives), keep every other setting and comment, save the previous file as `<file>.bak`, and replace the file in one step. An unknown item is refused and nothing is written. The preview renders a sample session (in the folder you run it from) and writes nothing: no cache, history, Claude snapshot, or Pharos inbox file.
 
 ## Other tools
 

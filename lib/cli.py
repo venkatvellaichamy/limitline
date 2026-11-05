@@ -295,6 +295,8 @@ def cmd_preview():
             "LIMITLINE_VALUE": "0",
             "LIMITLINE_VITALS": "0",
             "LIMITLINE_ALERTS": "off",
+            # The sample's 62%/38% must not become the cached Claude reading or reach Pharos.
+            "LIMITLINE_PREVIEW": "1",
             "NO_COLOR": "1",
             "TZ": "UTC",
         })
