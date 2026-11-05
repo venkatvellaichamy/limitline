@@ -1,0 +1,3 @@
+theme = "ascii"
+lines = 2
+segments = ["ctx", "model", "cost", "5h", "7d", "pr"]

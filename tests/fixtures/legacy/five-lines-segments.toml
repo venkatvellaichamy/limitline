@@ -1,0 +1,4 @@
+theme = "emoji"
+lines = 5
+vitals = "on"
+segments = ["model", "ctx", "vitals", "git", "pr"]

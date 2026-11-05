@@ -184,6 +184,21 @@ for f in "$FIX"/*.json; do
   fi
 done
 
+# A config that names its own segments renders exactly as 0.14.0 did. The .expected files
+# were recorded from 0.14.0 by tests/render_legacy.sh; a missing one is recorded, not passed.
+for cfg in "$FIX"/legacy/*.toml; do
+  name=$(basename "$cfg" .toml)
+  exp="${cfg%.toml}.expected"
+  got=$(bash "$ROOT/tests/render_legacy.sh" "$cfg")
+  if [[ ! -f "$exp" ]]; then
+    printf '%s\n' "$got" > "$exp"
+    fail=$((fail + 1))
+    printf 'FAIL legacy-%s recorded (no .expected yet):\n%s\n' "$name" "$got" >&2
+    continue
+  fi
+  check "legacy-$name" "$got" "$(cat "$exp")"
+done
+
 # Colours: under 50 green, 50-80 yellow, over 80 red. 80 itself stays yellow.
 raw=$(LIMITLINE_CODEX=0 "$BIN" < "$FIX/full.json")
 printf '%s' "$raw" | grep -q -F $'\033[33m' && printf '%s' "$raw" | grep -q -F $'\033[32m' \
