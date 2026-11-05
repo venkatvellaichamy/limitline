@@ -1,7 +1,33 @@
 # Changelog
 
-## Unreleased
+## 0.15.0-beta.1 - 2026-11-05
 
+### A clear first line
+
+```
+📁 pharos │ 🌿 main ↓2 │ 🧠 Opus 5.5 │ 🪟 ctx ▓▓░░░ 32% · 678k left │ ⏱ 60h32m · +17,898 −506 · $276.92
+```
+
+- **Git ahead/behind fix.** `git rev-list --left-right --count` prints `BEHIND<TAB>AHEAD`; the segment split on a space, so the raw text landed in both slots (`main ↑2	0 ↓2	0` for a branch 2 behind). It now shows only non-zero counts (`main ↓2`, `main ↑3`, `main ↑1 ↓2`), and never a tab.
+- **Folder first.** New `dir` segment (the folder name; `dir_style = "home"` for `~/projects/app`) and `project` segment (the repository's name when it differs from the folder, as in a linked worktree; from `git rev-parse`, or `.workspace.project_dir` outside git). Both are on by default; `project` hides itself when it equals the folder.
+- **Order.** Without a `segments` list, line 1 is folder, project, git, model, context, then everything else. This includes the five-line view's line 1. Git now ranks just below the folder, so with `lines = 2` it stays on line 1 and is no longer the first segment dropped on a narrow terminal.
+- **Plain labels.** Context reads `ctx ▓▓░░░ 32% · 678k left` (the colour carries the level; plan windows keep their `·`/`+`/`!` marks), line counts get thousands separators and a real minus (`+17,898 −506`; ascii keeps `-`), and in the emoji theme vitals is `⏱ 60h32m · …` instead of `♥ session …`, without the cost trend arrow.
+- **Old configs.** A config that names its own `segments` keeps 0.14's order and wording byte for byte. `tests/fixtures/legacy/` holds 0.14.0's output for four such configs; `tests/layout.sh` compares against it. That includes a 0.14 quirk kept on purpose: a `segments` list naming `vitals` without `cost` shows no vitals (the layouts below do not have it).
+
+### Codex-style status line configuration
+
+- **Every Codex `/statusline` item maps to a limitline item** where Claude Code sends the data: `current-dir` → `dir`, `project-name` → `project`, `git-branch` → `git`, `model-with-reasoning` → `model` + new `effort` (`.effort.level`), `context-*` → `ctx` (`context-window-size`, or `ctx_size = "on"`, adds `678k left of 1M`), `five-hour-limit`/`weekly-limit` → `5h`/`7d`, `*-tokens` → new `tokens` (`322k in · 2.4k out`), `estimated-thread-cost` → `cost`, `session-id` → `session`, `thread-title` → new `title` (`.session_name`), `codex-version` → new `version` (Claude Code's `.version`), `app-name` → new `app`. Codex ids work anywhere an item id does. `run-state`, `task-progress`, and `thread-credits` are not available in Claude Code; the README and `statusline list` say why.
+- **Per-line layouts.** `line1 = [...]` … `line9 = [...]` list each line's items in order. `used`, `today`, `older`, and `hosts` place the Pharos lines. `lineN = []` drops a preset's line. A layout wins over `segments`/`lines`, except that with `lines = 5` and no preset a `lineN` changes only that line of the five-line view. Configs without a layout work unchanged. `LIMITLINE_LINE1`… and `LIMITLINE_PRESET` override the file.
+- **Presets.** `preset = "minimal" | "default" | "full" | "pharos"` (pharos is the five-line view). A preset is a named layout; `lineN` overrides one line of it.
+- **Picker.** `/limitline:statusline` shows the items with a live preview and asks for a preset, the items per line, and colours, or takes `--clear` / `KEY=VALUE` directly. Without Claude Code: `limitline statusline list | preview [KEY=VALUE…] | set KEY=VALUE… | --clear`. `set` and `--clear` edit only the layout keys (`--clear` keeps `lines`) in the file limitline reads (`config.toml`, the older `config` when it is the only one, a new `config.toml` when there is none; a symlink is followed), keep other settings and comments, write `<file>.bak`, and replace the file atomically. The preview writes nothing (`LIMITLINE_PREVIEW=1`: no cache, history, snapshot, or Pharos inbox file).
+- **`colors = "on" | "off"`** (Codex's `status_line_use_colors`) is documented; it was already read as an alias of `color`.
+
+### Also
+
+- The 0.15 checks live in a new `tests/layout.sh`, which CI and the release workflow run after `tests/run.sh`. `tests/run.sh` keeps 0.14's checks. Its only edits: it pins `LIMITLINE_DIR=0`, because its fixtures send `cwd` and predate the folder segment, and it clears the new layout variables. Its expectations for the default line now read `ctx … 41%` without the dot, `−` for removed lines, and vitals without the cost arrow, as the new line 1 specifies.
+- `reorder()` in the renderer now moves each segment's kind with it (the five-line view's line-1 filter read stale kinds after a reorder).
+- `lib/fivelines.py` takes `LL_PICK=used,hosts` to print chosen lines by name.
+- `limitline preview` / `theme` no longer write their sample 62%/38% into the cached Claude reading or relay it to `~/.pharos/inbox` (they now render with `LIMITLINE_PREVIEW=1`).
 - Show Pharos 0.8 working (⚙) and blocked (⛔) counts, with blocked in yellow and failed in red. Show the first recent attention reason, capped at 80 characters and dropped first on narrow terminals. `jobs_detail = "counts"` (or `LIMITLINE_JOBS_DETAIL=counts`) hides reasons; the default is `"reason"`. Summary v1 files without the added keys render unchanged.
 
 ## 0.14.0 - 2026-11-04

@@ -295,6 +295,8 @@ def cmd_preview():
             "LIMITLINE_VALUE": "0",
             "LIMITLINE_VITALS": "0",
             "LIMITLINE_ALERTS": "off",
+            # The sample's 62%/38% must not become the cached Claude reading or reach Pharos.
+            "LIMITLINE_PREVIEW": "1",
             "NO_COLOR": "1",
             "TZ": "UTC",
         })
@@ -519,7 +521,16 @@ def cmd_config():
     print("lines = 1")
     print("auto_compact = 95")
     print("auto_compact_warn = 80")
-    print('segments = ["model", "style", "context", "limits", "burn", "cost", "git", "pr", "cache", "vim"]')
+    print("# What each line shows, in order (limitline statusline list names every item;")
+    print("# Codex ids such as current-dir and git-branch work too). Without these, line 1 is")
+    print("# folder, git, model, context, then the rest.")
+    print('# preset = "default"   # minimal, default, full, pharos (five lines with Pharos)')
+    print('# line1 = ["dir", "git", "model", "ctx", "5h", "7d", "cost"]')
+    print('# line2 = ["tokens", "title", "version"]')
+    print('# dir_style = "name"   # or "home": ~/projects/app')
+    print('# colors = "on"')
+    print("# A segments list (0.14 and earlier) keeps its own order and wording:")
+    print('# segments = ["model", "style", "context", "limits", "burn", "cost", "git", "pr", "cache", "vim"]')
     print("# session and other-tool segments stay off on the Claude Code line")
     print("# pace, spark, nudges, fresh, value, and vitals are off until set")
     print('# pace = "on"')
@@ -622,7 +633,8 @@ def cmd_theme():
 
 USAGE = ("usage: limitline status | --host NAME | preview | doctor | config | report | watch | theme | refresh [--force]"
          " | history [--days N] | report [--week] [--md] | set xai-plan PCT [--resets \"YYYY-MM-DD HH:MM\"] [--plan NAME] | job update|list|rm"
-         " | install-refresher | uninstall-refresher | schedule install|uninstall|status")
+         " | install-refresher | uninstall-refresher | schedule install|uninstall|status"
+         " | statusline list|preview|set KEY=VALUE...|--clear")
 
 
 def parse_local(text):
@@ -725,6 +737,8 @@ def main(argv):
         sys.exit(load_lib("release").main(argv) or 0)
     elif cmd == "schedule":
         sys.exit(load_lib("schedule").main(argv[1:]) or 0)
+    elif cmd == "statusline":
+        sys.exit(load_lib("statusline").main(argv[1:]) or 0)
     else:
         print(USAGE)
 

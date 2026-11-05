@@ -1,0 +1,3 @@
+# examples/minimal.toml as shipped before 0.15: an explicit segments list keeps its order and look.
+theme = "minimal"
+segments = ["model", "style", "context", "limits", "burn", "cost", "git", "pr", "cache", "vim"]

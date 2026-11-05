@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # limitline — local usage-limit status line for Claude Code.
 # Reads one JSON object on stdin. No network. Always exits 0.
-# Version: 0.14.0
+# Version: 0.15.0-beta.1
 
 _here=${0%/*}
 [[ "$_here" == "$0" ]] && _here="."
@@ -21,6 +21,7 @@ limitline — local usage limits for Claude Code and nearby CLIs
   bin/limitline history [--days N] | report --week [--md]
   bin/limitline install-refresher|uninstall-refresher
   bin/limitline schedule install|uninstall|status
+  bin/limitline statusline list|preview|set line1=dir,git,model,ctx|--clear
 
 Config: ~/.config/limitline/config or config.toml
 EOF
@@ -28,7 +29,7 @@ EOF
 fi
 
 case "${1:-}" in
-  status|preview|doctor|config|report|watch|theme|refresh|install-refresher|uninstall-refresher|schedule|--host|set|job|history|version|--version|update|channel)
+  status|preview|doctor|config|report|watch|theme|refresh|install-refresher|uninstall-refresher|schedule|--host|set|job|history|version|--version|update|channel|statusline)
     if command -v python3 >/dev/null 2>&1; then
       exec python3 "$LIMITLINE_ROOT/lib/cli.py" "$@"
     fi
@@ -43,8 +44,13 @@ fi
 
 input=$(cat || true)
 
+# `limitline statusline preview` renders a sample session: write no cache, history,
+# snapshot, or Pharos inbox file, so the sample never stands in for a real reading.
+PREVIEW=0
+[[ "${LIMITLINE_PREVIEW:-}" == "1" ]] && PREVIEW=1
+
 debug_dump() {
-  [[ "${LIMITLINE_DEBUG:-}" == "1" ]] || return 0
+  [[ "${LIMITLINE_DEBUG:-}" == "1" && "$PREVIEW" != "1" ]] || return 0
   local dest dir
   dest="${LIMITLINE_DEBUG_FILE:-}"
   if [[ -z "$dest" ]]; then
@@ -106,6 +112,15 @@ SSH_TIMEOUT=2
 MEM_WARN=15
 HOSTS_RAW=""
 ORDER_LIST=""
+DIR_MODE=""
+DIR_SET=0
+DIR_STYLE=name
+CTX_SIZE_MODE=off
+PROJECT_MODE=""
+PROJECT_SET=0
+PRESET=""
+CFG_LINE1=""; CFG_LINE2=""; CFG_LINE3=""; CFG_LINE4=""; CFG_LINE5=""
+CFG_LINE6=""; CFG_LINE7=""; CFG_LINE8=""; CFG_LINE9=""
 
 trim() {
   local v="$1"
@@ -177,6 +192,12 @@ load_config() {
       plan_numbers) PLAN_NUMBERS="$val" ;;
       plan_show) PLAN_SHOW="$val" ;;
       plan_resets) PLAN_RESETS="$val" ;;
+      dir|folder) DIR_MODE="$val"; DIR_SET=1 ;;
+      dir_style) DIR_STYLE="$val" ;;
+      ctx_size|context_size) CTX_SIZE_MODE="$val" ;;
+      project) PROJECT_MODE="$val"; PROJECT_SET=1 ;;
+      preset) PRESET="$val" ;;
+      line[1-9]) printf -v "CFG_LINE${key#line}" '%s' "$val" ;;
     esac
   done < "$cfg"
 }
@@ -235,6 +256,14 @@ if [[ -n "${LIMITLINE_GROK:-}" ]]; then GROK_MODE="$LIMITLINE_GROK"; GROK_SET=1;
 if [[ -n "${LIMITLINE_GROK_TTL:-}" ]]; then GROK_TTL="$LIMITLINE_GROK_TTL"; fi
 if [[ -n "${LIMITLINE_JOBS:-}" ]]; then JOBS_MODE="$LIMITLINE_JOBS"; JOBS_SET=1; fi
 if [[ -n "${LIMITLINE_JOBS_TTL:-}" ]]; then JOBS_TTL="$LIMITLINE_JOBS_TTL"; fi
+if [[ -n "${LIMITLINE_DIR:-}" ]]; then DIR_MODE="$LIMITLINE_DIR"; DIR_SET=1; fi
+if [[ -n "${LIMITLINE_DIR_STYLE:-}" ]]; then DIR_STYLE="$LIMITLINE_DIR_STYLE"; fi
+if [[ -n "${LIMITLINE_PROJECT:-}" ]]; then PROJECT_MODE="$LIMITLINE_PROJECT"; PROJECT_SET=1; fi
+if [[ -n "${LIMITLINE_PRESET:-}" ]]; then PRESET="$LIMITLINE_PRESET"; fi
+for _n in 1 2 3 4 5 6 7 8 9; do
+  _v="LIMITLINE_LINE$_n"
+  [[ -n "${!_v:-}" ]] && printf -v "CFG_LINE$_n" '%s' "${!_v}"
+done
 if [[ -n "${LIMITLINE_SSH_TIMEOUT:-}" ]]; then SSH_TIMEOUT="$LIMITLINE_SSH_TIMEOUT"; fi
 if [[ -n "${LIMITLINE_MEM_WARN:-}" ]]; then MEM_WARN="$LIMITLINE_MEM_WARN"; fi
 if [[ -z "${LIMITLINE_HOSTS+x}" && -n "$HOSTS_RAW" ]]; then
@@ -266,53 +295,134 @@ ON_BURN=1; ON_COST=1; ON_GIT=1; ON_PR=1; ON_CACHE=1; ON_VIM=1
 ON_SESSION=0; ON_CODEX=1
 ON_PACE=0; ON_SPARK=0; ON_NUDGE=0; ON_FRESH=0; ON_VALUE=0; ON_VITALS=0
 ON_FLEET=0; ON_MACHINES=0; ON_GROK=0; ON_JOBS=1
+ON_DIR=1; ON_PROJECT=1; ON_VERSION=0; ON_TOKENS=0; ON_EFFORT=0; ON_TITLE=0; ON_APP=0
 add_order() {
   case ",$ORDER_LIST," in
     *,"$1",*) ;;
     *) ORDER_LIST="${ORDER_LIST:+$ORDER_LIST,}$1" ;;
   esac
 }
-if [[ -n "$SEGMENTS" ]]; then
+segments_off() {
   ON_MODEL=0; ON_STYLE=0; ON_CTX=0; ON_FIVE=0; ON_SEVEN=0; ON_SPEND=0
   ON_BURN=0; ON_COST=0; ON_GIT=0; ON_PR=0; ON_CACHE=0; ON_VIM=0
   ON_SESSION=0; ON_CODEX=0
   ON_PACE=0; ON_SPARK=0; ON_NUDGE=0; ON_FRESH=0; ON_VALUE=0; ON_VITALS=0
   ON_FLEET=0; ON_MACHINES=0; ON_GROK=0; ON_JOBS=0
-  old_ifs=$IFS
+  ON_DIR=0; ON_PROJECT=0; ON_VERSION=0; ON_TOKENS=0; ON_EFFORT=0; ON_TITLE=0; ON_APP=0
+}
+seg_add() { SEG_IDS="${SEG_IDS:+$SEG_IDS,}$1"; }
+# One segment id (a limitline id or a Codex /statusline item id): turn it on and add
+# the limitline ids it stands for to SEG_IDS. Unknown ids add nothing.
+segment_on() {
+  case "$1" in
+    model) ON_MODEL=1; seg_add model ;;
+    model-with-reasoning) ON_MODEL=1; ON_EFFORT=1; seg_add model; seg_add effort ;;
+    effort|reasoning) ON_EFFORT=1; seg_add effort ;;
+    style) ON_STYLE=1; seg_add style ;;
+    context|ctx|context-remaining|context-used) ON_CTX=1; seg_add ctx ;;
+    context-window-size) ON_CTX=1; CTX_SIZE_MODE=on; seg_add ctx ;;
+    5h|five-hour-limit) ON_FIVE=1; seg_add 5h ;;
+    7d|weekly-limit) ON_SEVEN=1; seg_add 7d ;;
+    spend) ON_SPEND=1; seg_add spend ;;
+    limits) ON_FIVE=1; ON_SEVEN=1; ON_SPEND=1; seg_add 5h; seg_add 7d; seg_add spend ;;
+    burn) ON_BURN=1; seg_add burn ;;
+    cost|estimated-thread-cost) ON_COST=1; seg_add cost ;;
+    git|git-branch) ON_GIT=1; seg_add git ;;
+    pr) ON_PR=1; seg_add pr ;;
+    cache) ON_CACHE=1; seg_add cache ;;
+    vim) ON_VIM=1; seg_add vim ;;
+    session|session-id) ON_SESSION=1; seg_add session ;;
+    codex|others) ON_CODEX=1; seg_add codex ;;
+    pace) ON_PACE=1; seg_add pace ;;
+    spark|sparklines) ON_SPARK=1; seg_add spark ;;
+    nudge|nudges) ON_NUDGE=1; seg_add nudge ;;
+    fresh) ON_FRESH=1 ;;
+    value) ON_VALUE=1; seg_add value ;;
+    vitals) ON_VITALS=1; seg_add vitals ;;
+    fleet) ON_FLEET=1; seg_add fleet ;;
+    machines) ON_MACHINES=1; seg_add machines ;;
+    grok|xai|xai-plan|cursor+grok|plan) ON_GROK=1; seg_add grok ;;
+    jobs) ON_JOBS=1; seg_add jobs ;;
+    dir|current-dir|folder) ON_DIR=1; seg_add dir ;;
+    project|project-name) ON_PROJECT=1; seg_add project ;;
+    version|codex-version) ON_VERSION=1; seg_add version ;;
+    tokens|used-tokens|total-input-tokens|total-output-tokens) ON_TOKENS=1; seg_add tokens ;;
+    title|thread-title) ON_TITLE=1; seg_add title ;;
+    app|app-name) ON_APP=1; seg_add app ;;
+  esac
+}
+# Turn on every id in a comma list; SEG_IDS gets the limitline ids, in order.
+segment_ids() {
+  local raw name old_ifs=$IFS
+  SEG_IDS=""
   IFS=','
-  for raw in $SEGMENTS; do
-    name=$(trim "$raw")
-    name=${name//[\[\]\"\'[:space:]]/}
-    case "$name" in
-      model) ON_MODEL=1; add_order model ;;
-      style) ON_STYLE=1; add_order style ;;
-      context|ctx) ON_CTX=1; add_order ctx ;;
-      5h) ON_FIVE=1; add_order 5h ;;
-      7d) ON_SEVEN=1; add_order 7d ;;
-      spend) ON_SPEND=1; add_order spend ;;
-      limits) ON_FIVE=1; ON_SEVEN=1; ON_SPEND=1; add_order 5h; add_order 7d; add_order spend ;;
-      burn) ON_BURN=1; add_order burn ;;
-      cost) ON_COST=1; add_order cost ;;
-      git) ON_GIT=1; add_order git ;;
-      pr) ON_PR=1; add_order pr ;;
-      cache) ON_CACHE=1; add_order cache ;;
-      vim) ON_VIM=1; add_order vim ;;
-      session) ON_SESSION=1; add_order session ;;
-      codex|others) ON_CODEX=1; add_order codex ;;
-      pace) ON_PACE=1; add_order pace ;;
-      spark|sparklines) ON_SPARK=1; add_order spark ;;
-      nudge|nudges) ON_NUDGE=1; add_order nudge ;;
-      fresh) ON_FRESH=1 ;;
-      value) ON_VALUE=1; add_order value ;;
-      vitals) ON_VITALS=1; add_order vitals ;;
-      fleet) ON_FLEET=1; add_order fleet ;;
-      machines) ON_MACHINES=1; add_order machines ;;
-      grok|xai|xai-plan|cursor+grok|plan) ON_GROK=1; add_order grok ;;
-      jobs) ON_JOBS=1; add_order jobs ;;
-    esac
+  for raw in $1; do
+    name="${raw//[\[\]\"\'[:space:]]/}"
+    [[ -n "$name" ]] && segment_on "$name"
   done
   IFS=$old_ifs
+}
+# Layouts (0.15): `lineN = [...]` lists the segments of line N in order, and a preset is
+# a named set of lines that `lineN` overrides one line at a time. `used`, `today`,
+# `older` and `hosts` are whole lines from Pharos. `lineN = []` drops a preset's line.
+P_LINE1=""; P_LINE2=""; P_LINE3=""; P_LINE4=""; P_LINE5=""
+PRESET="${PRESET//[[:space:]]/}"
+# With lines = 5 and no preset, a lineN changes that line of the five-line view only.
+if [[ -z "$PRESET" && "$LINES" -ge 5 && -n "$CFG_LINE1$CFG_LINE2$CFG_LINE3$CFG_LINE4$CFG_LINE5$CFG_LINE6$CFG_LINE7$CFG_LINE8$CFG_LINE9" ]]; then
+  PRESET=pharos
 fi
+case "$PRESET" in
+  minimal) P_LINE1="dir,git,model,ctx" ;;
+  default) P_LINE1="dir,project,git,model,ctx,style,5h,7d,spend,burn,cost,jobs,pr,cache,vim,codex" ;;
+  full)
+    P_LINE1="dir,project,git,model,effort,style,ctx,tokens,cost"
+    P_LINE2="5h,7d,spend,codex,grok,jobs,pr,cache,vim,title,version,session"
+    ;;
+  pharos)
+    P_LINE1="dir,project,git,model,ctx,style,cost,pr,cache,vim"
+    P_LINE2="used"; P_LINE3="today"; P_LINE4="older"; P_LINE5="hosts"
+    ;;
+esac
+LAYOUT=""
+LAYOUT_PHAROS=""
+for _n in 1 2 3 4 5 6 7 8 9; do
+  _c="CFG_LINE$_n"; _p="P_LINE$_n"
+  [[ -n "${!_c}${!_p}" ]] && LAYOUT="set"
+done
+FMT=new
+if [[ -n "$LAYOUT" ]]; then
+  segments_off
+  LAYOUT=""
+  for _n in 1 2 3 4 5 6 7 8 9; do
+    _c="CFG_LINE$_n"; _p="P_LINE$_n"
+    _items="${!_c:-${!_p}}"
+    _items="${_items//[\[\]\"\'[:space:]]/}"
+    case "$_items" in ''|none|-) continue ;; esac
+    segment_ids "$_items"
+    # A Pharos line is the whole line: the first one named wins.
+    old_ifs=$IFS; IFS=','
+    for _id in $_items; do
+      case "$_id" in
+        used|today|older|hosts) SEG_IDS="@$_id"; LAYOUT_PHAROS="${LAYOUT_PHAROS:+$LAYOUT_PHAROS,}$_id"; break ;;
+      esac
+    done
+    IFS=$old_ifs
+    [[ -n "$SEG_IDS" ]] && LAYOUT="${LAYOUT:+$LAYOUT;}$SEG_IDS"
+  done
+  [[ -n "$LAYOUT" ]] || LAYOUT="-"
+elif [[ -n "$SEGMENTS" ]]; then
+  FMT=old
+  segments_off
+  segment_ids "$SEGMENTS"
+  old_ifs=$IFS
+  IFS=','
+  for id in $SEG_IDS; do add_order "$id"; done
+  IFS=$old_ifs
+else
+  ORDER_LIST="dir,project,git,model,effort,ctx"
+fi
+if [[ "$DIR_SET" == "1" ]]; then flag_on "$DIR_MODE" || ON_DIR=0; fi
+if [[ "$PROJECT_SET" == "1" ]]; then flag_on "$PROJECT_MODE" || ON_PROJECT=0; fi
 flag_on "$GIT_MODE" || ON_GIT=0
 flag_on "$SESSION_MODE" && ON_SESSION=1
 flag_on "$BURN_MODE" || ON_BURN=0
@@ -365,6 +475,12 @@ pr_number=""
 pr_state=""
 repo=""
 cwd=""
+project_dir=""
+cc_version=""
+effort=""
+title=""
+in_tokens=""
+out_tokens=""
 cache_warm=""
 cache_cause=""
 compactions=""
@@ -502,7 +618,13 @@ emit("model"; .model.display_name)
       (.workspace.repo.owner + "/" + .workspace.repo.name)
     elif .workspace.repo.name != null then .workspace.repo.name
     else null end)
-, emit("cwd"; .workspace.current_dir)
+, emit("cwd"; .workspace.current_dir // .cwd)
+, emit("project_dir"; .workspace.project_dir)
+, emit("version"; .version)
+, emit("effort"; .effort.level)
+, emit("title"; .session_name)
+, emit("in_tokens"; .context_window.total_input_tokens)
+, emit("out_tokens"; .context_window.total_output_tokens)
 , emit("cache_warm";
     if .prompt_cache.warm == true then "true"
     elif .prompt_cache.warm == false then "false"
@@ -545,6 +667,12 @@ assign_field() {
     pr_state) pr_state=$val ;;
     repo) repo=$val ;;
     cwd) cwd=$val ;;
+    project_dir) project_dir=$val ;;
+    version) cc_version=$val ;;
+    effort) effort=$val ;;
+    title) title=$val ;;
+    in_tokens) in_tokens=$val ;;
+    out_tokens) out_tokens=$val ;;
     cache_warm) cache_warm=$val ;;
     cache_cause) cache_cause=$val ;;
     columns) render_cols=$val ;;
@@ -579,6 +707,7 @@ scan_codex() {
 
 write_codex_cache() {
   local ok="$1" dest tmp dash
+  [[ "$PREVIEW" == "1" ]] && return 0
   [[ -z "${LIMITLINE_PHAROS_USAGE:-}" && "${LIMITLINE_NOCACHE:-}" != "1" ]] || return 0
   dest=$(codex_cache_file)
   tmp="${dest}.$$"
@@ -700,7 +829,13 @@ elif repo_obj.get("name"):
     repo_s = str(repo_obj.get("name"))
 else:
     repo_s = ""
-cwd = dig(data, "workspace", "current_dir")
+cwd = dig(data, "workspace", "current_dir") or dig(data, "cwd")
+project_dir = dig(data, "workspace", "project_dir")
+cc_version = dig(data, "version")
+effort = dig(data, "effort", "level")
+title = dig(data, "session_name")
+in_tokens = dig(data, "context_window", "total_input_tokens")
+out_tokens = dig(data, "context_window", "total_output_tokens")
 pcache = dig(data, "prompt_cache") if isinstance(dig(data, "prompt_cache"), dict) else {}
 warm = pcache.get("warm", None)
 if warm is True:
@@ -739,6 +874,12 @@ lines = [
     emit("pr_state", pr.get("review_state") or pr.get("kind")),
     emit("repo", repo_s),
     emit("cwd", cwd),
+    emit("project_dir", project_dir),
+    emit("version", cc_version),
+    emit("effort", effort),
+    emit("title", title),
+    emit("in_tokens", in_tokens),
+    emit("out_tokens", out_tokens),
     emit("cache_warm", cache_warm),
     emit("cache_cause", cache_cause),
     emit("columns", columns),
@@ -809,6 +950,7 @@ esac
 
 write_snapshot() {
   local dir dest windows item pct reset
+  [[ "$PREVIEW" == "1" ]] && return 0
   [[ -n "$five_pct" || -n "$seven_pct" || -n "$spend_pct" || -n "$spend_used" ]] || return 0
   dir="${XDG_CACHE_HOME:-$HOME/.cache}/limitline"
   [[ -d "$dir" ]] || mkdir -p "$dir" 2>/dev/null || return 0
@@ -857,7 +999,7 @@ write_snapshot
 
 append_sample() {
   local file="$1" ts="$2" pct="$3" dir tmp
-  [[ -n "$pct" ]] || return 0
+  [[ -n "$pct" && "$PREVIEW" != "1" ]] || return 0
   dir=${file%/*}
   mkdir -p "$dir" 2>/dev/null || return 0
   tmp="${file}.$$"
@@ -926,7 +1068,7 @@ fire_alert() {
 
 maybe_alert() {
   local pct hour dir state token level
-  [[ "$ALERTS_MODE" == "off" ]] && return 0
+  [[ "$ALERTS_MODE" == "off" || "$PREVIEW" == "1" ]] && return 0
   pct="${five_pct%%.*}"
   case "$pct" in ''|*[!0-9]*) return 0 ;; esac
   hour=$(date -r "$NOW" "+%H" 2>/dev/null || date -d "@$NOW" "+%H" 2>/dev/null || echo "")
@@ -967,7 +1109,7 @@ nudge_text=""
 value_text=""
 cost_trend=""
 
-if [[ "$ON_BURN" == "1" && -n "$five_pct" ]]; then
+if [[ "$ON_BURN" == "1" && -n "$five_pct" && "$PREVIEW" != "1" ]]; then
   mkdir -p "$cache_dir" 2>/dev/null || true
   hist_path="$cache_dir/history-5h.tsv"
   printf '%s %s\n' "$NOW" "$five_pct" >> "$hist_path" 2>/dev/null || true
@@ -1004,7 +1146,7 @@ if [[ "$ON_FRESH" == "1" && -n "$five_epoch" && -n "$five_pct" ]]; then
     sparkle=1
     shown="$five_epoch"
   fi
-  printf '%s %s %s\n' "$five_epoch" "$five_pct" "$shown" > "$fresh_state" 2>/dev/null || true
+  [[ "$PREVIEW" == "1" ]] || printf '%s %s %s\n' "$five_epoch" "$five_pct" "$shown" > "$fresh_state" 2>/dev/null || true
 fi
 
 maybe_alert
@@ -1060,27 +1202,78 @@ if [[ -n "$cwd" && "$cwd" != "$HOME" ]]; then
       hour=$(date -r "$NOW" "+%H" 2>/dev/null || date -d "@$NOW" "+%H" 2>/dev/null || echo "0")
       case "$hour" in ''|*[!0-9]*) hour=0 ;; esac
       mkdir -p "$cache_dir" 2>/dev/null || true
-      printf '%s %s %s\n' "$NOW" "$((10#$hour))" "$project" >> "$cache_dir/activity.tsv" 2>/dev/null || true
+      [[ "$PREVIEW" == "1" ]] || printf '%s %s %s\n' "$NOW" "$((10#$hour))" "$project" >> "$cache_dir/activity.tsv" 2>/dev/null || true
       ;;
   esac
 fi
 
+# The folder Claude Code is in, without trailing slashes.
+folder="$cwd"
+while [[ "$folder" == */ && "$folder" != "/" ]]; do folder="${folder%/}"; done
+folder_name="${folder##*/}"
+[[ -z "$folder_name" && -n "$folder" ]] && folder_name="/"
+dir_text=""
+if [[ "$ON_DIR" == "1" && -n "$folder" ]]; then
+  case "$DIR_STYLE" in
+    home|path|full)
+      dir_text="$folder"
+      if [[ -n "$HOME" && "$folder" == "$HOME" ]]; then dir_text="~"
+      elif [[ -n "$HOME" && "$folder" == "$HOME"/* ]]; then dir_text="~/${folder#"$HOME"/}"
+      fi
+      ;;
+    *) dir_text="$folder_name" ;;
+  esac
+fi
+
+# One git call gives the branch, the work tree's top, and the shared .git directory
+# (outside the work tree for a linked worktree, which names the repository).
+git_top=""
+git_common=""
+branch=""
+in_repo=0
+if [[ ( "$ON_GIT" == "1" && ( -n "$cwd" || -n "$repo" ) ) || ( "$ON_PROJECT" == "1" && -n "$cwd" && -d "$cwd" ) ]]; then
+  target="${cwd:-$PWD}"
+  rp=$(git -C "$target" rev-parse --show-toplevel --git-common-dir --abbrev-ref HEAD 2>/dev/null || true)
+  if [[ -n "$rp" ]]; then
+    { IFS= read -r git_top; IFS= read -r git_common; IFS= read -r branch; } <<< "$rp"
+    [[ -n "$git_top" ]] && in_repo=1
+    if [[ "$in_repo" == "1" && -z "$branch" ]]; then
+      branch=$(git -C "$target" symbolic-ref --short HEAD 2>/dev/null || true)
+    fi
+  fi
+fi
+
+project_text=""
+if [[ "$ON_PROJECT" == "1" && -n "$folder" ]]; then
+  pname=""
+  if [[ "$in_repo" == "1" ]]; then
+    case "$git_common" in
+      /*/.git) pname="${git_common%/.git}"; pname="${pname##*/}" ;;
+      /*.git) pname="${git_common##*/}"; pname="${pname%.git}" ;;
+      *) pname="${git_top##*/}" ;;
+    esac
+  elif [[ -n "$project_dir" ]]; then
+    pname="${project_dir%/}"
+    pname="${pname##*/}"
+  fi
+  if [[ -n "$pname" && "$pname" != "$folder_name" ]]; then project_text="$pname"; fi
+fi
+
 git_text=""
 if [[ "$ON_GIT" == "1" && ( -n "$cwd" || -n "$repo" ) ]]; then
-  target="${cwd:-$PWD}"
-  branch=""
   dirty=""
   ahead=""
   behind=""
-  if git -C "$target" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
-    branch=$(git -C "$target" rev-parse --abbrev-ref HEAD 2>/dev/null || true)
+  if [[ "$in_repo" == "1" ]]; then
     if [[ -n "$(git -C "$target" status --porcelain 2>/dev/null | head -n 1)" ]]; then
       dirty="*"
     fi
     counts=$(git -C "$target" rev-list --left-right --count '@{upstream}...HEAD' 2>/dev/null || true)
+    # "BEHIND<TAB>AHEAD" (upstream is the left side). Keep only plain numbers.
     if [[ -n "$counts" ]]; then
-      behind=${counts%% *}
-      ahead=${counts##* }
+      read -r behind ahead _ <<< "$counts"
+      case "$behind" in ''|*[!0-9]*) behind="" ;; esac
+      case "$ahead" in ''|*[!0-9]*) ahead="" ;; esac
     fi
   fi
   git_text="$repo"
@@ -1120,11 +1313,29 @@ if [[ "$ON_SESSION" == "1" && -n "$session_id" ]]; then
   session_text=${session_id:0:6}
 fi
 
+version_text=""
+if [[ "$ON_VERSION" == "1" && -n "$cc_version" ]]; then
+  case "$cc_version" in v*) version_text="$cc_version" ;; *) version_text="v$cc_version" ;; esac
+fi
+effort_text=""
+[[ "$ON_EFFORT" == "1" && -n "$effort" ]] && effort_text="effort $effort"
+title_text=""
+if [[ "$ON_TITLE" == "1" && -n "$title" ]]; then
+  title_text="$title"
+  # Characters, not bytes, under a UTF-8 locale; a long title is cut at 40.
+  if [[ "${#title_text}" -gt 40 ]]; then title_text="${title_text:0:39}…"; fi
+fi
+[[ "$ON_TOKENS" == "1" ]] || { in_tokens=""; out_tokens=""; }
+app_text=""
+[[ "$ON_APP" == "1" ]] && app_text="Claude Code"
+
 [[ "$ON_MODEL" == "1" ]] || model=""
 [[ "$ON_STYLE" == "1" ]] || style=""
 [[ "$ON_CTX" == "1" ]] || ctx=""
 [[ "$ON_SPEND" == "1" ]] || { spend_pct=""; spend_used=""; spend_limit=""; }
-[[ "$ON_COST" == "1" ]] || { cost_usd=""; cost_ms=""; lines_added=""; lines_removed=""; }
+# 0.14 also cleared these when `segments` named vitals without cost (no vitals shown);
+# configs with their own `segments` keep that, the 0.15 layouts do not.
+[[ "$ON_COST" == "1" || ( "$FMT" == "new" && "$ON_VITALS" == "1" ) ]] || { cost_usd=""; cost_ms=""; lines_added=""; lines_removed=""; }
 [[ "$ON_CODEX" == "1" ]] || { codex5=""; codex7=""; }
 [[ "$ON_BURN" == "1" ]] || hist_path=""
 
@@ -1153,7 +1364,7 @@ fresh_line() {
 }
 
 kick_refresh() {
-  [[ "${LIMITLINE_REFRESH:-1}" == "0" ]] && return 0
+  [[ "${LIMITLINE_REFRESH:-1}" == "0" || "$PREVIEW" == "1" ]] && return 0
   local lock now mtime
   mkdir -p "$cache_dir" 2>/dev/null || return 0
   lock="$cache_dir/refresh.lock"
@@ -1235,6 +1446,36 @@ if [[ "$ON_SEVEN" == "1" && -z "$seven_pct" && -n "$seven_cached_pct" ]]; then
   fi
 fi
 
+# Lines 2-5 of the five-line view (used, today, older, hosts), from Pharos's files.
+# With LL_PICK=name,... it prints "name<TAB>text" for those lines instead.
+pharos_lines() {
+  LL_PICK="${1:-}" LL_JOBS_DETAIL="${LIMITLINE_JOBS_DETAIL:-${JOBS_DETAIL:-reason}}" LL_COLOR="$USE_COLOR" LL_THEME="$THEME" LL_MARKS="${MARKS_MODE:-unicode}" LL_ANIMATE="${LIMITLINE_ANIMATE:-${ANIMATE_MODE:-on}}" LL_PLAN_VIEW="${LIMITLINE_PLAN_VIEW:-${PLAN_VIEW:-bar}}" LL_PLAN_NUMBERS="${LIMITLINE_PLAN_NUMBERS:-${PLAN_NUMBERS:-off}}" LL_PLAN_SHOW="${LIMITLINE_PLAN_SHOW:-${PLAN_SHOW:-used}}" LL_PLAN_RESETS="${LIMITLINE_PLAN_RESETS:-${PLAN_RESETS:-near-cap}}" LL_COLUMNS="$max_cols" \
+  LL_CLAUDE5="$five_pct" LL_CLAUDE5_RESET="$five_epoch" LL_CLAUDE7="$seven_pct" LL_CLAUDE7_RESET="$seven_epoch" \
+  LL_CODEX5="$codex5" LL_CODEX5_RESET="$codex5_raw" LL_CODEX7="$codex7" LL_CODEX7_RESET="$codex7_raw" \
+  LL_CODEX_CACHE="$(codex_cache_file)" LL_GROK_TTL="$GROK_TTL" \
+    python3 "$LIMITLINE_ROOT/lib/fivelines.py" 2>/dev/null || true
+}
+
+# A layout's `@@used` (etc.) lines become the matching Pharos line, or nothing.
+layout_fill() {
+  local line name text
+  PL_used=""; PL_today=""; PL_older=""; PL_hosts=""
+  while IFS= read -r line; do
+    name="${line%%$'\t'*}"
+    text="${line#*$'\t'}"
+    case "$name" in used|today|older|hosts) printf -v "PL_$name" '%s' "$text" ;; esac
+  done < <(pharos_lines "$LAYOUT_PHAROS")
+  while IFS= read -r line; do
+    if [[ "$line" == @@* ]]; then
+      name="PL_${line#@@}"
+      [[ -n "${!name:-}" ]] && printf '%s\n' "${!name}"
+    else
+      printf '%s\n' "$line"
+    fi
+  done
+}
+
+render_main() {
 {
   emit_kv theme "$THEME"
   emit_kv lines "$LINES"
@@ -1291,6 +1532,17 @@ fi
   emit_kv sparkle "$sparkle"
   emit_kv compactions "$compactions"
   emit_kv cost_trend "$cost_trend"
+  emit_kv fmt "$FMT"
+  emit_kv dir "$dir_text"
+  emit_kv project "$project_text"
+  emit_kv version "$version_text"
+  emit_kv effort "$effort_text"
+  emit_kv title "$title_text"
+  emit_kv app "$app_text"
+  emit_kv in_tokens "$in_tokens"
+  emit_kv out_tokens "$out_tokens"
+  emit_kv layout "$LAYOUT"
+  flag_on "$CTX_SIZE_MODE" && emit_kv ctx_show_size 1
 } | LC_ALL=C awk '
 function val(k) { return (k in v) ? v[k] : "" }
 function pct(p) {
@@ -1395,6 +1647,41 @@ function spend_seg(p, used, limit,    body, money_s) {
   if (money_s != "") return "spend " money_s
   return ""
 }
+# 0.15 wording ("new"); a config with its own `segments` keeps 0.14 ("old").
+function newfmt() { return val("fmt") != "old" }
+function commas(n,    s, out, neg) {
+  s = sprintf("%d", n + 0)
+  neg = ""
+  if (substr(s, 1, 1) == "-") { neg = "-"; s = substr(s, 2) }
+  out = ""
+  while (length(s) > 3) {
+    out = "," substr(s, length(s) - 2) out
+    s = substr(s, 1, length(s) - 3)
+  }
+  return neg s out
+}
+# +17,898 −506 (a real minus sign; ascii keeps "-").
+function line_counts(added, removed,    minus) {
+  if (added == "") added = "0"
+  if (removed == "") removed = "0"
+  if (!newfmt()) return "+" int(added + 0) " -" int(removed + 0)
+  minus = (val("theme") == "ascii") ? "-" : "−"
+  return "+" commas(added) " " minus commas(removed)
+}
+function tok(n,    s) {
+  n = n + 0
+  if (n < 1000) return sprintf("%d", n)
+  if (n < 10000) { s = sprintf("%.1fk", n / 1000); sub(/\.0k$/, "k", s); return s }
+  if (n < 999500) return sprintf("%.0fk", n / 1000)
+  s = sprintf("%.1fM", n / 1000000); sub(/\.0M$/, "M", s); return s
+}
+function tokens_seg(a, b,    out) {
+  if ((a == "" || a + 0 == 0) && (b == "" || b + 0 == 0)) return ""
+  out = ""
+  if (a != "") out = tok(a) " in"
+  if (b != "") out = (out == "" ? "" : out " · ") tok(b) " out"
+  return out
+}
 function cost_seg(usd, ms, added, removed,    parts, text) {
   parts = ""
   if (usd != "") {
@@ -1407,9 +1694,7 @@ function cost_seg(usd, ms, added, removed,    parts, text) {
     else parts = text
   }
   if (added != "" || removed != "") {
-    if (added == "") added = "0"
-    if (removed == "") removed = "0"
-    text = "+" int(added + 0) " -" int(removed + 0)
+    text = line_counts(added, removed)
     if (parts != "") parts = parts " " text
     else parts = text
   }
@@ -1447,20 +1732,23 @@ function ctx_note(pct, size, tokens, at, warn,    left, extra, gap, note) {
     else left = size * (100 - pct) / 100
     if (left >= 1000) extra = sprintf("%.0fk left", left / 1000)
     else if (left > 0) extra = sprintf("%.0f left", left)
+    if (extra != "" && val("ctx_show_size") == "1") extra = extra " of " tok(size)
   }
   if (pct + 0 >= warn + 0) {
     gap = int((at + 0) - (pct + 0) + 0.5)
     if (gap > 0) note = sprintf("↯ auto-compact in ~%d%%", gap)
     else note = "↯ auto-compact"
-    if (extra != "") extra = extra " " note
+    if (extra != "") extra = extra (newfmt() ? " · " : " ") note
     else extra = note
   }
   return extra
 }
 function ctx_seg(p, extra,    body) {
   if (p == "") return ""
-  body = "ctx " meter(p)
-  if (extra != "") body = body " " extra
+  if (!newfmt()) body = "ctx " meter(p)
+  else if (val("theme") == "mono") body = "ctx " pct(p) "%"
+  else body = "ctx " paint(color_of(p + 0), bar(p + 0) " " pct(p + 0) "%")
+  if (extra != "") body = body (newfmt() ? " · " : " ") extra
   return body
 }
 function sep_of(    theme) {
@@ -1489,7 +1777,14 @@ function themed(kind, text,    prefix) {
     else if (kind == "codex") prefix = "⌘ "
     else if (kind == "grok") prefix = "🤖 "
     else if (kind == "jobs") prefix = "🛠 "
+    else if (kind == "vitals" && newfmt()) prefix = "⏱ "
     else if (kind == "session" || kind == "vitals") prefix = "♥ "
+    else if (kind == "dir") prefix = "📁 "
+    else if (kind == "project") prefix = "📦 "
+    else if (kind == "version") prefix = "🏷 "
+    else if (kind == "tokens") prefix = "🔢 "
+    else if (kind == "effort") prefix = "💭 "
+    else if (kind == "title") prefix = "📝 "
     else if (kind == "spark") prefix = "📈 "
     else if (kind == "pace") prefix = "🏃 "
     else if (kind == "nudge") prefix = "💡 "
@@ -1569,19 +1864,19 @@ function vitals_seg(ms, added, removed, usd, comps, trend,    parts, text) {
     parts = (parts == "" ? text : parts " · " text)
   }
   if (added != "" || removed != "") {
-    if (added == "") added = "0"
-    if (removed == "") removed = "0"
-    text = "+" int(added + 0) " -" int(removed + 0)
+    text = line_counts(added, removed)
     parts = (parts == "" ? text : parts " · " text)
   }
   if (usd != "") {
     text = "$" money(usd)
     if (text != "$0") {
-      text = text trend
+      if (!newfmt()) text = text trend
       parts = (parts == "" ? text : parts " · " text)
     }
   }
   if (parts == "") return ""
+  # The emoji theme marks it with a stopwatch, so the word is not needed there.
+  if (newfmt() && val("theme") == "emoji") return parts
   return "session " parts
 }
 function burn_pace(path, now, pct,    line, n, a, i, start, base_t, base_p, dt, dp, remain, eta, mins) {
@@ -1648,6 +1943,7 @@ function reorder(    ord, n, i, j, m, key) {
         m++
         hold_s[m] = seg[j]
         hold_p[m] = pri_of[j]
+        hold_k[m] = kind_of[j]
       }
     }
   }
@@ -1656,12 +1952,64 @@ function reorder(    ord, n, i, j, m, key) {
     m++
     hold_s[m] = seg[j]
     hold_p[m] = pri_of[j]
+    hold_k[m] = kind_of[j]
   }
   nseg = m
   for (i = 1; i <= m; i++) {
     seg[i] = hold_s[i]
     pri_of[i] = hold_p[i]
+    kind_of[i] = hold_k[i]
     drop[i] = 0
+  }
+}
+function join_line(m,    k, out, count, sep) {
+  out = ""
+  count = 0
+  sep = sep_of()
+  for (k = 1; k <= m; k++) {
+    if (ld[k]) continue
+    out = (count == 0) ? ls[k] : out sep ls[k]
+    count++
+  }
+  return out
+}
+# One output line per layout line. A segment is used once, on the first line that names
+# it; `cost` and `vitals` name the same slot. `@used` and the like are Pharos lines,
+# filled in after awk. Each line drops its lowest-priority segments until it fits.
+function render_layout(    maxc, nl, L, i, n, ids, k, j, m, out, guard, best, bi, want) {
+  maxc = val("max_cols") + 0
+  nl = split(val("layout"), L, ";")
+  for (i = 1; i <= nl; i++) {
+    if (L[i] == "" || L[i] == "-") continue
+    if (substr(L[i], 1, 1) == "@") { print "@@" substr(L[i], 2); continue }
+    n = split(L[i], ids, ",")
+    m = 0
+    for (k = 1; k <= n; k++) {
+      want = ids[k]
+      for (j = 1; j <= nseg; j++) {
+        if (used_seg[j]) continue
+        if (kind_of[j] == want || (want == "cost" && kind_of[j] == "vitals") || (want == "vitals" && kind_of[j] == "cost")) {
+          used_seg[j] = 1
+          m++
+          ls[m] = seg[j]
+          lp[m] = pri_of[j]
+          ld[m] = 0
+        }
+      }
+    }
+    if (m == 0) continue
+    guard = 0
+    while (maxc > 0 && guard < 40) {
+      guard++
+      if (plain_len(join_line(m)) <= maxc) break
+      best = 999
+      bi = 0
+      for (k = 1; k <= m; k++) if (!ld[k] && lp[k] < best) { best = lp[k]; bi = k }
+      if (bi == 0) break
+      ld[bi] = 1
+    }
+    out = join_line(m)
+    if (out != "") print out
   }
 }
 function join_range(lo, hi,    i, out, count, sep) {
@@ -1718,7 +2066,7 @@ function fit(maxc, band,    total, i, best, best_i, guard) {
 }
 END {
   nseg = 0
-  split("model style ctx vitals cost git pr cache vim session", sk, " ")
+  split("model style ctx vitals cost git pr cache vim session dir project version tokens effort title app", sk, " ")
   for (i in sk) session_kinds[sk[i]] = 1
   model_text = val("model")
   if (val("sparkle") == "1") {
@@ -1741,7 +2089,8 @@ END {
     push(50, "vitals", themed("vitals", vitals_seg(val("cost_ms"), val("lines_added"), val("lines_removed"), val("cost_usd"), val("compactions"), val("cost_trend"))))
   else
     push(50, "cost", themed("cost", cost_seg(val("cost_usd"), val("cost_ms"), val("lines_added"), val("lines_removed"))))
-  push(40, "git", themed("git", val("git")))
+  # 0.15 keeps git beside the folder on line 1 (two-line bands and narrow terminals).
+  push(newfmt() ? 92 : 40, "git", themed("git", val("git")))
   push(58, "fleet", themed("fleet", val("fleet")))
   push(56, "machines", themed("machines", val("machines")))
   push(57, "jobs", themed("jobs", val("jobs")))
@@ -1753,8 +2102,17 @@ END {
   push(48, "value", themed("value", val("value")))
   push(5, "codex", themed("codex", codex_seg(val("codex5"), val("codex7"))))
   push(1, "session", themed("session", val("session")))
+  push(95, "dir", themed("dir", val("dir")))
+  push(35, "project", themed("project", val("project")))
+  push(26, "effort", themed("effort", val("effort")))
+  push(22, "tokens", themed("tokens", tokens_seg(val("in_tokens"), val("out_tokens"))))
+  push(24, "title", themed("title", val("title")))
+  push(3, "version", themed("version", val("version")))
+  push(2, "app", themed("app", val("app")))
   reorder()
-  if (val("lines") + 0 >= 5) {
+  if (val("layout") != "") {
+    render_layout()
+  } else if (val("lines") + 0 >= 5) {
     # Five lines: line 1 is this session only. Lines 2-5 come from lib/fivelines.py.
     for (i = 1; i <= nseg; i++)
       if (!(kind_of[i] in session_kinds)) drop[i] = 1
@@ -1775,13 +2133,16 @@ END {
   }
 }
 '
+}
 
-if [[ "$LINES" -ge 5 ]]; then
-  LL_JOBS_DETAIL="${LIMITLINE_JOBS_DETAIL:-${JOBS_DETAIL:-reason}}" LL_COLOR="$USE_COLOR" LL_THEME="$THEME" LL_MARKS="${MARKS_MODE:-unicode}" LL_ANIMATE="${LIMITLINE_ANIMATE:-${ANIMATE_MODE:-on}}" LL_PLAN_VIEW="${LIMITLINE_PLAN_VIEW:-${PLAN_VIEW:-bar}}" LL_PLAN_NUMBERS="${LIMITLINE_PLAN_NUMBERS:-${PLAN_NUMBERS:-off}}" LL_PLAN_SHOW="${LIMITLINE_PLAN_SHOW:-${PLAN_SHOW:-used}}" LL_PLAN_RESETS="${LIMITLINE_PLAN_RESETS:-${PLAN_RESETS:-near-cap}}" LL_COLUMNS="$max_cols" \
-  LL_CLAUDE5="$five_pct" LL_CLAUDE5_RESET="$five_epoch" LL_CLAUDE7="$seven_pct" LL_CLAUDE7_RESET="$seven_epoch" \
-  LL_CODEX5="$codex5" LL_CODEX5_RESET="$codex5_raw" LL_CODEX7="$codex7" LL_CODEX7_RESET="$codex7_raw" \
-  LL_CODEX_CACHE="$(codex_cache_file)" LL_GROK_TTL="$GROK_TTL" \
-    python3 "$LIMITLINE_ROOT/lib/fivelines.py" 2>/dev/null || true
+if [[ -n "$LAYOUT_PHAROS" ]]; then
+  render_main | layout_fill
+else
+  render_main
+fi
+
+if [[ -z "$LAYOUT" && "$LINES" -ge 5 ]]; then
+  pharos_lines
 fi
 
 exit 0

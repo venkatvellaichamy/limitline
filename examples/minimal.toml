@@ -1,6 +1,6 @@
 theme = "minimal"
 bar_width = 5
-lines = 1
 auto_compact = 95
 auto_compact_warn = 80
-segments = ["model", "style", "context", "limits", "burn", "cost", "git", "pr", "cache", "vim"]
+# Line 1, in order. `limitline statusline list` names every item.
+line1 = ["dir", "git", "model", "ctx", "style", "limits", "burn", "cost", "pr", "cache", "vim"]
