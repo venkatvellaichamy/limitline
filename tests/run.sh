@@ -1398,6 +1398,51 @@ check "preset-pharos-lines" "$(LIMITLINE_PRESET=pharos five_lay | wc -l | tr -d 
 pharos_order=$(LIMITLINE_PRESET=pharos LIMITLINE_LINE2=hosts LIMITLINE_LINE3=used LIMITLINE_LINE4='[]' LIMITLINE_LINE5='[]' five_lay | cut -c1-5)
 check "pharos-lines-reordered" "$pharos_order" "$(printf '%s\n' 'Opus ' 'hosts' 'used ')"
 check "pharos-line-only" "$(LIMITLINE_LINE1=hosts five_lay)" 'hosts studio 82% mem free · 22% cpu'
+
+# limitline statusline: the non-interactive side of /limitline:statusline.
+pick_dir="$TEST_HOME/picker"
+mkdir -p "$pick_dir"
+pick_cfg="$pick_dir/config.toml"
+printf '%s\n' '# my settings' 'theme = "ascii"   # keep me' 'lines = 2' 'colour = "on"' > "$pick_cfg"
+cp "$pick_cfg" "$pick_dir/original"
+pick() { (cd "$TEST_HOME/projects/pharos" && env -u LIMITLINE_DIR LIMITLINE_CONFIG="$pick_cfg" NO_COLOR=1 "$BIN" statusline "$@"); }
+pick_list=$(pick list)
+check "statusline-list-ids" "$(printf '%s\n' "$pick_list" | grep -c -E '^(dir|git|model|ctx|project|version|tokens|effort|title) ')" "9"
+check "statusline-list-codex" "$(printf '%s\n' "$pick_list" | grep -E '^dir ' | grep -c 'current-dir')" "1"
+check "statusline-list-unavailable" "$(printf '%s\n' "$pick_list" | grep -E '^ *run-state ' | grep -c 'not available')" "1"
+check "statusline-list-presets" "$(printf '%s\n' "$pick_list" | grep -c -E '^ *(minimal|default|full|pharos) ')" "4"
+pick set line1=dir,git-branch,model,ctx > "$pick_dir/out" 2>&1
+check "statusline-set-line" "$(grep -E '^line1' "$pick_cfg")" 'line1 = ["dir", "git", "model", "ctx"]'
+check "statusline-set-keeps" "$(grep -c -E '^# my settings$|^theme = "ascii"   # keep me$|^lines = 2$' "$pick_cfg")" "3"
+check "statusline-set-backup" "$(cat "$pick_dir/config.toml.bak")" "$(cat "$pick_dir/original")"
+check "statusline-set-renders" "$(LIMITLINE_CONFIG="$pick_cfg" LIMITLINE_DIR=1 NO_COLOR=1 "$BIN" < "$rich")" 'demo | Opus 5.5 | ctx ##--- 32% · 678k left'
+cp "$pick_cfg" "$pick_dir/before-bad"
+pick set line1=dir,warp-drive > "$pick_dir/bad" 2>&1
+check "statusline-set-unknown-exit" "$?" "2"
+check "statusline-set-unknown-unchanged" "$(cat "$pick_cfg")" "$(cat "$pick_dir/before-bad")"
+check "statusline-set-unknown-says" "$(grep -c 'warp-drive' "$pick_dir/bad")" "1"
+pick set line2=run-state > "$pick_dir/bad" 2>&1
+check "statusline-set-unavailable" "$(grep -c 'not available in Claude Code' "$pick_dir/bad")" "1"
+pick set preset=full colors=off line2=none > /dev/null 2>&1
+check "statusline-set-preset" "$(grep -E '^(preset|colors|colour|line2)' "$pick_cfg")" "$(printf '%s\n' 'colors = "off"' 'preset = "full"' 'line2 = []')"
+check "statusline-preview" "$(pick preview)" 'pharos | Opus 5.5 | ctx ##--- 32% · 678k left'
+check "statusline-preview-proposed" "$(pick preview line1=model,effort)" 'Opus 5.5 | effort high'
+check "statusline-preview-no-write" "$(grep -c '^line1 = \["dir", "git", "model", "ctx"\]$' "$pick_cfg")" "1"
+pick_cache="$TEST_HOME/picker-cache"
+mkdir -p "$pick_cache"
+(cd "$TEST_HOME/projects/pharos" && XDG_CACHE_HOME="$pick_cache" LIMITLINE_PHAROS_HOME="$TEST_HOME/picker-pharos" LIMITLINE_CONFIG="$pick_cfg" "$BIN" statusline preview >/dev/null)
+mkdir -p "$TEST_HOME/picker-pharos"
+(cd "$TEST_HOME/projects/pharos" && XDG_CACHE_HOME="$pick_cache" LIMITLINE_PHAROS_HOME="$TEST_HOME/picker-pharos" LIMITLINE_CONFIG="$pick_cfg" "$BIN" statusline preview >/dev/null)
+check "statusline-preview-writes-nothing" "$(find "$pick_cache" "$TEST_HOME/picker-pharos" -type f | wc -l | tr -d ' ')" "0"
+pick --clear > /dev/null 2>&1
+check "statusline-clear" "$(cat "$pick_cfg")" "$(printf '%s\n' '# my settings' 'theme = "ascii"   # keep me')"
+check "statusline-clear-renders-default" "$(LIMITLINE_CONFIG="$pick_cfg" LIMITLINE_DIR=1 NO_COLOR=1 "$BIN" < "$rich" | cut -c1-40)" 'demo | Opus 5.5 | ctx ##--- 32% · 678k '
+check "statusline-help" "$(pick 2>&1 | grep -c 'statusline set')" "1"
+legacy_only="$pick_dir/xdg"
+mkdir -p "$legacy_only/limitline"
+printf 'theme = "pill"\n' > "$legacy_only/limitline/config"
+(cd "$TEST_HOME" && env -u LIMITLINE_CONFIG XDG_CONFIG_HOME="$legacy_only" "$BIN" statusline set line1=model > /dev/null 2>&1)
+check "statusline-legacy-file" "$(cat "$legacy_only/limitline/config"; ls "$legacy_only/limitline")" "$(printf '%s\n' 'theme = "pill"' 'line1 = ["model"]' 'config' 'config.bak')"
 if five_unit=$(python3 -m unittest -q "$ROOT/tests/test_fivelines.py" 2>&1); then
   check "fivelines-unit" "ok" "ok"
 else

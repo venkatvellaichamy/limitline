@@ -21,6 +21,7 @@ limitline — local usage limits for Claude Code and nearby CLIs
   bin/limitline history [--days N] | report --week [--md]
   bin/limitline install-refresher|uninstall-refresher
   bin/limitline schedule install|uninstall|status
+  bin/limitline statusline list|preview|set line1=dir,git,model,ctx|--clear
 
 Config: ~/.config/limitline/config or config.toml
 EOF
@@ -28,7 +29,7 @@ EOF
 fi
 
 case "${1:-}" in
-  status|preview|doctor|config|report|watch|theme|refresh|install-refresher|uninstall-refresher|schedule|--host|set|job|history|version|--version|update|channel)
+  status|preview|doctor|config|report|watch|theme|refresh|install-refresher|uninstall-refresher|schedule|--host|set|job|history|version|--version|update|channel|statusline)
     if command -v python3 >/dev/null 2>&1; then
       exec python3 "$LIMITLINE_ROOT/lib/cli.py" "$@"
     fi
@@ -43,8 +44,13 @@ fi
 
 input=$(cat || true)
 
+# `limitline statusline preview` renders a sample session: write no cache, history,
+# snapshot, or Pharos inbox file, so the sample never stands in for a real reading.
+PREVIEW=0
+[[ "${LIMITLINE_PREVIEW:-}" == "1" ]] && PREVIEW=1
+
 debug_dump() {
-  [[ "${LIMITLINE_DEBUG:-}" == "1" ]] || return 0
+  [[ "${LIMITLINE_DEBUG:-}" == "1" && "$PREVIEW" != "1" ]] || return 0
   local dest dir
   dest="${LIMITLINE_DEBUG_FILE:-}"
   if [[ -z "$dest" ]]; then
@@ -693,6 +699,7 @@ scan_codex() {
 
 write_codex_cache() {
   local ok="$1" dest tmp dash
+  [[ "$PREVIEW" == "1" ]] && return 0
   [[ -z "${LIMITLINE_PHAROS_USAGE:-}" && "${LIMITLINE_NOCACHE:-}" != "1" ]] || return 0
   dest=$(codex_cache_file)
   tmp="${dest}.$$"
@@ -935,6 +942,7 @@ esac
 
 write_snapshot() {
   local dir dest windows item pct reset
+  [[ "$PREVIEW" == "1" ]] && return 0
   [[ -n "$five_pct" || -n "$seven_pct" || -n "$spend_pct" || -n "$spend_used" ]] || return 0
   dir="${XDG_CACHE_HOME:-$HOME/.cache}/limitline"
   [[ -d "$dir" ]] || mkdir -p "$dir" 2>/dev/null || return 0
@@ -983,7 +991,7 @@ write_snapshot
 
 append_sample() {
   local file="$1" ts="$2" pct="$3" dir tmp
-  [[ -n "$pct" ]] || return 0
+  [[ -n "$pct" && "$PREVIEW" != "1" ]] || return 0
   dir=${file%/*}
   mkdir -p "$dir" 2>/dev/null || return 0
   tmp="${file}.$$"
@@ -1052,7 +1060,7 @@ fire_alert() {
 
 maybe_alert() {
   local pct hour dir state token level
-  [[ "$ALERTS_MODE" == "off" ]] && return 0
+  [[ "$ALERTS_MODE" == "off" || "$PREVIEW" == "1" ]] && return 0
   pct="${five_pct%%.*}"
   case "$pct" in ''|*[!0-9]*) return 0 ;; esac
   hour=$(date -r "$NOW" "+%H" 2>/dev/null || date -d "@$NOW" "+%H" 2>/dev/null || echo "")
@@ -1093,7 +1101,7 @@ nudge_text=""
 value_text=""
 cost_trend=""
 
-if [[ "$ON_BURN" == "1" && -n "$five_pct" ]]; then
+if [[ "$ON_BURN" == "1" && -n "$five_pct" && "$PREVIEW" != "1" ]]; then
   mkdir -p "$cache_dir" 2>/dev/null || true
   hist_path="$cache_dir/history-5h.tsv"
   printf '%s %s\n' "$NOW" "$five_pct" >> "$hist_path" 2>/dev/null || true
@@ -1130,7 +1138,7 @@ if [[ "$ON_FRESH" == "1" && -n "$five_epoch" && -n "$five_pct" ]]; then
     sparkle=1
     shown="$five_epoch"
   fi
-  printf '%s %s %s\n' "$five_epoch" "$five_pct" "$shown" > "$fresh_state" 2>/dev/null || true
+  [[ "$PREVIEW" == "1" ]] || printf '%s %s %s\n' "$five_epoch" "$five_pct" "$shown" > "$fresh_state" 2>/dev/null || true
 fi
 
 maybe_alert
@@ -1186,7 +1194,7 @@ if [[ -n "$cwd" && "$cwd" != "$HOME" ]]; then
       hour=$(date -r "$NOW" "+%H" 2>/dev/null || date -d "@$NOW" "+%H" 2>/dev/null || echo "0")
       case "$hour" in ''|*[!0-9]*) hour=0 ;; esac
       mkdir -p "$cache_dir" 2>/dev/null || true
-      printf '%s %s %s\n' "$NOW" "$((10#$hour))" "$project" >> "$cache_dir/activity.tsv" 2>/dev/null || true
+      [[ "$PREVIEW" == "1" ]] || printf '%s %s %s\n' "$NOW" "$((10#$hour))" "$project" >> "$cache_dir/activity.tsv" 2>/dev/null || true
       ;;
   esac
 fi
@@ -1348,7 +1356,7 @@ fresh_line() {
 }
 
 kick_refresh() {
-  [[ "${LIMITLINE_REFRESH:-1}" == "0" ]] && return 0
+  [[ "${LIMITLINE_REFRESH:-1}" == "0" || "$PREVIEW" == "1" ]] && return 0
   local lock now mtime
   mkdir -p "$cache_dir" 2>/dev/null || return 0
   lock="$cache_dir/refresh.lock"

@@ -622,7 +622,8 @@ def cmd_theme():
 
 USAGE = ("usage: limitline status | --host NAME | preview | doctor | config | report | watch | theme | refresh [--force]"
          " | history [--days N] | report [--week] [--md] | set xai-plan PCT [--resets \"YYYY-MM-DD HH:MM\"] [--plan NAME] | job update|list|rm"
-         " | install-refresher | uninstall-refresher | schedule install|uninstall|status")
+         " | install-refresher | uninstall-refresher | schedule install|uninstall|status"
+         " | statusline list|preview|set KEY=VALUE...|--clear")
 
 
 def parse_local(text):
@@ -725,6 +726,8 @@ def main(argv):
         sys.exit(load_lib("release").main(argv) or 0)
     elif cmd == "schedule":
         sys.exit(load_lib("schedule").main(argv[1:]) or 0)
+    elif cmd == "statusline":
+        sys.exit(load_lib("statusline").main(argv[1:]) or 0)
     else:
         print(USAGE)
 
