@@ -15,8 +15,21 @@ if [[ ! -x "$BIN" ]]; then
 fi
 
 TEST_HOME=$(mktemp -d)
-cleanup() { rm -rf "$TEST_HOME"; }
+load_pids=()
+cleanup() {
+  [[ ${#load_pids[@]} -gt 0 ]] && kill "${load_pids[@]}" 2>/dev/null
+  rm -rf "$TEST_HOME"
+}
 trap cleanup EXIT
+# `--load N` (or LIMITLINE_TEST_LOAD=N) runs N busy loops for the whole suite, to check the
+# timing block still passes on a loaded machine. Off by default.
+test_load="${LIMITLINE_TEST_LOAD:-0}"
+[[ "${1:-}" == "--load" ]] && test_load="${2:-4}"
+for ((i = 0; i < test_load; i++)); do
+  (while :; do :; done) &
+  load_pids+=($!)
+  disown "$!"  # no "Terminated" notice when cleanup kills it
+done
 
 export HOME="$TEST_HOME"
 export XDG_CONFIG_HOME="$TEST_HOME/.config"
@@ -1168,80 +1181,80 @@ LIMITLINE_HISTORY_DIR="$hist_spy" LIMITLINE_TOOL=codex LIMITLINE_CLAUDE_SNAPSHOT
 [[ ! -e "$hist_spy" ]] && check "status-keeps-no-plan-history" "yes" "yes" || check "status-keeps-no-plan-history" "wrote $(ls "$hist_spy")" "no plan history in limitline"
 unset LIMITLINE_HISTORY_DIR LIMITLINE_JOBS_HISTORY LIMITLINE_JOBS_DIR LIMITLINE_JOBS_LINE LIMITLINE_HOST
 
-# Typical speed without the Codex scan: the median of 8 runs after one warmup. An average
-# counts a few runs slowed by other work on the machine (parallel agent runs made it 3x
-# slower on 2026-11-05 with no code change); the best run hides a slowdown that only some
-# runs hit. The median ignores both tails, and a real slowdown moves it.
-"$BIN" < "$FIX/full.json" >/dev/null
-speed_ms=$(BIN="$BIN" FIX="$FIX" python3 -c '
-import statistics, subprocess, time, os
-bin = os.environ["BIN"]
-fixture = os.environ["FIX"] + "/full.json"
-env = os.environ.copy()
-took = []
-runs = 8
-for _ in range(runs):
-    start = time.perf_counter()
-    subprocess.run([bin], stdin=open(fixture, "rb"), stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, env=env, check=False)
-    took.append(time.perf_counter() - start)
-print(int(statistics.median(took) * 1000))
-' )
-if [[ "$speed_ms" -le "$SPEED_MS" ]]; then
-  check "speed-${speed_ms}ms" "fast" "fast"
-else
-  check "speed-${speed_ms}ms" "slow" "fast"
-fi
-
-# Warm fleet and machine caches, still with no ssh and no provider scan.
-"$BIN" refresh
-warm_ms=$(BIN="$BIN" python3 -c '
-import statistics, subprocess, time, os
-bin = os.environ["BIN"]
-payload = b"{\"model\":{\"display_name\":\"Opus\"}}"
-env = os.environ.copy()
-env["NO_COLOR"] = "1"
-env["LIMITLINE_SEGMENTS"] = "model,fleet,machines"
-env["LIMITLINE_REFRESH"] = "0"
-took = []
-runs = 8
-subprocess.run([bin], input=payload, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, env=env, check=False)
-for _ in range(runs):
-    start = time.perf_counter()
-    subprocess.run([bin], input=payload, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, env=env, check=False)
-    took.append(time.perf_counter() - start)
-print(int(statistics.median(took) * 1000))
-')
-if [[ "$warm_ms" -le "$SPEED_MS" ]]; then
-  check "warm-cache-${warm_ms}ms" "fast" "fast"
-else
-  check "warm-cache-${warm_ms}ms" "slow" "fast"
-fi
-
-# A warm jobs line costs one stat and one read on the status line.
+# Status-line speed. Wall time alone fails on a busy machine: other agents (load ~6) pushed
+# the median from 39 to 55 ms on 2026-11-05 with no code change. So every status-line run
+# is paired with a bare `python3 -c pass` in the same loop, in alternating order, and the
+# check is on median(status line) / median(baseline): load slows both by about the same
+# factor. Measured on 2026-11-06 (M-series Mac): the ratios were unchanged with 4 busy
+# loops and rose about 35% with 16. `bash -c :` was tried as the baseline and dropped: it
+# takes ~3 ms, so 1 ms of jitter moves the ratio by a third.
+# Each check has its own limit: its normal ratio on a Mac (speed 3.0, warm 2.65, jobs 1.5)
+# times SPEED_RATIO (default 1.6), so a 2x slowdown fails. The "-catches-2x" checks prove
+# it every run: they sleep for this run's own median before starting the status line, and
+# must come out slow. LIMITLINE_SPEED_MS scales every limit by SPEED_MS/50 (CI sets 200, so
+# 4x looser) and the control slowdown with it. If anything is off, the block is measured
+# once more before it counts (the retry runs with the caches the first pass warmed).
+SPEED_RATIO="${LIMITLINE_SPEED_RATIO:-1.6}"
+time_check() {  # time_check <normal ratio> <stdin file> <cmd...>
+  # Prints "<ok|slow> <slow|missed> <details>": the status line, then the 2x control.
+  python3 -c '
+import statistics, subprocess, sys, time
+normal, margin, speed_ms = (float(a) for a in sys.argv[1:4])
+src, target = sys.argv[4], sys.argv[5:]
+scale = speed_ms / 50
+limit = normal * margin * scale
+factor = max(2.0, margin * 1.25) * scale
+base = ["python3", "-c", "pass"]
+def once(cmd, extra=0.0):
+    with open(src, "rb") as f:
+        start = time.perf_counter()
+        # The 2x control: an extra median of busy work before the status line. Busy, not
+        # time.sleep: an idle core clocks down and made the next spawn 2-3x slower.
+        while time.perf_counter() - start < extra:
+            pass
+        subprocess.run(cmd, stdin=f, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=False)
+    return time.perf_counter() - start
+def measure(extra=0.0):
+    once(target); once(base)
+    took, base_took = [], []
+    for i in range(15):
+        if i % 2:
+            base_took.append(once(base)); took.append(once(target, extra))
+        else:
+            took.append(once(target, extra)); base_took.append(once(base))
+    return statistics.median(took), statistics.median(base_took)
+t, b = measure()
+st, sb = measure(t * (factor - 1))
+show = lambda x, y: "%dms/%dms=%.2f" % (x * 1000, y * 1000, x / y)
+print("ok" if t / b <= limit else "slow", "slow" if st / sb > limit else "missed",
+      "limit %.2f, now %s, %gx %s" % (limit, show(t, b), factor, show(st, sb)))
+' "$1" "$SPEED_RATIO" "$SPEED_MS" "${@:2}"
+}
+printf '%s' '{"model":{"display_name":"Opus"}}' > "$TEST_HOME/speed-payload.json"
 jobs_speed_dir="$TEST_HOME/speed-jobs"
-LIMITLINE_JOBS_DIR="$jobs_speed_dir" LIMITLINE_JOBS_LINE="$TEST_HOME/speed-jobs.line" "$BIN" job update mining --done 1 --total 9 >/dev/null
-jobs_ms=$(BIN="$BIN" LIMITLINE_JOBS_DIR="$jobs_speed_dir" LIMITLINE_JOBS_LINE="$TEST_HOME/speed-jobs.line" python3 -c '
-import statistics, subprocess, time, os
-bin = os.environ["BIN"]
-payload = b"{\"model\":{\"display_name\":\"Opus\"}}"
-env = os.environ.copy()
-env["NO_COLOR"] = "1"
-env["LIMITLINE_SEGMENTS"] = "model,jobs"
-env["LIMITLINE_REFRESH"] = "0"
-took = []
-runs = 8
-subprocess.run([bin], input=payload, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, env=env, check=False)
-for _ in range(runs):
-    start = time.perf_counter()
-    subprocess.run([bin], input=payload, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, env=env, check=False)
-    took.append(time.perf_counter() - start)
-print(int(statistics.median(took) * 1000))
-')
-if [[ "$jobs_ms" -le "$SPEED_MS" ]]; then
-  check "jobs-warm-${jobs_ms}ms" "fast" "fast"
-else
-  check "jobs-warm-${jobs_ms}ms" "slow" "fast"
+timing_block() {
+  # Typical speed without the Codex scan.
+  speed_out=$(time_check 3.0 "$FIX/full.json" "$BIN")
+  # Warm fleet and machine caches, still with no ssh and no provider scan.
+  "$BIN" refresh
+  warm_out=$(NO_COLOR=1 LIMITLINE_SEGMENTS=model,fleet,machines LIMITLINE_REFRESH=0 \
+    time_check 2.65 "$TEST_HOME/speed-payload.json" "$BIN")
+  # A warm jobs line costs one stat and one read on the status line.
+  LIMITLINE_JOBS_DIR="$jobs_speed_dir" LIMITLINE_JOBS_LINE="$TEST_HOME/speed-jobs.line" "$BIN" job update mining --done 1 --total 9 >/dev/null
+  jobs_out=$(NO_COLOR=1 LIMITLINE_SEGMENTS=model,jobs LIMITLINE_REFRESH=0 LIMITLINE_JOBS_DIR="$jobs_speed_dir" \
+    LIMITLINE_JOBS_LINE="$TEST_HOME/speed-jobs.line" time_check 1.5 "$TEST_HOME/speed-payload.json" "$BIN")
+  [[ "$speed_out" == "ok slow "* && "$warm_out" == "ok slow "* && "$jobs_out" == "ok slow "* ]]
+}
+if ! timing_block; then
+  printf 'timing off, measuring once more:\n  speed %s\n  warm %s\n  jobs %s\n' "$speed_out" "$warm_out" "$jobs_out"
+  timing_block
 fi
+for row in "speed:$speed_out" "warm-cache:$warm_out" "jobs-warm:$jobs_out"; do
+  name=${row%%:*} out=${row#*:}
+  read -r verdict control details <<< "$out"
+  check "$name ($details)" "$verdict" "ok"
+  check "$name-catches-2x" "$control" "slow"
+done
 
 # Five lines: line 1 is the session only; lines 2-5 come from lib/fivelines.py.
 five_cache="$TEST_HOME/five-cache"; mkdir -p "$five_cache/limitline" "$TEST_HOME/five-pharos/runs"
@@ -1286,7 +1299,11 @@ else
   printf '%s\n' "$five_unit" | grep -E '^(FAIL|ERROR):|Error: |^Ran|^FAILED' >&2
 fi
 # 0.14.0: the display stays honest when Pharos's files are bad (synthetic files only).
-if hard_out=$(python3 -m unittest -q "$ROOT/tests/test_hardening.py" 2>&1); then
+# test_slow_disk_render_stays_under_budget times one render against the wall clock, so a
+# busy machine can fail it; like the timing block, a failure is run once more before it counts.
+hard_run() { python3 -m unittest -q "$ROOT/tests/test_hardening.py" 2>&1; }
+if hard_out=$(hard_run) || { printf 'hardening-unit failed, running it once more:\n%s\n' \
+  "$(printf '%s\n' "$hard_out" | grep -E '^(FAIL|ERROR):')"; hard_out=$(hard_run); }; then
   check "hardening-unit" "ok" "ok"
 else
   check "hardening-unit" "failed" "ok"

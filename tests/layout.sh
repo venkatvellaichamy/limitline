@@ -273,6 +273,12 @@ check "unknown-age-minutes" "$(unk_used | grep -c -F '◎ codex ? · 114m old')"
 unk_usage $((1762056000 - 3600)) $((1762056000 - 3600)) '[]'
 unk_line=$(unk_used)
 check "pharos-usage-unavailable-stale" "$(printf '%s' "$unk_line" | grep -c -E ' · Pharos usage unavailable · 60m old$')$(printf '%s' "$unk_line" | grep -c -F '◎ codex 5h')" "10"
+# No data at all (observed_at null, no windows) is `—`; data that can't be trusted stays `?`.
+printf '%s' '{"version":1,"generated_at":1762055940,"plans":[{"provider":"codex","observed_at":null,"windows":[]},{"provider":"xai-plan","observed_at":null}],"hosts":{"hosts":[]}}' > "$unk_home/usage.json"
+unk_line=$(unk_used)
+check "no-data-dash" "$(printf '%s' "$unk_line" | grep -c -F '◎ codex — │')$(printf '%s' "$unk_line" | grep -c -F 'cursor+grok —')$(printf '%s' "$unk_line" | grep -c -F '?')" "110"
+printf '%s' '{"version":1,"generated_at":1762055940,"plans":[{"provider":"codex","observed_at":null,"windows":[{"name":"5h","used_pct":17,"resets_at":1762060000}]}],"hosts":{"hosts":[]}}' > "$unk_home/usage.json"
+check "null-observed-with-data-unknown" "$(unk_used | grep -c -F '◎ codex ? │')" "1"
 rm -f "$unk_home/usage.json"
 unk_line=$(unk_used)
 check "pharos-usage-unavailable-missing" "$(printf '%s' "$unk_line" | grep -c -E '^used  ✻ claude 7d .* · Pharos usage unavailable$')$(printf '%s' "$unk_line" | grep -c -F 'codex')" "10"

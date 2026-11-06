@@ -14,6 +14,8 @@
 - README: in Pharos mode the 60-second refresh job (`dev.limitline.refresh`) stays, since refresh rebuilds the display lines; only the fetch schedule job (`com.limitline.refresh`) is redundant.
 - Tests: the grok refresh check in `tests/run.sh` gets a real usage.json (it called a shell function through `env`, so it tested nothing) and has a negative control; `tests/layout.sh` checks the `?` unknown cell and the `Pharos usage unavailable` text; the timing checks use the median of 8 runs, not the best.
 - `tests/run.sh` now runs `tests/test_reader.py`.
+- Tests: the timing checks no longer fail on a busy machine. Each status-line run is paired with a bare `python3 -c pass` in the same loop, and the check is on the ratio of the medians, with a limit per check about 1.6x its normal ratio (`LIMITLINE_SPEED_RATIO`; `LIMITLINE_SPEED_MS` still loosens it for CI). New `-catches-2x` checks add one median of busy work to each run and must fail, which proves a 2x slowdown is still caught. A failing timing block is measured once more before it counts, and so is a failing `test_hardening.py` run (its slow-disk render test has a wall-clock budget). `bash tests/run.sh --load N` runs N busy loops during the suite.
+- A plan with `observed_at: null` and no windows (nothing read yet) shows `—`. `?` stays for data that is there but can't be trusted.
 - `docs/audits/USAGE-RENDER-AUDIT-2026-11-05.md` records where each segment's number comes from in Pharos mode, and lists the remaining paths that can shadow Pharos data.
 
 ## 0.16.0-beta.1 - 2026-11-05

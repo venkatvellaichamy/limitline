@@ -80,6 +80,13 @@ def plan_age(plan, usage, now):
     return stale, age
 
 
+def no_data(plan):
+    """True for a plan that has read nothing yet: observed_at null and no windows. It is
+    shown as `—` (no data), not `?` (data that is there but can't be trusted)."""
+    return (isinstance(plan, dict) and "observed_at" in plan and plan["observed_at"] is None
+            and plan.get("windows") in (None, []))
+
+
 def refilled(windows, now):
     """Windows with a reset time that has gone by count as refilled: 0% used, no reset."""
     out = []
@@ -194,6 +201,8 @@ def codex_fields(usage, now=None):
     by_name = {}
     for plan in usage.get("plans") or []:
         if isinstance(plan, dict) and plan.get("provider") == "codex":
+            if no_data(plan) and not usage.get("stale"):
+                continue  # nothing read yet: no fields, so the line shows `—`
             stale, age = plan_age(plan, usage, now)
             if stale:
                 return "codex_age %s" % ("?" if age is None else age)

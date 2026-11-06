@@ -326,7 +326,7 @@ class Cell:
             return (f"{self.name} " if self.name else "") + style.paint("2", "?" + age)
         if self.used is None:
             age = f" {age_label(self.age)} ago" if self.age is not None and self.age > 0 else ""
-            return f"{self.name} " + style.paint("2", "—" + age)
+            return (f"{self.name} " if self.name else "") + style.paint("2", "—" + age)
         code = used_code(self.used)
         if self.fresh_change and style.animate:
             code = "1;" + code
@@ -373,7 +373,8 @@ def held(usage, plan, now, is_plan=True):
     observed_at that is not a positive epoch number), its reading (observed_at; usage.json's
     generated_at only when the plan has no observed_at key) is older than
     `plan_stale_after` (default 1h), or it is from the future. An old reading is never drawn as a current percent: tonight's Codex reading
-    was 94 minutes old and wrong. The hosts block keeps only the usage.json and flag checks."""
+    was 94 minutes old and wrong. The hosts block keeps only the usage.json and flag checks.
+    A plan with no data at all (observed_at null, no windows) gives NO_DATA: `—`, not `?`."""
     if usage is not None and (usage.get("stale") or usage.get("skew")):
         # The used line's note already says how old usage.json is; plans just say `?`.
         age = usage.get("age")
@@ -382,6 +383,8 @@ def held(usage, plan, now, is_plan=True):
         return None
     if is_plan:
         import pharos_view
+        if pharos_view.no_data(plan):
+            return NO_DATA  # nothing read yet: `—`, since there is nothing to distrust
         stale, age = pharos_view.plan_age(plan, usage, now)
         return (HELD_NO_AGE if age is None else age) if stale else None
     kind, age = freshness(plan.get("observed_at"), now)
@@ -393,10 +396,14 @@ def held(usage, plan, now, is_plan=True):
 
 
 HELD_NO_AGE = -1  # held() result: hold the plan, show no age
+NO_DATA = -2  # held() result: observed_at null and no windows, so `—` rather than `?`
 
 
 def held_cell(name, hold):
-    """An old reading: drawn as unknown with its age (`? · 94m old`), never its percent."""
+    """An old reading: drawn as unknown with its age (`? · 94m old`), never its percent.
+    A plan with no data at all (NO_DATA) is `—` instead."""
+    if hold == NO_DATA:
+        return Cell(name, None)
     cell = Cell(name, None, age=None if hold == HELD_NO_AGE else hold)
     cell.held = True
     return cell
