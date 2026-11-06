@@ -321,9 +321,13 @@ def brief(row, long=False):
 
 def line_fields(row):
     """grok.line for the status line: the text, then `pct dim source` on line 2.
-    A stale or manual reading is dimmed."""
+    A manual reading is dimmed. A stale one is unknown: `cursor+grok ? · 94m old`, no percent."""
     if not present(row):
         return "", ""
+    if row.get("stale"):
+        age = row.get("age")
+        text = LABEL + " ?" + (" · %s old" % timefmt.age(age) if isinstance(age, (int, float)) else "")
+        return text, "- 1 %s" % (row.get("source") or "manual")
     pct, _bits = parts(row)
     text = LABEL + " " + brief(row)
     dim = row.get("stale") or row.get("source") != "live"

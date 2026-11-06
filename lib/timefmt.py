@@ -33,14 +33,14 @@ def clock(epoch):
 
 
 def age(seconds):
-    """`45m`, `9h`, `3d`."""
+    """`45m`, `114m` (minutes under 2 h), `9h`, `3d`."""
     try:
         seconds = int(seconds)
     except (TypeError, ValueError):
         return ""
     if seconds < 0:
         seconds = 0
-    if seconds < 3600:
+    if seconds < 7200:
         return "%dm" % (seconds // 60)
     if seconds < 86400:
         return "%dh" % (seconds // 3600)

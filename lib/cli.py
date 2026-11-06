@@ -568,6 +568,8 @@ def cmd_config():
     print("# jobs_ttl = 600")
     print('# reader = "auto"  # auto, pharos, limitline')
     print("# reader_freshness = 900  # usage.json modification age in seconds")
+    print("# plan_stale_after = 3600  # a plan reading older than this shows as `? · 94m old`")
+    print("# usage_stale_after = 900  # usage.json older than this: \"Pharos usage unavailable\"")
     print("# themes: minimal, powerline, ascii, pill, emoji, mono")
     print("# LIMITLINE_ASCII=1 forces the ascii theme. NO_COLOR disables ANSI.")
 

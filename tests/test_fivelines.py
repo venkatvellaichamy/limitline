@@ -38,6 +38,7 @@ class FiveLines(unittest.TestCase):
         os.environ.update({
             "XDG_CACHE_HOME": str(base / "cache"),
             "LIMITLINE_PHAROS_HOME": str(self.pharos),
+            "LIMITLINE_CONFIG": str(base / "config"),  # never the real ~/.config/limitline
             "LL_COLOR": "0",
             "LL_CLAUDE7": "70", "LL_CLAUDE7_RESET": str(NOW + 11 * 3600),
             "LL_CODEX5": "99", "LL_CODEX5_RESET": str(NOW + 3600),
@@ -210,11 +211,11 @@ class FiveLines(unittest.TestCase):
         self.assertIn("◎ codex 7d —", left)
         self.assertIn("✦ agy gemini —", left)
 
-    def test_expired_window_says_it_reset(self):
-        # 0.14.0: the old 99% is never shown, and the gap is named instead of hidden.
+    def test_expired_window_counts_as_refilled(self):
+        # 0.16.0-beta.2: the old 99% is never shown; a window whose reset went by is 0%, as in Pharos.
         os.environ["LL_CODEX5_RESET"] = str(NOW - 10)
         line = plain(fivelines.build(now=NOW))[0]
-        self.assertIn("codex 5h reset, no newer reading", line)
+        self.assertIn("codex 5h ░░░░░", line)
         self.assertNotIn("█████ →18:00", line)
 
     def test_marks_none(self):
@@ -281,10 +282,12 @@ class FiveLines(unittest.TestCase):
         lines = plain(fivelines.build(now=NOW))
         self.assertEqual(lines, ["used  ✻ claude 7d ███▌░"])
 
-    def test_stale_pharos_usage_shows_dashes_for_agy(self):
+    def test_stale_pharos_usage_is_unknown_and_named(self):
         self.usage["generated_at"] = NOW - 3600
         self.write_usage()
-        self.assertIn("✦ agy gemini —", plain(fivelines.build(now=NOW))[0])
+        line = plain(fivelines.build(now=NOW))[0]
+        self.assertIn("✦ agy ?", line)
+        self.assertTrue(line.endswith("· Pharos usage unavailable · 60m old"), line)
 
     # ---- live feel: spinner, event note, change highlight, stale age --------------------
 
