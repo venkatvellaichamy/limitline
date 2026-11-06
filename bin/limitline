@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # limitline — local usage-limit status line for Claude Code.
 # Reads one JSON object on stdin. No network. Always exits 0.
-# Version: 0.15.0-beta.1
+# Version: 0.16.0-beta.1
 
 _here=${0%/*}
 [[ "$_here" == "$0" ]] && _here="."
@@ -19,6 +19,7 @@ limitline — local usage limits for Claude Code and nearby CLIs
   bin/limitline job update NAME --done N --total N --failed N --status running
   bin/limitline job list|rm NAME
   bin/limitline history [--days N] | report --week [--md]
+  bin/limitline install | uninstall --refresh-jobs [--dry-run]
   bin/limitline install-refresher|uninstall-refresher
   bin/limitline schedule install|uninstall|status
   bin/limitline statusline list|preview|set line1=dir,git,model,ctx|--clear
@@ -29,7 +30,7 @@ EOF
 fi
 
 case "${1:-}" in
-  status|preview|doctor|config|report|watch|theme|refresh|install-refresher|uninstall-refresher|schedule|--host|set|job|history|version|--version|update|channel|statusline)
+  install|uninstall|status|preview|doctor|config|report|watch|theme|refresh|install-refresher|uninstall-refresher|schedule|--host|set|job|history|version|--version|update|channel|statusline)
     if command -v python3 >/dev/null 2>&1; then
       exec python3 "$LIMITLINE_ROOT/lib/cli.py" "$@"
     fi
@@ -71,6 +72,7 @@ if [[ -z "${input//[[:space:]]/}" ]]; then
 fi
 
 BAR_WIDTH=5
+READER_MODE=auto
 CODEX_MODE=auto
 COLOR_MODE=on
 THEME=minimal
@@ -154,6 +156,7 @@ load_config() {
       \'*\') val="${val#\'}"; val="${val%\'}" ;;
     esac
     case "$key" in
+      reader) READER_MODE="$val" ;;
       bar_width) BAR_WIDTH="$val" ;;
       codex) CODEX_MODE="$val" ;;
       color|colour|colors|colours) COLOR_MODE="$val" ;;
@@ -989,12 +992,19 @@ write_snapshot() {
     "$NOW" "$spend_json" "$windows" > "$dest" 2>/dev/null || true
   # Claude Code gives these numbers only to the status line. Relay them, as-is, to Pharos.
   local ph="${LIMITLINE_PHAROS_HOME:-$HOME/.pharos}"
-  if [[ -d "$ph" && -s "$dest" ]]; then
+  if [[ "$PHAROS_READER" != "1" && -d "$ph" && -s "$dest" ]]; then
     mkdir -p "$ph/inbox" 2>/dev/null \
       && cp "$dest" "$ph/inbox/.claude.$$" 2>/dev/null \
       && mv -f "$ph/inbox/.claude.$$" "$ph/inbox/claude.json" 2>/dev/null || true
   fi
 }
+# One selection per render, shared by the relay and background refresh guards.
+PHAROS_READER=0
+if [[ "$READER_MODE" == "pharos" ]]; then
+  PHAROS_READER=1
+elif [[ "$READER_MODE" != "limitline" && -f "${LIMITLINE_PHAROS_USAGE:-${LIMITLINE_PHAROS_HOME:-$HOME/.pharos}/usage.json}" ]] && [[ "$(python3 -c 'import sys; sys.path.insert(0, sys.argv[1]); import reader; print(int(reader.is_pharos()))' "$LIMITLINE_ROOT/lib" 2>/dev/null)" == "1" ]]; then
+  PHAROS_READER=1
+fi
 write_snapshot
 
 append_sample() {
@@ -1364,6 +1374,7 @@ fresh_line() {
 }
 
 kick_refresh() {
+  [[ "$PHAROS_READER" != "1" ]] || return 0
   [[ "${LIMITLINE_REFRESH:-1}" == "0" || "$PREVIEW" == "1" ]] && return 0
   local lock now mtime
   mkdir -p "$cache_dir" 2>/dev/null || return 0
@@ -1420,6 +1431,17 @@ if [[ "$ON_JOBS" == "1" ]]; then
   else
     need_refresh=1
   fi
+fi
+if [[ "$PHAROS_READER" == "1" ]]; then
+  while IFS=' ' read -r field value; do
+    case "$field" in
+      fleet) [[ "$ON_FLEET" == "1" ]] && fleet_text="$value" ;;
+      machines) [[ "$ON_MACHINES" == "1" ]] && machines_text="$value" ;;
+      grok) [[ "$ON_GROK" == "1" ]] && grok_text="$value" ;;
+      flags) grok_flags="$value" ;;
+      jobs) [[ "$ON_JOBS" == "1" ]] && jobs_text="$value" ;;
+    esac
+  done < <(python3 "$LIMITLINE_ROOT/lib/reader.py" 2>/dev/null)
 fi
 if [[ "$need_refresh" == "1" ]]; then
   kick_refresh

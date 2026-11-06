@@ -4,7 +4,7 @@ A status line for AI plan limits. limitline **shows** usage; it does not measure
 
 - **On its own,** it shows the tool it runs in: Claude Code's limits, model, context, and cost from the status-line input, or, inside Codex, Grok, or Cursor (`LIMITLINE_TOOL=codex|grok|cursor`), that tool's own local files.
 - **With [Pharos](https://github.com/venkatvellaichamy/pharos),** it shows everything Pharos measured: every plan (Claude, Codex, Cursor + Grok, Antigravity), every host, and the job counts. Pharos writes `~/.pharos/usage.json` and `~/.pharos/summary.json`; limitline reads them.
-- Claude Code hands its limits only to the status-line program, so limitline relays that one reading, as-is, to `~/.pharos/inbox/claude.json` when Pharos is installed.
+- With Pharos as the usage reader, `pharos statusline` saves Claude Code’s reading and passes the same input to limitline to draw.
 
 Nothing in this tool opens a network connection, runs ssh, or starts another tool's CLI.
 
@@ -112,6 +112,28 @@ Use `#beta` or no suffix (`main`, the dev channel) for the other channels above.
 `/limitline:install` backs up `~/.claude/settings.json`, keeps every other key, and asks before replacing an existing `statusLine`. It points `statusLine` at the installed `bin/limitline`.
 
 `/limitline:preview` prints a sample line. `/limitline:theme` previews every theme. `/limitline:config` prints a config template and does not write it. `/limitline:doctor` names the tools on `PATH` and which stdin fields are present, without printing their values. `/limitline:uninstall` removes the limitline status line and leaves the rest of the file alone.
+
+## With Pharos
+
+Pharos 0.9 owns usage collection (`pharos usage`, every two minutes) and Claude Code’s status-line slot (`pharos statusline`). limitline draws from Pharos’s files without polling or writing into `~/.pharos`.
+
+In `~/.config/limitline/config.toml`:
+
+```toml
+reader = "auto"           # auto (default), pharos, limitline
+reader_freshness = 900     # seconds since usage.json was written
+```
+
+Auto selects Pharos when `~/.pharos/usage.json` is a regular file modified within this freshness. Missing or stale files preserve limitline’s existing behavior. `reader = "pharos"` selects Pharos even when its file is missing; `reader = "limitline"` forces the existing behavior. This checkout already delegates agy collection to Pharos; it has no agy fetch to run in either mode.
+
+With Pharos selected, `limitline refresh` exits successfully without work (`--verbose` prints one note), and `limitline install` (an alias for `install-refresher`), `install-refresher`, and `schedule install` skip refresh jobs. `limitline doctor` identifies redundant refresh agents. Retire both without deleting their plists:
+
+```sh
+limitline uninstall --refresh-jobs --dry-run
+limitline uninstall --refresh-jobs
+```
+
+This boots out `dev.limitline.refresh` and `com.limitline.refresh` and renames their installed plists to `.bak`. Existing backups are preserved with numbered names. Launchers remain available. Legacy layouts read Pharos directly while it is the reader, so they need no refresh caches.
 
 ## Manual install
 
@@ -510,7 +532,7 @@ Every Claude Code session on the same Mac shares one cache, so a second session 
 
 ## Privacy
 
-limitline reads the status JSON a host already pipes in, an optional local config file, a cache directory it writes itself, Pharos's `usage.json`, `summary.json`, `usage-report.json`, and the tail of today's event file. It writes one file for Pharos, `~/.pharos/inbox/claude.json` (Claude's own reading, only when `~/.pharos` exists). It does not send anything anywhere, opens no network connection, runs no ssh, and starts no other tool's CLI; Pharos does all measuring. It does not read API keys or OAuth tokens. Inside Grok or Cursor without Pharos (`LIMITLINE_TOOL`), it reads that tool's own local files: the plan name and token counters Grok keeps, the `fetched credits config` lines in Grok's log, or Cursor token counts in a log you name. It never opens `~/.grok/auth.json`, cookies, keychains, or credential stores. The report and the Runs list keep repository folder names, not full paths. Debug output stays in the cache file you opted into. Session id display is off unless `LIMITLINE_SESSION=1`.
+limitline reads the status JSON a host already pipes in, an optional local config file, a cache directory it writes itself, Pharos's `usage.json`, `summary.json`, `usage-report.json`, and the tail of today's event file. When Pharos is not the selected reader, it can relay one file for Pharos, `~/.pharos/inbox/claude.json` (Claude's own reading, only when `~/.pharos` exists). It does not send anything anywhere, opens no network connection, runs no ssh, and starts no other tool's CLI; Pharos does all measuring. It does not read API keys or OAuth tokens. Inside Grok or Cursor without Pharos (`LIMITLINE_TOOL`), it reads that tool's own local files: the plan name and token counters Grok keeps, the `fetched credits config` lines in Grok's log, or Cursor token counts in a log you name. It never opens `~/.grok/auth.json`, cookies, keychains, or credential stores. The report and the Runs list keep repository folder names, not full paths. Debug output stays in the cache file you opted into. Session id display is off unless `LIMITLINE_SESSION=1`.
 
 ## Tests
 
@@ -522,3 +544,5 @@ bash tests/layout.sh
 `tests/layout.sh` holds the 0.15 checks: line 1's order, git ahead/behind against a real repo, `dir`, `project` and the other new segments with and without their fields, per-line layouts, presets, `colors`, the `limitline statusline` picker, and `tests/fixtures/legacy/`, which holds configs rendered by 0.14.0 that must still render byte for byte.
 
 Fixtures cover a full payload, no rate limits, spend only, a near reset, usage over 80%, a context window near auto-compact, a cold prompt cache, a 60-column row, and every theme. The same script covers pace, sparklines, fresh wording, nudges, the value estimate, session vitals, alerts, the report, watch, and a two-machine merge. Fleet, machine, Cursor, Antigravity, Grok, and ledger fixtures are synthetic and use names such as `mini` and `worker-1`. ANSI colour codes are stripped before the comparison. The same fixtures are rendered once with `jq` and once with the python3 fallback. Codex fixtures cover many session files of mixed ages, a newest file with no event, a malformed last line, a second limit id, a 7-day window that outlives its 5-hour one, and events with no reset time. The shared plan has fixtures for a fresh, stale, reset, and week-old reading; jobs have fixtures for merging updates, a dead pid, a reused pid, another machine's pid, the finished-job window, and bad names. History has fixtures for the 10-minute sample gap, 30-day pruning, daily peaks, the weekly table, and jobs per machine, including a dead pid. The interactive watch is driven with replayed keys against a fake `pharos` and a real `sleep` process for job signals, and once in a pseudo-terminal. A warm status line, including a warm fleet, machine, or jobs cache, stays under 50 ms.
+
+Run the Python tests with `python3 -m unittest discover -s tests` (or `python3 -m pytest tests`), plus `bash tests/run.sh` and `bash tests/layout.sh`. `python3 scripts/version.py check` verifies release metadata.

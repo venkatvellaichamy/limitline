@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.16.0-beta.1 - 2026-11-05
+
+- Select the usage reader with `reader = "auto" | "pharos" | "limitline"` and `reader_freshness` (900 seconds by default). Fresh Pharos files disable limitline refresh work and the Claude inbox relay. Legacy layouts read Pharos directly.
+- Skip refresh launch-agent installation with Pharos selected; doctor identifies redundant jobs. `uninstall --refresh-jobs [--dry-run]` boots out both agents and preserves their plists as `.bak` files.
+- Keep existing behavior when Pharos is absent, stale, or explicitly bypassed.
+
 ## 0.15.0-beta.1 - 2026-11-05
 
 ### A clear first line

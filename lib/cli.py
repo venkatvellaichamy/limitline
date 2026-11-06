@@ -457,6 +457,12 @@ def obsolete_notices():
 
 
 def cmd_doctor():
+    reader = load_lib("reader")
+    if reader.is_pharos():
+        print("usage reader: Pharos")
+        for path in reader.redundant_jobs():
+            print("redundant refresh job: %s" % path)
+        print("remove redundant jobs: limitline uninstall --refresh-jobs")
     for line in obsolete_notices():
         print(line)
     for tool in ("jq", "python3", "awk", "git"):
@@ -560,9 +566,8 @@ def cmd_config():
     print("# pharos binary for limitline watch, when it is not on PATH")
     print('# pharos = "~/projects/pharos/bin/pharos"')
     print("# jobs_ttl = 600")
-    print("# limitline refresh runs agy -p \"/usage\" (no tokens) at most every agy_ttl minutes")
-    print("# agy_ttl = 15")
-    print('# agy_fetch = "on"')
+    print('# reader = "auto"  # auto, pharos, limitline')
+    print("# reader_freshness = 900  # usage.json modification age in seconds")
     print("# themes: minimal, powerline, ascii, pill, emoji, mono")
     print("# LIMITLINE_ASCII=1 forces the ascii theme. NO_COLOR disables ANSI.")
 
@@ -633,7 +638,7 @@ def cmd_theme():
 
 USAGE = ("usage: limitline status | --host NAME | preview | doctor | config | report | watch | theme | refresh [--force]"
          " | history [--days N] | report [--week] [--md] | set xai-plan PCT [--resets \"YYYY-MM-DD HH:MM\"] [--plan NAME] | job update|list|rm"
-         " | install-refresher | uninstall-refresher | schedule install|uninstall|status"
+         " | install | uninstall --refresh-jobs [--dry-run] | install-refresher | uninstall-refresher | schedule install|uninstall|status"
          " | statusline list|preview|set KEY=VALUE...|--clear")
 
 
@@ -700,7 +705,11 @@ def main(argv):
         print(USAGE)
         return
     cmd = argv[0]
-    if cmd == "status":
+    if cmd == "install":
+        sys.exit(load_lib("refresher").install() or 0)
+    elif cmd == "uninstall" and "--refresh-jobs" in argv:
+        sys.exit(load_lib("reader").remove_jobs(dry_run="--dry-run" in argv) or 0)
+    elif cmd == "status":
         cmd_status()
     elif cmd == "--host":
         kind = argv[1] if len(argv) > 1 else "prompt"

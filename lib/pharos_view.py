@@ -127,6 +127,9 @@ def codex_fields(usage, now=None):
 
 def relay(snapshot_path):
     """Copy the status line's Claude snapshot into Pharos's inbox, atomically, when Pharos is installed."""
+    import reader
+    if reader.is_pharos():
+        return False
     home = pharos_home()
     if not os.path.isdir(home):
         return False

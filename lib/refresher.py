@@ -117,6 +117,10 @@ def supported():
 
 
 def install():
+    import reader
+    if reader.is_pharos():
+        print(reader.NOTE)
+        return 0
     if not supported():
         print("install-refresher needs macOS launchd. Elsewhere, run this from cron every minute:")
         print("  * * * * * nice -n 10 %s refresh" % os.path.join(root_dir(), "bin", "limitline"))
