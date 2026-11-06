@@ -10,8 +10,8 @@ How Pharos mode is chosen (`lib/reader.py:is_pharos`):
 The bash status line works this out once per render as `PHAROS_READER`.
 
 Staleness settings (new in this run, `lib/pharos_view.py`):
-- `usage_stale_after` (900 s): usage.json older than this means the Pharos service is not refreshing it. The used line says `Pharos usage unavailable · 1h old` and every plan shows `?`.
-- `plan_stale_after` (3600 s): one plan whose `observed_at` (else usage.json `generated_at`) is older than this, or that has `stale: true`, shows `? · 94m old`.
+- `usage_stale_after` (900 s): usage.json older than this means the Pharos service is not refreshing it. The used line says `Pharos usage unavailable · 60m old` and every plan shows `?`. Ages under 2 hours are in minutes, then hours (`2h old`).
+- `plan_stale_after` (3600 s): one plan whose `observed_at` is older than this, or that has `stale: true`, shows `? · 94m old`. usage.json's `generated_at` stands in only when the plan has no `observed_at` key; an `observed_at` that is not a positive epoch number shows `?`.
 - A window whose `resets_at` has passed counts as 0% with no reset time.
 
 ## Segments

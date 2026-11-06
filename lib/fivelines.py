@@ -369,9 +369,10 @@ def window_cell(name, used, reset, now):
 def held(usage, plan, now, is_plan=True):
     """None when `plan` (a usage.json plan, or its hosts block) can be drawn as current.
     Otherwise the age to show with `?` (HELD_NO_AGE for none). A plan is held when
-    usage.json is stale, the plan says `stale: true`, its reading (observed_at, else
-    usage.json's generated_at) is older than `plan_stale_after` (default 1h), or it is from
-    the future. An old reading is never drawn as a current percent: tonight's Codex reading
+    usage.json is stale, the plan says `stale: true`, its reading time is unknown (an
+    observed_at that is not a positive epoch number), its reading (observed_at; usage.json's
+    generated_at only when the plan has no observed_at key) is older than
+    `plan_stale_after` (default 1h), or it is from the future. An old reading is never drawn as a current percent: tonight's Codex reading
     was 94 minutes old and wrong. The hosts block keeps only the usage.json and flag checks."""
     if usage is not None and (usage.get("stale") or usage.get("skew")):
         # The used line's note already says how old usage.json is; plans just say `?`.
