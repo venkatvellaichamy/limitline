@@ -126,14 +126,14 @@ reader_freshness = 900     # seconds since usage.json was written
 
 Auto selects Pharos when `~/.pharos/usage.json` is a regular file modified within this freshness. Missing or stale files preserve limitline’s existing behavior. `reader = "pharos"` selects Pharos even when its file is missing; `reader = "limitline"` forces the existing behavior. This checkout already delegates agy collection to Pharos; it has no agy fetch to run in either mode.
 
-With Pharos selected, `limitline refresh` exits successfully without work (`--verbose` prints one note), and `limitline install` (an alias for `install-refresher`), `install-refresher`, and `schedule install` skip refresh jobs. `limitline doctor` identifies redundant refresh agents. Retire both without deleting their plists:
+With Pharos selected, `limitline refresh` fetches nothing and runs no provider: it rebuilds the display lines (`grok.line`, `jobs.line`, `fleet.line`, `machines.line`) from Pharos's `usage.json` and `summary.json` (`--verbose` prints one note). The 60-second refresh job, `dev.limitline.refresh` (installed by `limitline install` or `install-refresher`), stays: it keeps those lines current in idle terminals. Only the agy/fetch schedule job, `com.limitline.refresh`, is redundant, because Pharos does the fetching; `schedule install` skips it and `limitline doctor` lists it if it is installed. Retire it without deleting its plist:
 
 ```sh
 limitline uninstall --refresh-jobs --dry-run
 limitline uninstall --refresh-jobs
 ```
 
-This boots out `dev.limitline.refresh` and `com.limitline.refresh` and renames their installed plists to `.bak`. Existing backups are preserved with numbered names. Launchers remain available. Legacy layouts read Pharos directly while it is the reader, so they need no refresh caches.
+This boots out `com.limitline.refresh` only and renames its installed plist to `.bak`. Existing backups are preserved with numbered names. `dev.limitline.refresh` is left running. Legacy layouts read Pharos directly while it is the reader, so they need no refresh caches.
 
 ## Manual install
 

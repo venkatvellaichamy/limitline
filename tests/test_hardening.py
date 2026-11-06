@@ -72,17 +72,17 @@ class Hardening(unittest.TestCase):
         self.assertIn("◎ codex ? │", used)
         self.assertIn("cursor+grok ? │", used)
         self.assertIn("✦ agy ?", used)
-        self.assertTrue(used.endswith(" · Pharos usage unavailable · 1h old"), used)
+        self.assertTrue(used.endswith(" · Pharos usage unavailable · 60m old"), used)
         self.assertNotIn("33", used)
         self.assertNotIn("81", used)
         rest = used.split("◎", 1)[1]
         self.assertFalse(set(rest) & set("█▉▊▋▌▍▎▏"), "no bar drawn from an old reading: " + rest)
-        self.assertEqual(lines[-1], "hosts — 1h ago", "old host numbers are not shown as current")
+        self.assertEqual(lines[-1], "hosts — 60m ago", "old host numbers are not shown as current")
 
     def test_old_plan_reading_is_unknown_with_its_age(self):
         """0.16.0-beta.2: a plan is held when Pharos says `stale: true` or its observed_at is
         older than plan_stale_after (1h by default, configurable). Tonight's Codex reading was
-        94 minutes old, not marked stale, and wrong; it must read `codex ? · 1h old`."""
+        94 minutes old, not marked stale, and wrong; it must read `codex ? · 94m old`."""
         for key in ("LL_CODEX5", "LL_CODEX5_RESET", "LL_CODEX7", "LL_CODEX7_RESET"):
             del os.environ[key]
         codex = {"provider": "codex", "observed_at": NOW - 1800, "stale": False, "windows": [
@@ -101,7 +101,7 @@ class Hardening(unittest.TestCase):
         codex.update(stale=False, observed_at=NOW - 94 * 60)
         self.write_usage()
         line = self.used()
-        self.assertIn("◎ codex ? · 1h old", line, "94 minutes old, not marked stale: still unknown")
+        self.assertIn("◎ codex ? · 94m old", line, "94 minutes old, not marked stale: still unknown")
         self.assertNotIn("███▌░", line.split("◎", 1)[1].split("│", 1)[0])
         Path(os.environ["LIMITLINE_CONFIG"]).write_text("plan_stale_after = 7200\n")
         self.assertIn("codex 7d ███▌░", self.used(), "the age is a config value")
@@ -306,6 +306,105 @@ class Hardening(unittest.TestCase):
             self.fail("the status line blocked on a FIFO")
         self.assertLess((time.perf_counter() - start) * 1000, 1000)
         self.assertIn("claude 7d", out)
+
+    # ---- 0.16.0-beta.2 review fixes -------------------------------------------------------
+
+    def codex_plan(self, **fields):
+        for key in ("LL_CODEX5", "LL_CODEX5_RESET", "LL_CODEX7", "LL_CODEX7_RESET"):
+            os.environ.pop(key, None)
+        plan = {"provider": "codex", "stale": False, "windows": [
+            {"name": "5h", "used_pct": 17, "resets_at": NOW + 3600},
+            {"name": "7d", "used_pct": 5, "resets_at": NOW + 86400}]}
+        plan.update(fields)
+        self.usage["plans"].append(plan)
+        self.write_usage()
+        return plan
+
+    def test_observed_at_not_a_number_is_unknown(self):
+        """generated_at stands in for a plan's reading time only when observed_at is absent.
+        An ISO string, 0, a negative, null, a bool or NaN means the reading time is unknown: `?`."""
+        plan = self.codex_plan()
+        self.assertIn("codex 5h", self.used(), "absent: usage.json's fresh generated_at is the reading time")
+        for bad in ("2026-11-01T00:00:00Z", 0, -5, None, True, float("nan")):
+            plan["observed_at"] = bad
+            self.write_usage()
+            line = self.used()
+            self.assertIn("◎ codex ? │", line, "observed_at=%r: no percent, no bar, no age" % (bad,))
+            usage = pharos_view.read_usage(now=NOW)
+            self.assertEqual(pharos_view.plan_age(usage["plans"][-1], usage, NOW), (True, None), repr(bad))
+            self.assertEqual(pharos_view.codex_fields(usage, now=NOW), "codex_age ?",
+                             "line 1 says unknown too, observed_at=%r" % (bad,))
+        plan.update(observed_at="2026-11-01T00:00:00Z", provider="claude")
+        self.write_usage()
+        rows = pharos_view.plan_rows(pharos_view.read_usage(now=NOW), now=NOW)  # never raises on a string time
+        self.assertTrue(any(r.get("provider") == "claude" and r["stale"] for r in rows))
+
+    def test_cursor_plan_observed_at_zero_is_unknown(self):
+        self.usage["plans"].append({"provider": "xai-plan", "observed_at": 0, "windows": [{"used_pct": 42}]})
+        self.write_usage()
+        line = self.used()
+        self.assertIn("cursor+grok ?", line)
+        self.assertNotIn("42", line)
+
+    def test_bad_windows_never_blank_other_plans(self):
+        """An xai-plan with `"windows": 5` used to raise and blank the whole used line."""
+        self.codex_plan(observed_at=NOW - 60)
+        xai = {"provider": "xai-plan", "observed_at": NOW - 60, "windows": 5}
+        self.usage["plans"].append(xai)
+        self.write_usage()
+        line = self.used()
+        self.assertIn("✻ claude 7d ███▌░", line)
+        self.assertIn("codex 5h", line)
+        self.assertIn("cursor+grok ?", line)
+        self.assertIn("✦ agy gemini", line)
+        for bad in ({"used_pct": 40}, "x", None, [1, 2]):
+            xai["windows"] = bad
+            self.write_usage()
+            line = self.used()
+            self.assertIn("cursor+grok ?", line, repr(bad))
+            self.assertIn("codex 5h", line, repr(bad))
+        xai["windows"] = ["junk", 5, None, {"used_pct": 40, "resets_at": NOW + 86400}]
+        self.write_usage()
+        self.assertIn("cursor+grok ██░░░", self.used(), "bad entries are skipped, the good one is drawn")
+
+    def test_bad_windows_never_leave_an_old_grok_line(self):
+        """Line 1 reads grok.line, which refresh rewrites from usage.json. A plan with
+        `"windows": 5` must not make that rewrite fail and leave the old 81% behind."""
+        import refresh
+        Path(os.environ["LIMITLINE_CONFIG"]).write_text('reader = "pharos"\n')
+        os.environ["LIMITLINE_NOW"] = str(NOW)
+        for bad in (5, "x", {"used_pct": 40}, ["junk", None]):
+            with self.subTest(windows=bad):
+                (self.cache / "grok.line").write_text("cursor+grok 81% · Thu 23:22\n81 0 live\n")
+                self.usage["plans"] = [p for p in self.usage["plans"] if p.get("provider") != "xai-plan"]
+                self.usage["plans"].append({"provider": "xai-plan", "source": "live", "observed_at": NOW - 60, "windows": bad})
+                self.write_usage()
+                refresh.write_grok(pharos_view.read_usage(now=NOW))
+                text = (self.cache / "grok.line").read_text()
+                self.assertNotIn("81", text, "an old percent survived: %r" % text)
+                self.assertNotRegex(text.splitlines()[0] if text else "", r"\d+%", "no percent from a plan with no windows")
+
+    def test_one_plan_failing_never_blanks_another(self):
+        self.codex_plan(observed_at=NOW - 60)
+        others = {"codex_cells": "codex 5h", "cursor_cell": "cursor+grok", "agy_cells": "agy gemini"}
+        for name in others:
+            with self.subTest(name), patch.object(fivelines, name, side_effect=TypeError("bad plan")):
+                line = self.used()
+                self.assertIn("✻ claude 7d ███▌░", line)
+                for other, text in others.items():
+                    if other != name:
+                        self.assertIn(text, line, "%s failing blanked %s" % (name, other))
+        with patch.object(fivelines, "codex_cells", side_effect=TypeError("bad plan")):
+            self.assertIn("◎ codex ?", self.used(), "the failing plan itself is unknown")
+
+    def test_ages_under_two_hours_are_minutes(self):
+        import timefmt
+        for seconds, text in ((94 * 60, "94m"), (114 * 60, "114m"), (7199, "119m"),
+                              (7200, "2h"), (9 * 3600, "9h"), (2 * 86400, "2d")):
+            self.assertEqual(fivelines.age_label(seconds), text, seconds)
+            self.assertEqual(timefmt.age(seconds), text, seconds)
+        self.codex_plan(observed_at=NOW - 114 * 60)
+        self.assertIn("◎ codex ? · 114m old", self.used())
 
 
 if __name__ == "__main__":

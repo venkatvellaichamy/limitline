@@ -287,7 +287,7 @@ class FiveLines(unittest.TestCase):
         self.write_usage()
         line = plain(fivelines.build(now=NOW))[0]
         self.assertIn("✦ agy ?", line)
-        self.assertTrue(line.endswith("· Pharos usage unavailable · 1h old"), line)
+        self.assertTrue(line.endswith("· Pharos usage unavailable · 60m old"), line)
 
     # ---- live feel: spinner, event note, change highlight, stale age --------------------
 

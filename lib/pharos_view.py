@@ -40,21 +40,35 @@ def plan_stale_after():
     return _seconds("plan_stale_after", "LIMITLINE_PLAN_STALE_AFTER", PLAN_STALE_AFTER)
 
 
+def epoch(value, strings=False):
+    """A positive, finite epoch-seconds number, else None. A bool is not a time. With
+    `strings`, a numeric string ("1762056000") counts too (usage.json's generated_at)."""
+    if isinstance(value, bool):
+        return None
+    if strings and isinstance(value, str):
+        try:
+            value = float(value)
+        except ValueError:
+            return None
+    if not isinstance(value, (int, float)) or not math.isfinite(value) or value <= 0:
+        return None
+    return float(value)
+
+
 def plan_age(plan, usage, now):
-    """(stale, age) for one usage.json plan. The reading time is the plan's observed_at,
-    else usage.json's generated_at; never a cache file's mtime. Stale when usage.json is
-    stale, the plan says `stale: true`, its reading is older than plan_stale_after, or it
-    is from the future. age is whole seconds, or None when there is no usable time."""
+    """(stale, age) for one usage.json plan. The reading time is the plan's observed_at;
+    usage.json's generated_at stands in only when the plan has no observed_at key at all.
+    An observed_at that is there but not a positive epoch number (an ISO string, 0, null,
+    a bool) means the reading time is unknown: stale, age None. Never a cache file's mtime.
+    Stale when usage.json is stale, the plan says `stale: true`, its reading is older than
+    plan_stale_after, or it is from the future. age is whole seconds, or None."""
     usage = usage or {}
-    when = plan.get("observed_at") if isinstance(plan, dict) else None
-    if isinstance(when, bool) or not isinstance(when, (int, float)) or when <= 0:
-        when = usage.get("generated_at")
-    try:
-        when = float(when)
-    except (TypeError, ValueError):
-        when = 0
+    if isinstance(plan, dict) and "observed_at" in plan:
+        when = epoch(plan["observed_at"])
+    else:
+        when = epoch(usage.get("generated_at"), strings=True)
     age = None
-    if math.isfinite(when) and when > 0:
+    if when is not None:
         age = now - when
         if age < -SKEW_S:
             return True, None
@@ -149,13 +163,14 @@ def plan_rows(usage, now=None):
         row["stale"], age = plan_age(plan, usage, now)
         if age is not None:
             row["age"] = age
-        if isinstance(plan.get("windows"), list):
+        if "windows" in plan:  # a non-list or non-dict entries are dropped, so readers never raise on them
             row["windows"] = refilled(plan["windows"], now)
         rows.append(row)
     mine = _own_claude()
-    if mine and mine.get("windows"):
+    mine_at = epoch(mine.get("observed_at")) if mine else None
+    if mine and mine.get("windows") and mine_at is not None:  # a snapshot with no time is not current
         for i, row in enumerate(rows):
-            if row.get("provider") == "claude" and int(mine.get("observed_at") or 0) >= int(row.get("observed_at") or 0):
+            if row.get("provider") == "claude" and mine_at >= (epoch(row.get("observed_at")) or 0):
                 rows[i] = dict(mine, provider="claude", stale=False)
     for extra in ("grok", "spend"):
         item = usage.get(extra)

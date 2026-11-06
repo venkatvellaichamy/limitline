@@ -255,7 +255,7 @@ def reset_label(epoch, now):
 def age_label(seconds):
     if seconds < 0:  # never a negative age; callers drop future readings before this
         return "0m"
-    if seconds < 3600:
+    if seconds < 7200:  # minutes under 2 h: 114 minutes is `114m`, not `1h`
         return f"{max(1, seconds // 60)}m"
     if seconds < 86400:
         return f"{seconds // 3600}h"
@@ -401,6 +401,11 @@ def held_cell(name, hold):
     return cell
 
 
+def unknown_cell(name):
+    """A plan whose reading could not be read at all: `?`, no age, no percent."""
+    return held_cell(name, HELD_NO_AGE)
+
+
 def claude_cells(now):
     cells = []
     for name, used_var, reset_var in (("5h", "LL_CLAUDE5", "LL_CLAUDE5_RESET"), ("7d", "LL_CLAUDE7", "LL_CLAUDE7_RESET")):
@@ -451,14 +456,15 @@ def codex_cells(now, usage=None):
 def cursor_cell(now, usage=None):
     if usage is not None:
         plan = plan_of(usage, "xai-plan")
-        reading = dict(plan, observed_at=plan.get("observed_at") or usage.get("generated_at")) if plan else None
-        hold = held(usage, reading, now)
+        # plan_age reads observed_at, or generated_at only when the plan has no observed_at.
+        hold = held(usage, plan, now)
         if hold is not None:
             return held_cell("cursor+grok", hold)
         if plan is not None:
-            windows = plan.get("windows") or []
+            # Like codex_cells: a non-list `windows` and non-dict entries are skipped, never raised on.
+            windows = plan.get("windows") if isinstance(plan.get("windows"), list) else []
             window = next((w for w in windows if isinstance(w, dict)), {})
-            return window_cell("cursor+grok", window.get("used_pct"), window.get("resets_at"), now)
+            return window_cell("cursor+grok", window.get("used_pct"), window.get("resets_at"), now) or unknown_cell("cursor+grok")
     state, raw, mtime = read_raw(os.path.join(cache_dir(), "grok.line"))
     if state != "ok":
         return None
@@ -602,17 +608,29 @@ def agy_cells(now, usage=None):
 def used_parts(now, trends=True):
     """[(mark key, label, [cells])] in the fixed order, which is also the priority order
     when the terminal is narrow (the last is dropped first). Without Pharos, Claude only."""
-    parts = [("claude", "claude", claude_cells(now))]
+    parts = [("claude", "claude", plan_guard(lambda: claude_cells(now), [unknown_cell("7d")]))]
     usage = read_usage(now)
     if usage is None:
         return parts
-    parts.append(("codex", "codex", codex_cells(now, usage)))
-    cursor = cursor_cell(now, usage)
+    # One bad plan is drawn as unknown (`?`); it never blanks another plan's cells.
+    parts.append(("codex", "codex", plan_guard(lambda: codex_cells(now, usage), [unknown_cell("")])))
+    cursor = plan_guard(lambda: cursor_cell(now, usage), unknown_cell("cursor+grok"))
     if cursor:
         parts.append(("cursor", "", [cursor]))
-    parts.append(("agy", "agy", agy_cells(now, usage)))
-    add_caps_and_trends(parts, usage, trends=trends)
+    parts.append(("agy", "agy", plan_guard(lambda: agy_cells(now, usage), [unknown_cell("")])))
+    try:
+        add_caps_and_trends(parts, usage, trends=trends)
+    except Exception:
+        pass  # caps and trends are extras; the numbers stand without them
     return parts
+
+
+def plan_guard(cells, unknown):
+    """One plan's cells, or `unknown` (drawn `?`) when reading that plan raised."""
+    try:
+        return cells()
+    except Exception:
+        return unknown
 
 
 PLAN_KEYS = {"claude": "claude", "codex": "codex", "cursor": "cursor+grok", "agy": "antigravity"}

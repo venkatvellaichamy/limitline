@@ -255,6 +255,28 @@ check "ctx-size-config" "$(printf 'ctx_size = "on"\n' > "$lay_cfg"; LIMITLINE_CO
 two_git=$(printf '%s' "$own_payload" | LIMITLINE_DIR=1 LIMITLINE_GIT=1 LIMITLINE_LINES=2 NO_COLOR=1 "$BIN" | strip_ansi | head -n 1)
 check "two-lines-git-on-line-1" "$two_git" 'pharos │ main ↓2 │ Opus 5.5 │ ctx ▓▓░░░ 32% · 678k left'
 
+# 0.16.0-beta.2: a reading that may be wrong is `?`, never a plausible number.
+unk_home="$TEST_HOME/unknown-pharos"
+mkdir -p "$unk_home/runs"
+unk_used() { printf '%s' "$five_in" | NO_COLOR=1 LIMITLINE_ANIMATE=off XDG_CACHE_HOME="$TEST_HOME/unknown-cache" LIMITLINE_PHAROS_HOME="$unk_home" LIMITLINE_COLUMNS=500 LIMITLINE_REFRESH=0 LIMITLINE_PRESET=pharos "$BIN" | grep '^used'; }
+unk_usage() { printf '{"version":1,"generated_at":%s,"plans":[{"provider":"codex","observed_at":%s,"windows":[{"name":"5h","used_pct":17,"resets_at":1762060000}]},{"provider":"xai-plan","observed_at":1762055940,"windows":%s}],"hosts":{"hosts":[]}}' "$1" "$2" "$3" > "$unk_home/usage.json"; }
+unk_usage 1762055940 1762055900 '[{"used_pct":40,"resets_at":1762100000}]'
+check "unknown-fresh-has-numbers" "$(unk_used | grep -c -F '◎ codex 5h')" "1"
+unk_usage 1762055940 '"2026-11-01T00:00:00Z"' '[{"used_pct":40,"resets_at":1762100000}]'
+unk_line=$(unk_used)
+check "unknown-iso-observed-at" "$(printf '%s' "$unk_line" | grep -c -F '◎ codex ? │')$(printf '%s' "$unk_line" | grep -c -F '◎ codex 5h')" "10"
+unk_usage 1762055940 1762055900 '5'
+unk_line=$(unk_used)
+check "unknown-bad-windows" "$(printf '%s' "$unk_line" | grep -c -F 'cursor+grok ?')$(printf '%s' "$unk_line" | grep -c -F '◎ codex 5h')$(printf '%s' "$unk_line" | grep -c -F '✻ claude 7d')" "111"
+unk_usage 1762056000 $((1762056000 - 114 * 60)) '[]'
+check "unknown-age-minutes" "$(unk_used | grep -c -F '◎ codex ? · 114m old')" "1"
+unk_usage $((1762056000 - 3600)) $((1762056000 - 3600)) '[]'
+unk_line=$(unk_used)
+check "pharos-usage-unavailable-stale" "$(printf '%s' "$unk_line" | grep -c -E ' · Pharos usage unavailable · 60m old$')$(printf '%s' "$unk_line" | grep -c -F '◎ codex 5h')" "10"
+rm -f "$unk_home/usage.json"
+unk_line=$(unk_used)
+check "pharos-usage-unavailable-missing" "$(printf '%s' "$unk_line" | grep -c -E '^used  ✻ claude 7d .* · Pharos usage unavailable$')$(printf '%s' "$unk_line" | grep -c -F 'codex')" "10"
+
 # limitline statusline: the non-interactive side of /limitline:statusline.
 pick_dir="$TEST_HOME/picker"
 mkdir -p "$pick_dir"

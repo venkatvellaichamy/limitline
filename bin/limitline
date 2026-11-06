@@ -1580,7 +1580,7 @@ render_main() {
 } | LC_ALL=C awk '
 function val(k) { return (k in v) ? v[k] : "" }
 function age_short(s) {
-  if (s < 3600) return (s < 60 ? 1 : int(s / 60)) "m"
+  if (s < 7200) return (s < 60 ? 1 : int(s / 60)) "m"   # minutes under 2 h: 114m, not 1h
   if (s < 86400) return int(s / 3600) "h"
   return int(s / 86400) "d"
 }

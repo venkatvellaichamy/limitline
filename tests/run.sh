@@ -541,8 +541,19 @@ printf '%s' "$grok_watch" | grep -q -F '7d 1.2M tok' \
   && printf '%s' "$grok_watch" | grep -q -F 'SuperGrok Plus · 7d 1.2M tok · $3.00 at API rates · not a quota' \
   && check "grok-watch" "yes" "yes" || check "grok-watch" "$grok_watch" "grok column and block"
 grok_cache="$TEST_HOME/grok-cache"
-env "${grok_env[@]}" XDG_CACHE_HOME="$grok_cache" LIMITLINE_PHAROS_USAGE="$(env "${grok_env[@]}" pharos_usage grok)" "$BIN" refresh
-check "grok-refresh-line" "$(cat "$grok_cache/limitline/grok.line")" 'grok SuperGrok Plus · 7d 1.2M tok'
+# pharos_usage is a shell function, so `env` cannot run it: export grok_env in a subshell.
+grok_usage=$(export "${grok_env[@]}"; pharos_usage grok)
+grok_usage_plan=$(python3 -c 'import json, sys; print((json.load(open(sys.argv[1])).get("grok") or {}).get("plan", ""))' "$grok_usage" 2>&1)
+check "grok-refresh-usage-has-grok" "$grok_usage_plan" "SuperGrok Plus"
+env "${grok_env[@]}" XDG_CACHE_HOME="$grok_cache" LIMITLINE_PHAROS_USAGE="$grok_usage" "$BIN" refresh
+check "grok-refresh-line" "$(cat "$grok_cache/limitline/grok.line" 2>&1)" 'grok SuperGrok Plus · 7d 1.2M tok'
+# The line comes from usage.json: the same refresh with no grok block in it writes no grok plan.
+grok_empty_cache="$TEST_HOME/grok-cache-empty"
+grok_empty_usage=$(pharos_usage)
+env "${grok_env[@]}" XDG_CACHE_HOME="$grok_empty_cache" LIMITLINE_PHAROS_USAGE="$grok_empty_usage" "$BIN" refresh
+grok_empty_line=$(cat "$grok_empty_cache/limitline/grok.line" 2>/dev/null)
+! printf '%s' "$grok_empty_line" | grep -q -F 'SuperGrok Plus' \
+  && check "grok-refresh-needs-usage" "yes" "yes" || check "grok-refresh-needs-usage" "$grok_empty_line" "no grok plan without usage.json's grok block"
 grok_off=$(XDG_CACHE_HOME="$grok_cache" NO_COLOR=1 "$BIN" < "$FIX/no_rate_limits.json" | strip_ansi)
 check "grok-segment-off-by-default" "$grok_off" 'Opus 5.5 │ ctx ▓▓░░░ 41% │ $0.12'
 grok_on=$(XDG_CACHE_HOME="$grok_cache" LIMITLINE_GROK=1 NO_COLOR=1 "$BIN" < "$FIX/no_rate_limits.json" | strip_ansi)
@@ -1157,24 +1168,23 @@ LIMITLINE_HISTORY_DIR="$hist_spy" LIMITLINE_TOOL=codex LIMITLINE_CLAUDE_SNAPSHOT
 [[ ! -e "$hist_spy" ]] && check "status-keeps-no-plan-history" "yes" "yes" || check "status-keeps-no-plan-history" "wrote $(ls "$hist_spy")" "no plan history in limitline"
 unset LIMITLINE_HISTORY_DIR LIMITLINE_JOBS_HISTORY LIMITLINE_JOBS_DIR LIMITLINE_JOBS_LINE LIMITLINE_HOST
 
-# Typical speed without the Codex scan: best of 8 runs after one warmup. The best run is
-# the code's own cost; an average also counts other work on the machine (parallel agent
-# runs made the average 3x slower on 2026-11-05 with no code change). A real slowdown
-# raises every run, so it still fails.
+# Typical speed without the Codex scan: the median of 8 runs after one warmup. An average
+# counts a few runs slowed by other work on the machine (parallel agent runs made it 3x
+# slower on 2026-11-05 with no code change); the best run hides a slowdown that only some
+# runs hit. The median ignores both tails, and a real slowdown moves it.
 "$BIN" < "$FIX/full.json" >/dev/null
 speed_ms=$(BIN="$BIN" FIX="$FIX" python3 -c '
-import subprocess, time, os
+import statistics, subprocess, time, os
 bin = os.environ["BIN"]
 fixture = os.environ["FIX"] + "/full.json"
 env = os.environ.copy()
-best = None
+took = []
 runs = 8
 for _ in range(runs):
     start = time.perf_counter()
     subprocess.run([bin], stdin=open(fixture, "rb"), stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, env=env, check=False)
-    took = time.perf_counter() - start
-    best = took if best is None else min(best, took)
-print(int(best * 1000))
+    took.append(time.perf_counter() - start)
+print(int(statistics.median(took) * 1000))
 ' )
 if [[ "$speed_ms" -le "$SPEED_MS" ]]; then
   check "speed-${speed_ms}ms" "fast" "fast"
@@ -1185,22 +1195,21 @@ fi
 # Warm fleet and machine caches, still with no ssh and no provider scan.
 "$BIN" refresh
 warm_ms=$(BIN="$BIN" python3 -c '
-import subprocess, time, os
+import statistics, subprocess, time, os
 bin = os.environ["BIN"]
 payload = b"{\"model\":{\"display_name\":\"Opus\"}}"
 env = os.environ.copy()
 env["NO_COLOR"] = "1"
 env["LIMITLINE_SEGMENTS"] = "model,fleet,machines"
 env["LIMITLINE_REFRESH"] = "0"
-best = None
+took = []
 runs = 8
 subprocess.run([bin], input=payload, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, env=env, check=False)
 for _ in range(runs):
     start = time.perf_counter()
     subprocess.run([bin], input=payload, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, env=env, check=False)
-    took = time.perf_counter() - start
-    best = took if best is None else min(best, took)
-print(int(best * 1000))
+    took.append(time.perf_counter() - start)
+print(int(statistics.median(took) * 1000))
 ')
 if [[ "$warm_ms" -le "$SPEED_MS" ]]; then
   check "warm-cache-${warm_ms}ms" "fast" "fast"
@@ -1212,22 +1221,21 @@ fi
 jobs_speed_dir="$TEST_HOME/speed-jobs"
 LIMITLINE_JOBS_DIR="$jobs_speed_dir" LIMITLINE_JOBS_LINE="$TEST_HOME/speed-jobs.line" "$BIN" job update mining --done 1 --total 9 >/dev/null
 jobs_ms=$(BIN="$BIN" LIMITLINE_JOBS_DIR="$jobs_speed_dir" LIMITLINE_JOBS_LINE="$TEST_HOME/speed-jobs.line" python3 -c '
-import subprocess, time, os
+import statistics, subprocess, time, os
 bin = os.environ["BIN"]
 payload = b"{\"model\":{\"display_name\":\"Opus\"}}"
 env = os.environ.copy()
 env["NO_COLOR"] = "1"
 env["LIMITLINE_SEGMENTS"] = "model,jobs"
 env["LIMITLINE_REFRESH"] = "0"
-best = None
+took = []
 runs = 8
 subprocess.run([bin], input=payload, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, env=env, check=False)
 for _ in range(runs):
     start = time.perf_counter()
     subprocess.run([bin], input=payload, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, env=env, check=False)
-    took = time.perf_counter() - start
-    best = took if best is None else min(best, took)
-print(int(best * 1000))
+    took.append(time.perf_counter() - start)
+print(int(statistics.median(took) * 1000))
 ')
 if [[ "$jobs_ms" -le "$SPEED_MS" ]]; then
   check "jobs-warm-${jobs_ms}ms" "fast" "fast"

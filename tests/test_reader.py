@@ -92,7 +92,7 @@ class ReaderTests(unittest.TestCase):
         del usage['plans'][0]['observed_at']
         assert fivelines.cursor_cell(now, usage).age == 120
         # usage.json itself is old: the plan is unknown even though grok.line was just written;
-        # the used line's note carries usage.json's age (`Pharos usage unavailable · 1h old`).
+        # the used line's note carries usage.json's age (`Pharos usage unavailable · 60m old`).
         usage.update(stale=True, age=3600, generated_at=now - 3600)
         os.utime(line, (now, now))
         cell = fivelines.cursor_cell(now, usage)
@@ -139,10 +139,19 @@ class ReaderTests(unittest.TestCase):
         old['plans'][0].update(observed_at=self.now - 94 * 60, windows=[
             {'name': '5h', 'used_pct': 17, 'resets_at': self.now + 3600}, {'name': '7d', 'used_pct': 5, 'resets_at': self.now + 86400}])
         line = self.run_line(old)
-        assert 'codex ? · 1h old' in line, line
+        assert 'codex ? · 94m old' in line, line
         assert '17' not in line and '5%' not in line, line
+        old['plans'][0].update(observed_at=self.now - 114 * 60)
+        assert 'codex ? · 114m old' in self.run_line(old), 'minutes under 2 h on line 1 too'
         old['plans'][0].update(observed_at=self.now - 600, stale=True)
         assert 'codex ? · 10m old' in self.run_line(old)
+
+    def test_iso_observed_at_on_line_one_is_unknown(self):
+        usage = {'version': 1, 'generated_at': self.now - 60, 'plans': [
+            {'provider': 'codex', 'source': 'live', 'observed_at': '2026-11-01T00:00:00Z',
+             'windows': [{'name': '5h', 'used_pct': 17, 'resets_at': self.now + 3600}]}]}
+        line = self.run_line(usage)
+        assert 'codex ?' in line and '17' not in line, line
 
     def test_missing_usage_says_pharos_unavailable(self):
         line = self.run_line(None)
