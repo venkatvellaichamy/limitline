@@ -91,9 +91,62 @@ class ReaderTests(unittest.TestCase):
         assert cell.age == 600
         del usage['plans'][0]['observed_at']
         assert fivelines.cursor_cell(now, usage).age == 120
+        # usage.json itself is old: the plan is unknown even though grok.line was just written;
+        # the used line's note carries usage.json's age (`Pharos usage unavailable · 1h old`).
         usage.update(stale=True, age=3600, generated_at=now - 3600)
         os.utime(line, (now, now))
-        assert fivelines.cursor_cell(now, usage).age == 3600
+        cell = fivelines.cursor_cell(now, usage)
+        assert cell.used is None and cell.held
+
+    def test_pharos_refresh_never_runs_a_reader(self):
+        """Pharos mode: refresh rebuilds every derived line from usage.json and never loads
+        limitline's own readers (cli.load_all runs the provider commands)."""
+        now = int(time.time())
+        (self.path / 'config').write_text('reader = "pharos"\n')
+        (self.path / 'usage.json').write_text(json.dumps({'version': 1, 'generated_at': now - 30, 'plans': [
+            {'provider': 'xai-plan', 'source': 'live', 'observed_at': now - 300, 'windows': [{'used_pct': 37}]}]}))
+        with patch.object(refresh, '_cli', side_effect=AssertionError('limitline reader loaded')):
+            refresh.main([])
+        assert 'cursor+grok 37%' in (self.path / 'cache/limitline/grok.line').read_text()
+
+    def run_line(self, usage=None, config='reader = "pharos"\n'):
+        import subprocess
+        root = Path(__file__).resolve().parents[1]
+        home = self.path / '.pharos'
+        home.mkdir(exist_ok=True)
+        path = home / 'usage.json'
+        if usage is None:
+            path.unlink(missing_ok=True)
+        else:
+            path.write_text(json.dumps(usage))
+        (self.path / 'config').write_text(config)
+        env = dict(os.environ, LIMITLINE_PHAROS_HOME=str(home), LIMITLINE_PHAROS_USAGE=str(path),
+                   LIMITLINE_REFRESH='0', LIMITLINE_CODEX='1', NO_COLOR='1', LIMITLINE_NOW=str(self.now))
+        return subprocess.run([str(root / 'bin/limitline')], input='{"model":{"display_name":"Opus"}}',
+                              text=True, env=env, check=True, capture_output=True).stdout
+
+    now = 1762056000
+
+    def test_stale_codex_plan_is_unknown_with_its_age_on_line_one(self):
+        fresh = {'version': 1, 'generated_at': self.now - 60, 'plans': [
+            {'provider': 'codex', 'source': 'live', 'observed_at': self.now - 120, 'stale': False,
+             'windows': [{'name': '5h', 'used_pct': 100, 'resets_at': self.now + 3600},
+                         {'name': '7d', 'used_pct': 18, 'resets_at': self.now + 86400}]}]}
+        line = self.run_line(fresh)
+        assert 'codex 5h' in line and '18%' in line and 'codex ?' not in line, line
+        # Tonight: a 94-minute-old reading, not marked stale, said 17% / 5%.
+        old = json.loads(json.dumps(fresh))
+        old['plans'][0].update(observed_at=self.now - 94 * 60, windows=[
+            {'name': '5h', 'used_pct': 17, 'resets_at': self.now + 3600}, {'name': '7d', 'used_pct': 5, 'resets_at': self.now + 86400}])
+        line = self.run_line(old)
+        assert 'codex ? · 1h old' in line, line
+        assert '17' not in line and '5%' not in line, line
+        old['plans'][0].update(observed_at=self.now - 600, stale=True)
+        assert 'codex ? · 10m old' in self.run_line(old)
+
+    def test_missing_usage_says_pharos_unavailable(self):
+        line = self.run_line(None)
+        assert 'Pharos usage unavailable' in line, line
 
     def test_install_keeps_display_job(self):
         with patch.object(reader, 'is_pharos', return_value=True), patch.object(refresher, 'supported', return_value=True), patch.object(refresher, 'data_dir', return_value=str(self.path / 'data')), patch.object(refresher, 'run') as run:

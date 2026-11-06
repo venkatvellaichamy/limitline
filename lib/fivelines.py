@@ -273,6 +273,7 @@ class Cell:
         self.cap = None               # set from usage.json cap_pct
         self.trend = None             # 7 values from usage-report.json daily, used
         self.fresh_change = False     # set by mark_changes: shown bold for a short while
+        self.held = False             # an old reading, drawn as `?` with its age
 
     def shown(self, used):
         return None if used is None else (100.0 - used if self.left else used)
@@ -320,6 +321,9 @@ class Cell:
         self.left = style.left
         if self.passed:
             return f"{self.name} " + style.paint("2", "reset, no newer reading" if resets else "reset")
+        if self.used is None and self.held:
+            age = f" · {age_label(self.age)} old" if self.age is not None and self.age > 0 else ""
+            return (f"{self.name} " if self.name else "") + style.paint("2", "?" + age)
         if self.used is None:
             age = f" {age_label(self.age)} ago" if self.age is not None and self.age > 0 else ""
             return f"{self.name} " + style.paint("2", "—" + age)
@@ -348,12 +352,12 @@ class Cell:
 
 
 def window_cell(name, used, reset, now):
-    """One window's cell, or None when there is no reading at all. A reset time that has
-    gone by is said as such (the old percent is not shown); an unreadable percent is `—`."""
+    """One window's cell, or None when there is no reading at all. A window whose reset
+    time has gone by counts as refilled, 0% (as Pharos counts it); an unreadable percent is `—`."""
     when = num(reset)
     reset = int(when) if when and when > 0 else None
     if reset and reset <= now:
-        return Cell(name, None, reset, passed=True)
+        return Cell(name, 0.0)
     if used is None or used == "":
         return None
     used = pct(used)
@@ -362,17 +366,23 @@ def window_cell(name, used, reset, now):
     return Cell(name, used, reset)
 
 
-def held(usage, plan, now):
+def held(usage, plan, now, is_plan=True):
     """None when `plan` (a usage.json plan, or its hosts block) can be drawn as current.
-    Otherwise the age to show with `—` (HELD_NO_AGE for none). Pharos decides when a plan
-    is stale: a plan's observed_at is its last reading (Codex's last rate-limit event can be
-    hours old and still valid), so only usage.json's own age, the plan's `stale` flag, or an
-    observed_at from the future holds it here."""
+    Otherwise the age to show with `?` (HELD_NO_AGE for none). A plan is held when
+    usage.json is stale, the plan says `stale: true`, its reading (observed_at, else
+    usage.json's generated_at) is older than `plan_stale_after` (default 1h), or it is from
+    the future. An old reading is never drawn as a current percent: tonight's Codex reading
+    was 94 minutes old and wrong. The hosts block keeps only the usage.json and flag checks."""
     if usage is not None and (usage.get("stale") or usage.get("skew")):
+        # The used line's note already says how old usage.json is; plans just say `?`.
         age = usage.get("age")
-        return HELD_NO_AGE if age is None else age
+        return HELD_NO_AGE if age is None or is_plan else age
     if plan is None:
         return None
+    if is_plan:
+        import pharos_view
+        stale, age = pharos_view.plan_age(plan, usage, now)
+        return (HELD_NO_AGE if age is None else age) if stale else None
     kind, age = freshness(plan.get("observed_at"), now)
     if kind == "future":
         return HELD_NO_AGE
@@ -385,7 +395,10 @@ HELD_NO_AGE = -1  # held() result: hold the plan, show no age
 
 
 def held_cell(name, hold):
-    return Cell(name, None, age=None if hold == HELD_NO_AGE else hold)
+    """An old reading: drawn as unknown with its age (`? · 94m old`), never its percent."""
+    cell = Cell(name, None, age=None if hold == HELD_NO_AGE else hold)
+    cell.held = True
+    return cell
 
 
 def claude_cells(now):
@@ -413,7 +426,7 @@ def codex_cells(now, usage=None):
     plan = plan_of(usage, "codex")
     hold = held(usage, plan, now)
     if hold is not None:
-        return [held_cell("7d", hold)]
+        return [held_cell("", hold)]
     if plan is not None:
         # Pharos's own Codex reading, so a window whose reset went by can say so.
         windows = plan.get("windows") if isinstance(plan.get("windows"), list) else []
@@ -521,9 +534,11 @@ def pharos_state(now):
 
 
 def _pharos_state(now):
+    import pharos_view
     state, data = read_json_state(usage_file())
     if state == MISSING:
-        return None, ("pharos not running" if os.path.isdir(pharos_home()) else "")
+        # Pharos is installed (or forced as the reader) and its file is gone: the service is down.
+        return None, (pharos_view.UNAVAILABLE if os.path.isdir(pharos_home()) or forced_pharos() else "")
     if state != "ok" or not isinstance(data, dict) or not isinstance(data.get("plans"), list):
         return None, "pharos usage.json unreadable"
     version = format_version(data)
@@ -533,8 +548,16 @@ def _pharos_state(now):
         return None, too_new_note("", version)
     kind, age = freshness(data.get("generated_at"), now)
     data["age"], data["skew"] = age, kind == "future"
-    data["stale"] = kind != "fresh"
+    data["stale"] = kind is None or kind == "future" or age > pharos_view.usage_stale_after()
     return data, ""
+
+
+def forced_pharos():
+    try:
+        import config
+        return config.values().get("reader", "").strip().lower() == "pharos"
+    except Exception:
+        return False
 
 
 def read_usage(now):
@@ -554,7 +577,7 @@ def agy_cells(now, usage=None):
         return [Cell("gemini", None)]
     hold = held(usage, plan, now)
     if hold is not None:
-        return [held_cell("gemini", hold)]
+        return [held_cell("", hold)]
     buckets = [w for w in plan.get("windows") or [] if isinstance(w, dict)] if isinstance(plan.get("windows"), list) else []
     cells = []
     for group, name in AGY_NAMES:
@@ -665,6 +688,9 @@ def used_note(now):
         return "pharos clock ahead"
     if usage.get("age") is None:
         return "pharos reading has no time"
+    if usage.get("stale"):  # Pharos has stopped refreshing usage.json
+        import pharos_view
+        return f"{pharos_view.UNAVAILABLE} · {age_label(usage['age'])} old"
     if usage["age"] > STALE_NOTE_S:
         return f"{age_label(usage['age'])} old"
     return ""
@@ -877,7 +903,7 @@ def render_hosts(style, now, with_cpu=True, keep=None):
     hosts = block.get("hosts") if isinstance(block, dict) else None
     if not isinstance(hosts, list) or not hosts:
         return ""
-    hold = held(usage, block, now)
+    hold = held(usage, block, now, is_plan=False)
     if hold is not None:  # old host numbers are not shown as current
         age = "" if hold == HELD_NO_AGE else f" {age_label(hold)} ago"
         return style.paint("2", "hosts") + " " + style.paint("2", "—" + age)

@@ -47,7 +47,7 @@ class Hardening(unittest.TestCase):
     def test_pharos_files_missing_says_not_running(self):
         (self.pharos / "usage.json").unlink()
         lines = plain(fivelines.build(now=NOW))
-        self.assertEqual(lines, ["used  ✻ claude 7d ███▌░ · pharos not running"],
+        self.assertEqual(lines, ["used  ✻ claude 7d ███▌░ · Pharos usage unavailable"],
                          "Claude's own line still works and the gap is named")
         shutil.rmtree(self.pharos)
         self.assertEqual(plain(fivelines.build(now=NOW)), ["used  ✻ claude 7d ███▌░"],
@@ -68,34 +68,43 @@ class Hardening(unittest.TestCase):
         lines = plain(fivelines.build(now=NOW))
         used = lines[0]
         self.assertIn("✻ claude 7d ███▌░", used, "Claude comes from this session's own input")
-        self.assertIn("codex 7d — 1h ago", used)
-        self.assertIn("cursor+grok — 1h ago", used)
-        self.assertIn("gemini — 1h ago", used)
-        self.assertTrue(used.endswith(" · 1h old"), used)
+        # usage.json itself is old: each plan is `?` and the line says Pharos is not refreshing.
+        self.assertIn("◎ codex ? │", used)
+        self.assertIn("cursor+grok ? │", used)
+        self.assertIn("✦ agy ?", used)
+        self.assertTrue(used.endswith(" · Pharos usage unavailable · 1h old"), used)
         self.assertNotIn("33", used)
         self.assertNotIn("81", used)
         rest = used.split("◎", 1)[1]
         self.assertFalse(set(rest) & set("█▉▊▋▌▍▎▏"), "no bar drawn from an old reading: " + rest)
         self.assertEqual(lines[-1], "hosts — 1h ago", "old host numbers are not shown as current")
 
-    def test_pharos_decides_when_a_plan_is_stale(self):
-        """Codex's observed_at is its last rate-limit event, often hours old and still valid
-        until the window resets. With a fresh usage.json, only Pharos's `stale` holds a plan."""
+    def test_old_plan_reading_is_unknown_with_its_age(self):
+        """0.16.0-beta.2: a plan is held when Pharos says `stale: true` or its observed_at is
+        older than plan_stale_after (1h by default, configurable). Tonight's Codex reading was
+        94 minutes old, not marked stale, and wrong; it must read `codex ? · 1h old`."""
         for key in ("LL_CODEX5", "LL_CODEX5_RESET", "LL_CODEX7", "LL_CODEX7_RESET"):
             del os.environ[key]
         codex = {"provider": "codex", "observed_at": NOW - 1800, "stale": False, "windows": [
             {"name": "7d", "used_pct": 69, "resets_at": NOW + 4 * 86400}]}
         self.usage["plans"].append(codex)
-        self.usage["plans"][0]["observed_at"] = NOW - 28 * 3600  # agy, still not stale per Pharos
+        self.usage["plans"][0]["observed_at"] = NOW - 28 * 3600  # agy: older than 1h
         self.usage["hosts"]["observed_at"] = NOW - 1800
         self.write_usage()
         line = self.used()
-        self.assertIn("codex 7d ███▌░", line)
-        self.assertIn("argon █████", line)
+        self.assertIn("codex 7d ███▌░", line, "30 minutes old is within plan_stale_after")
+        self.assertIn("✦ agy ? · 1d old", line)
         self.assertTrue(plain(fivelines.build(now=NOW))[-1].startswith("hosts studio 82%"))
         codex["stale"] = True
         self.write_usage()
-        self.assertIn("codex 7d — 30m ago", self.used(), "Pharos says stale: a dash and the reading's age")
+        self.assertIn("◎ codex ? · 30m old", self.used(), "Pharos says stale: unknown and the reading's age")
+        codex.update(stale=False, observed_at=NOW - 94 * 60)
+        self.write_usage()
+        line = self.used()
+        self.assertIn("◎ codex ? · 1h old", line, "94 minutes old, not marked stale: still unknown")
+        self.assertNotIn("███▌░", line.split("◎", 1)[1].split("│", 1)[0])
+        Path(os.environ["LIMITLINE_CONFIG"]).write_text("plan_stale_after = 7200\n")
+        self.assertIn("codex 7d ███▌░", self.used(), "the age is a config value")
 
     def test_cursor_line_uses_pharos_reading_age(self):
         self.age_grok_line(170)
@@ -114,16 +123,15 @@ class Hardening(unittest.TestCase):
 
     # ---- Reset time already passed ------------------------------------------------------
 
-    def test_reset_passed_says_so(self):
+    def test_reset_passed_counts_as_refilled(self):
+        # 0.16.0-beta.2: a window whose reset went by is 0% used, as Pharos counts it.
         os.environ["LL_CODEX5_RESET"] = str(NOW - 10)
         self.usage["plans"][0]["windows"][3]["resets_at"] = NOW - 60  # argon
         self.write_usage()
         line = self.used()
-        self.assertIn("codex 5h reset, no newer reading · 7d ███▌░", line)
-        self.assertIn("argon reset, no newer reading", line)
+        self.assertIn("codex 5h ░░░░░ · 7d ███▌░", line)
+        self.assertIn("argon ░░░░░", line)
         self.assertNotIn("100", line)
-        narrow = self.used(columns=fivelines.width(line) - 1)
-        self.assertIn("codex 5h reset · 7d", narrow, "the short form when space is tight")
 
     def test_reset_passed_from_pharos_codex_plan(self):
         for key in ("LL_CODEX5", "LL_CODEX5_RESET", "LL_CODEX7", "LL_CODEX7_RESET"):
@@ -132,7 +140,9 @@ class Hardening(unittest.TestCase):
             {"name": "5h", "used_pct": 99, "resets_at": NOW - 5},
             {"name": "7d", "used_pct": 69, "resets_at": NOW + 4 * 86400}]})
         self.write_usage()
-        self.assertIn("codex 5h reset, no newer reading · 7d ███▌░", self.used())
+        self.assertIn("codex 5h ░░░░░ · 7d ███▌░", self.used())
+        fields = pharos_view.codex_fields(pharos_view.read_usage(now=NOW), now=NOW)
+        self.assertIn("codex5 0\ncodex5_reset\n", fields, "line 1 says 0% too, with no reset time")
 
     # ---- Partial or invalid JSON --------------------------------------------------------
 
@@ -199,8 +209,9 @@ class Hardening(unittest.TestCase):
         self.write_usage()
         self.age_grok_line(-3600)
         line = self.used()
-        self.assertIn("gemini —", line)
-        self.assertIn("cursor+grok —", line)
+        self.assertIn("agy ?", line)
+        self.assertIn("cursor+grok ?", line)
+        self.assertNotIn("old ", line, "no negative ages")
         self.assertNotIn("ago", line, "no negative ages")
         self.assertTrue(line.endswith(" · pharos clock ahead"), line)
         self.assertNotIn("81", line)

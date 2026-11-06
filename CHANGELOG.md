@@ -5,6 +5,11 @@
 - Rebuild Grok, jobs, fleet, and machine display caches in Pharos mode without fetching or falling back to provider readers.
 - Read the shared Cursor/Grok plan directly from Pharos; show reading ages from the plan or usage.json instead of grok.line's modification time.
 - Keep the 60-second display refresher available with Pharos. Doctor and `uninstall --refresh-jobs` identify and remove only the redundant fetch schedule, preserving the display job.
+- Show old readings honestly. If a plan says `stale: true`, or its `observed_at` is older than the new `plan_stale_after` setting (3600 seconds by default), it now shows as unknown with its age, for example `codex ? · 94m old`. Its old percent is no longer drawn. This covers line 1 (codex, cursor+grok) and the five-line view (codex, cursor+grok, agy). A stale Codex plan used to vanish from line 1, or show as current when only the plan was old. **Behaviour change:** an idle Codex reading more than an hour old is now unknown. Raise `plan_stale_after` to keep it.
+- A window whose `resets_at` has passed now counts as refilled (0%, no reset time), as Pharos counts it. The old "reset, no newer reading" no longer appears for Pharos plans. Claude's own cached 7d note on line 1 is not Pharos data, so it is unchanged.
+- When Pharos is the reader and usage.json is missing, the line says "Pharos usage unavailable". The used line also says it when usage.json is older than `usage_stale_after` (900 seconds by default), for example `Pharos usage unavailable · 1h old`. Each plan then shows `?`. The older text was "pharos not running".
+- `tests/run.sh` now runs `tests/test_reader.py`.
+- `docs/audits/USAGE-RENDER-AUDIT-2026-11-05.md` records where each segment's number comes from in Pharos mode, and lists the remaining paths that can shadow Pharos data.
 
 ## 0.16.0-beta.1 - 2026-11-05
 

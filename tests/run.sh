@@ -437,7 +437,11 @@ touch -t 202511010001 "$week_dir/r.jsonl"
 week_got=$(LIMITLINE_CODEX_DIR="$week_dir" "$ROOT/providers/codex")
 check "provider-codex-7d-only" "$week_got" '{"observed_at":1761955200,"provider":"codex","source":"session","stale":false,"windows":[{"name":"7d","resets_at":1762419600,"used_pct":41}]}'
 week_line=$(LIMITLINE_CODEX=1 LIMITLINE_PHAROS_USAGE="$(LIMITLINE_CODEX_DIR="$week_dir" pharos_usage codex)" LIMITLINE_NOCACHE=1 "$BIN" < "$FIX/no_rate_limits.json" | strip_ansi)
-check "codex-7d-only-line" "$week_line" 'Opus 5.5 │ ctx ▓▓░░░ 41% │ $0.12 │ codex 7d ·41%'
+# 0.16.0-beta.2: older than plan_stale_after (1h by default), the reading is unknown, with its age.
+check "codex-7d-only-line" "$week_line" 'Opus 5.5 │ ctx ▓▓░░░ 41% │ $0.12 │ codex ? · 1d old'
+week_cfg="$TEST_HOME/week.toml"; printf 'plan_stale_after = 172800\n' > "$week_cfg"
+week_line=$(LIMITLINE_CONFIG="$week_cfg" LIMITLINE_CODEX=1 LIMITLINE_PHAROS_USAGE="$(LIMITLINE_CODEX_DIR="$week_dir" pharos_usage codex)" LIMITLINE_NOCACHE=1 "$BIN" < "$FIX/no_rate_limits.json" | strip_ansi)
+check "codex-7d-only-line-configured-age" "$week_line" 'Opus 5.5 │ ctx ▓▓░░░ 41% │ $0.12 │ codex 7d ·41%'
 
 # No resets_at: the 5h reading lasts five hours from the event, the 7d reading seven days.
 nores="$TEST_HOME/codex-nores"
@@ -1054,9 +1058,10 @@ stale_status=$("$BIN" status)
 printf '%s' "$stale_status" | grep -q -F 'cursor+grok 74% · resets Fri 05:22 · SuperGrok Plus · live · grok 7d 14 tok · 9h old' \
   && check "plan-stale-age" "yes" "yes" || check "plan-stale-age" "$stale_status" "9h old"
 python3 "$ROOT/lib/refresh.py" --no-fetch
-check "plan-stale-flags" "$(sed -n 2p "$LIMITLINE_GROK_LINE")" '74 1 live'
+# 0.16.0-beta.2: a stale reading is unknown on the status line, never its old percent.
+check "plan-stale-flags" "$(sed -n 2p "$LIMITLINE_GROK_LINE")" '- 1 live'
 stale_line=$(LIMITLINE_GROK=1 "$BIN" < "$FIX/no_rate_limits.json")
-printf '%s' "$stale_line" | grep -q -F $'\033[2mcursor+grok 74% · Fri 05:22 · grok 7d 14 tok · 9h old' \
+printf '%s' "$stale_line" | grep -q -F $'\033[2mcursor+grok ? · 9h old' && ! printf '%s' "$stale_line" | grep -q -F '74%' \
   && check "plan-stale-dim" "yes" "yes" || check "plan-stale-dim" "$(printf '%s' "$stale_line" | cat -v)" "dimmed segment"
 
 # The window reset after the reading: no percent.
@@ -1241,10 +1246,11 @@ check "five-hosts-line" "$(printf '%s\n' "$five_out" | tail -1)" "hosts studio 8
 # Hardening, end to end: Pharos installed but not running, and a Codex window that reset.
 mkdir -p "$TEST_HOME/five-down"
 five_down=$(printf '%s' "$five_in" | NO_COLOR=1 XDG_CACHE_HOME="$five_cache" LIMITLINE_PHAROS_HOME="$TEST_HOME/five-down" LIMITLINE_LINES=5 LIMITLINE_REFRESH=0 "$BIN")
-check "five-pharos-not-running" "$five_down" "$(printf '%s\n' "$five_l1" 'used  ✻ claude 7d ███▌░ · pharos not running')"
+check "five-pharos-not-running" "$five_down" "$(printf '%s\n' "$five_l1" 'used  ✻ claude 7d ███▌░ · Pharos usage unavailable')"
 printf '%s' '{"version":1,"generated_at":1762056000,"plans":[{"provider":"codex","observed_at":1762055900,"windows":[{"name":"5h","used_pct":90,"resets_at":1762055000},{"name":"7d","used_pct":40,"resets_at":1762400000}]}]}' > "$TEST_HOME/five-pharos/usage.json"
 five_reset=$(printf '%s' "$five_in" | NO_COLOR=1 LIMITLINE_CODEX=1 XDG_CACHE_HOME="$five_cache" LIMITLINE_PHAROS_HOME="$TEST_HOME/five-pharos" LIMITLINE_LINES=5 LIMITLINE_REFRESH=0 "$BIN" | sed -n 2p)
-check "five-codex-reset-passed" "$([[ "$five_reset" == *"codex 5h reset, no newer reading · 7d ██░░░"* ]] && echo yes || echo "$five_reset")" "yes"
+# 0.16.0-beta.2: a window whose reset went by counts as refilled, 0%, as Pharos counts it.
+check "five-codex-reset-passed" "$([[ "$five_reset" == *"codex 5h ░░░░░ · 7d ██░░░"* ]] && echo yes || echo "$five_reset")" "yes"
 # A Codex reading from 30 minutes ago is still current when Pharos does not call it stale.
 printf '%s' '{"version":1,"generated_at":1762056000,"plans":[{"provider":"codex","observed_at":1762054200,"stale":false,"windows":[{"name":"7d","used_pct":40,"resets_at":1762400000}]}]}' > "$TEST_HOME/five-pharos/usage.json"
 five_old_obs=$(printf '%s' "$five_in" | NO_COLOR=1 LIMITLINE_CODEX=1 XDG_CACHE_HOME="$five_cache" LIMITLINE_PHAROS_HOME="$TEST_HOME/five-pharos" LIMITLINE_LINES=5 LIMITLINE_REFRESH=0 "$BIN" | sed -n 2p)
@@ -1271,6 +1277,14 @@ if hard_out=$(python3 -m unittest -q "$ROOT/tests/test_hardening.py" 2>&1); then
 else
   check "hardening-unit" "failed" "ok"
   printf '%s\n' "$hard_out" | grep -E '^(FAIL|ERROR):|Error: |^Ran|^FAILED' >&2
+fi
+# 0.16.0-beta.2: Pharos as the reader (refresh, stale display, doctor's job list).
+# These tests use the real clock, so the suite's fixed LIMITLINE_NOW is dropped for them.
+if reader_out=$(env -u LIMITLINE_NOW python3 -m unittest -q "$ROOT/tests/test_reader.py" 2>&1); then
+  check "reader-unit" "ok" "ok"
+else
+  check "reader-unit" "failed" "ok"
+  printf '%s\n' "$reader_out" | grep -E '^(FAIL|ERROR):|Error: |^Ran|^FAILED' >&2
 fi
 if python3 -m unittest -q "$ROOT/tests/test_release.py" >/dev/null 2>&1; then
   check "release-unit" "ok" "ok"

@@ -492,6 +492,8 @@ codex5=""
 codex5_raw=""
 codex7=""
 codex7_raw=""
+codex_age=""
+pharos_note=""
 
 to_epoch() {
   local v="$1" base epoch
@@ -555,7 +557,7 @@ if [[ "$CODEX_ENABLED" -eq 1 && -z "${LIMITLINE_PHAROS_USAGE:-}" && "${LIMITLINE
   cache_file=$(codex_cache_file)
   if [[ -f "$cache_file" ]]; then
     wall=$(date +%s)
-    read -r cts ok c5 c5r c7 c7r < "$cache_file" || true
+    read -r cts ok c5 c5r c7 c7r cage < "$cache_file" || true
     case "$cts" in
       ''|*[!0-9]*) cts=0 ;;
     esac
@@ -566,6 +568,8 @@ if [[ "$CODEX_ENABLED" -eq 1 && -z "${LIMITLINE_PHAROS_USAGE:-}" && "${LIMITLINE
         [[ "$c5r" == "-" ]] && c5r=""
         [[ "$c7" == "-" ]] && c7=""
         [[ "$c7r" == "-" ]] && c7r=""
+        [[ "$cage" == "-" ]] && cage=""
+        codex_age="$cage"
         codex5="$c5"
         codex5_raw="$c5r"
         codex7="$c7"
@@ -683,6 +687,8 @@ assign_field() {
     codex5_reset) codex5_raw=$val ;;
     codex7) codex7=$val ;;
     codex7_reset) codex7_raw=$val ;;
+    codex_age) codex_age=$val ;;
+    pharos_note) pharos_note=$val ;;
   esac
 }
 
@@ -703,8 +709,10 @@ scan_codex() {
   codex5_raw=""
   codex7=""
   codex7_raw=""
+  codex_age=""
+  pharos_note=""
   parse_fields "$parsed"
-  [[ -n "$codex5" || -n "$codex7" ]] || return 1
+  [[ -n "$codex5" || -n "$codex7" || -n "$codex_age" || -n "$pharos_note" ]] || return 1
   return 0
 }
 
@@ -717,7 +725,9 @@ write_codex_cache() {
   dash() {
     if [[ -z "$1" ]]; then printf '%s' "-"; else printf '%s' "$1"; fi
   }
-  printf '%s %s %s %s %s %s\n' "$(date +%s)" "$ok" "$(dash "$codex5")" "$(dash "$codex5_raw")" "$(dash "$codex7")" "$(dash "$codex7_raw")" > "$tmp" 2>/dev/null \
+  # A Pharos note has spaces and is never cached: the next render reads Pharos again.
+  [[ -z "$pharos_note" ]] || return 0
+  printf '%s %s %s %s %s %s %s\n' "$(date +%s)" "$ok" "$(dash "$codex5")" "$(dash "$codex5_raw")" "$(dash "$codex7")" "$(dash "$codex7_raw")" "$(dash "$codex_age")" > "$tmp" 2>/dev/null \
     && mv "$tmp" "$dest" 2>/dev/null || true
 }
 
@@ -1346,7 +1356,7 @@ app_text=""
 # 0.14 also cleared these when `segments` named vitals without cost (no vitals shown);
 # configs with their own `segments` keep that, the 0.15 layouts do not.
 [[ "$ON_COST" == "1" || ( "$FMT" == "new" && "$ON_VITALS" == "1" ) ]] || { cost_usd=""; cost_ms=""; lines_added=""; lines_removed=""; }
-[[ "$ON_CODEX" == "1" ]] || { codex5=""; codex7=""; }
+[[ "$ON_CODEX" == "1" ]] || { codex5=""; codex7=""; codex_age=""; pharos_note=""; }
 [[ "$ON_BURN" == "1" ]] || hist_path=""
 
 # A file's mtime in epoch seconds, or 0. Each form is tried on its own: GNU stat reads
@@ -1534,6 +1544,8 @@ render_main() {
   emit_kv session "$session_text"
   emit_kv codex5 "$codex5"
   emit_kv codex7 "$codex7"
+  emit_kv codex_age "$codex_age"
+  emit_kv pharos_note "$pharos_note"
   emit_kv hist "$hist_path"
   emit_kv show_five "$ON_FIVE"
   emit_kv show_seven "$ON_SEVEN"
@@ -1567,6 +1579,11 @@ render_main() {
   flag_on "$CTX_SIZE_MODE" && emit_kv ctx_show_size 1
 } | LC_ALL=C awk '
 function val(k) { return (k in v) ? v[k] : "" }
+function age_short(s) {
+  if (s < 3600) return (s < 60 ? 1 : int(s / 60)) "m"
+  if (s < 86400) return int(s / 3600) "h"
+  return int(s / 86400) "d"
+}
 function pct(p) {
   if (p < 0) p = 0
   if (p > 999) p = 999
@@ -1737,7 +1754,11 @@ function grok_seg(text,    flags, n, f, head, p) {
   if (substr(text, length(head) + 1, length(p) + 1) != p "%") return text
   return head compact_pct(p) substr(text, length(head) + length(p) + 2)
 }
-function codex_seg(a, b,    left, right, out) {
+function codex_seg(a, b,    left, right, out, age) {
+  # A stale Pharos reading is unknown, with how old it is; never its old percent.
+  age = val("codex_age")
+  if (age != "") return "codex " paint("2", "?" (age ~ /^[0-9]+$/ ? " · " age_short(age + 0) " old" : ""))
+  if (a == "" && b == "" && val("pharos_note") != "") return paint("2", val("pharos_note"))
   left = ""; right = ""
   if (a != "") left = "5h " compact_pct(a)
   if (b != "") right = "7d " compact_pct(b)
