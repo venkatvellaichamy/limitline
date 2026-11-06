@@ -565,7 +565,7 @@ def agy_cells(now, usage=None):
     return cells or [Cell("gemini", None)]
 
 
-def used_parts(now):
+def used_parts(now, trends=True):
     """[(mark key, label, [cells])] in the fixed order, which is also the priority order
     when the terminal is narrow (the last is dropped first). Without Pharos, Claude only."""
     parts = [("claude", "claude", claude_cells(now))]
@@ -577,7 +577,7 @@ def used_parts(now):
     if cursor:
         parts.append(("cursor", "", [cursor]))
     parts.append(("agy", "agy", agy_cells(now, usage)))
-    add_caps_and_trends(parts, usage)
+    add_caps_and_trends(parts, usage, trends=trends)
     return parts
 
 
@@ -588,14 +588,14 @@ def report_file():
     return env("LIMITLINE_PHAROS_REPORT") or os.path.join(pharos_home(), "usage-report.json")
 
 
-def add_caps_and_trends(parts, usage):
+def add_caps_and_trends(parts, usage, trends=True):
     """The cap (usage.json cap_pct) and the 7-day series (usage-report.json daily), both from
     Pharos. A cursor+grok estimate has no plan reading of its own, so it gets no series."""
     caps = {}
     for plan in (usage or {}).get("plans") or []:
         if isinstance(plan, dict) and num(plan.get("cap_pct")) is not None:
             caps[plan.get("key")] = num(plan.get("cap_pct"))
-    report = read_json(report_file())
+    report = read_json(report_file()) if trends else None
     daily = report.get("daily") if isinstance(report, dict) and isinstance(report.get("daily"), dict) else {}
     for key, _label, cells in parts:
         plan = PLAN_KEYS.get(key)
@@ -662,7 +662,7 @@ def used_note(now):
 def render_used(style, now, resets=True, drop_agy_3p=False, cells=BAR_WIDTH, keep=None):
     """`keep` limits how many plans are drawn, from the left (Claude is first and stays)."""
     out, bar = [], cells
-    parts = used_parts(now)
+    parts = used_parts(now, trends=style.view == "trend")
     mark_changes(parts, now)
     for key, label, cells in parts[:keep]:
         shown = [c for c in cells if c.name != "claude+gpt"] if drop_agy_3p else cells

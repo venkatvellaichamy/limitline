@@ -34,6 +34,10 @@ def plist_dict():
 
 
 def install():
+    import reader
+    if reader.is_pharos():
+        print(reader.NOTE)
+        return 0
     if not refresher.supported():
         print("schedule needs macOS launchd. Elsewhere, run this from cron every 15 minutes:")
         print("  */15 * * * * nice -n 10 %s refresh" % os.path.join(refresher.root_dir(), "bin", "limitline"))

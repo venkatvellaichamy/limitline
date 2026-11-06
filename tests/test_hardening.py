@@ -12,6 +12,7 @@ import subprocess
 import sys
 import time
 import unittest
+from unittest.mock import patch
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -249,21 +250,34 @@ class Hardening(unittest.TestCase):
 
     # ---- Slow disk ---------------------------------------------------------------------------
 
+    def test_bar_view_does_not_read_trend_report(self):
+        report = str(self.pharos / "usage-report.json")
+        with patch.object(fivelines, "_read_raw", wraps=fivelines._read_raw) as read:
+            fivelines.build(now=NOW, columns=80)
+        self.assertNotIn(report, [call.args[0] for call in read.call_args_list])
+
     def test_slow_disk_render_stays_under_budget(self):
         self.summary(today={"running": 1, "done": 1})
         (self.pharos / "usage-report.json").write_text(json.dumps({"daily": {}}))
         real_open = builtins.open
+        sleep_overhead = 0
 
         def slow_open(*args, **kwargs):
+            nonlocal sleep_overhead
+            start = time.perf_counter()
             time.sleep(0.006)  # every file read costs 6 ms
+            # macOS may coalesce a 6 ms sleep into a much longer timer interval.
+            # Charge the intended disk delay, while retaining all rendering time.
+            sleep_overhead += max(0, time.perf_counter() - start - 0.006)
             return real_open(*args, **kwargs)
 
         fivelines.open = slow_open
         try:
             fivelines.build(now=NOW, columns=80)  # warm up imports
+            sleep_overhead = 0
             start = time.perf_counter()
             fivelines.build(now=NOW, columns=80)
-            took = (time.perf_counter() - start) * 1000
+            took = (time.perf_counter() - start - sleep_overhead) * 1000
         finally:
             del fivelines.open
         self.assertLess(took, BUDGET_MS, f"render took {took:.0f} ms on a slow disk")

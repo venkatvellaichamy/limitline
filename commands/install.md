@@ -8,6 +8,10 @@ allowed-tools: Read, Write, Bash
 
 Set Claude Code's `statusLine` to this plugin's `bin/limitline`. Do the work below yourself with the tools available in this session. Do not claim it is installed until the file on disk matches.
 
+## With Pharos as the reader
+
+Check `reader` and `reader_freshness` in limitline's config and the modification age of `~/.pharos/usage.json` (auto freshness defaults to 900 seconds). If the reader is `pharos`, or auto detects a fresh file, preserve `pharos statusline` in Claude Code settings: it forwards stdin to limitline. Skip refresh-agent installation and all writes to `~/.pharos`; Pharos manages host settings and saves Claude's reading. Run `limitline doctor` to identify redundant agents and show `limitline uninstall --refresh-jobs --dry-run` for review. In this mode stop here; do not follow the standalone installation steps below.
+
 ## Resolve the command
 
 1. The plugin root is the absolute path in `${CLAUDE_PLUGIN_ROOT}`. If that variable is empty, stop and say the command has to be run inside Claude Code after the plugin is installed.
@@ -58,6 +62,6 @@ The `hosts` line of the status line shows each computer by a nickname you choose
 1. Read `~/.config/limitline/config.toml` if it exists. If it already has a `hosts =` line, show it and ask whether to keep it.
 2. Otherwise ask: "What do you call this computer?" Offer the short hostname (`hostname -s`) as the default.
 3. Ask whether there are other computers to show. For each one, ask for a nickname and its ssh target (`user@host`). Skip this when the user says no.
-4. Hosts are measured by Pharos, so the nicknames go in Pharos's settings: write `hosts = ["<nickname>=local", "<nickname>=<user@host>", ...]` into `~/.pharos/usage.toml`, keeping every other line, and back it up first as `usage.toml.bak-limitline-<UTC timestamp>`. If `~/.pharos` does not exist, say that host and job lines need Pharos and skip this step.
+4. When Pharos is the selected reader, skip this step and tell the user host names are configured in Pharos. Otherwise, hosts are measured by Pharos, so the nicknames go in Pharos's settings: write `hosts = ["<nickname>=local", "<nickname>=<user@host>", ...]` into `~/.pharos/usage.toml`, keeping every other line, and back it up first as `usage.toml.bak-limitline-<UTC timestamp>`. If `~/.pharos` does not exist, say that host and job lines need Pharos and skip this step.
 5. Write `lines = 5` into `~/.config/limitline/config.toml`, keeping every other line, after backing it up as `config.toml.bak-limitline-<UTC timestamp>`.
 6. Run `pharos usage --refresh` (if Pharos is installed), then `limitline refresh`, so the first render has the readings.

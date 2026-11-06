@@ -23,7 +23,7 @@ jobs:
       - name: Shell syntax
         run: bash -n bin/limitline
       - name: Unit tests
-        run: python3 -m unittest -v tests/test_fivelines.py tests/test_hardening.py tests/test_release.py
+        run: python3 -m unittest -v tests/test_fivelines.py tests/test_hardening.py tests/test_release.py tests/test_reader.py
       - name: Full suite
         run: bash tests/run.sh
       - name: Layouts, presets, picker
@@ -37,6 +37,6 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - run: sudo apt-get update -q && sudo apt-get install -yq jq gawk
-      - run: python3 -m unittest -v tests/test_fivelines.py tests/test_hardening.py
+      - run: python3 -m unittest -v tests/test_fivelines.py tests/test_hardening.py tests/test_reader.py
       - run: bash tests/run.sh
       - run: bash tests/layout.sh

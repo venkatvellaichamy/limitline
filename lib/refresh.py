@@ -14,6 +14,7 @@ import jobs
 import machines
 import pharos_view
 import xaiplan
+import reader
 
 
 def write_text(path, text):
@@ -72,6 +73,10 @@ def write_jobs():
 
 
 def main(argv=None):
+    if reader.is_pharos():
+        if "--verbose" in (sys.argv[1:] if argv is None else argv):
+            print(reader.NOTE)
+        return ""
     usage = pharos_view.read_usage()
     for step in (lambda: write_grok(usage), write_jobs, write_fleet, lambda: write_machines(usage)):
         try:
