@@ -5,8 +5,8 @@ import stat
 import config
 import pharos_view
 
-LABELS = ('dev.limitline.refresh', 'com.limitline.refresh')
-NOTE = 'Pharos is the usage reader; limitline refresh skipped.'
+LABELS = ('com.limitline.refresh',)
+NOTE = 'Pharos is the usage reader; limitline fetching skipped; display lines rebuilt by refresh.'
 
 
 def is_pharos():
@@ -48,7 +48,7 @@ def remove_jobs(dry_run=False):
 
 
 def display_fields():
-    """Read Pharos directly so a no-op refresh cannot leave legacy layouts empty."""
+    """Read Pharos directly for legacy layouts."""
     import fleet
     import jobs
     import machines

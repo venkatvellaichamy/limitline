@@ -97,11 +97,11 @@ class Hardening(unittest.TestCase):
         self.write_usage()
         self.assertIn("codex 7d — 30m ago", self.used(), "Pharos says stale: a dash and the reading's age")
 
-    def test_cursor_line_follows_line_one_ttl(self):
+    def test_cursor_line_uses_pharos_reading_age(self):
         self.age_grok_line(170)
         self.assertIn("cursor+grok ████░", self.used(), "within bin's GROK_TTL (180 s)")
         self.age_grok_line(200)
-        self.assertIn("cursor+grok — 3m ago", self.used(), "line 1 hides it after 180 s; line 2 dashes it")
+        self.assertIn("cursor+grok ████░", self.used(), "fresh Pharos reading wins over the derived cache age")
         os.environ["LL_GROK_TTL"] = "600"
         self.assertIn("cursor+grok ████░", self.used(), "grok_ttl from the config applies to both lines")
 

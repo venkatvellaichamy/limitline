@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.16.0-beta.2 - 2026-11-05
+
+- Rebuild Grok, jobs, fleet, and machine display caches in Pharos mode without fetching or falling back to provider readers.
+- Read the shared Cursor/Grok plan directly from Pharos; show reading ages from the plan or usage.json instead of grok.line's modification time.
+- Keep the 60-second display refresher available with Pharos. Doctor and `uninstall --refresh-jobs` identify and remove only the redundant fetch schedule, preserving the display job.
+
 ## 0.16.0-beta.1 - 2026-11-05
 
 - Select the usage reader with `reader = "auto" | "pharos" | "limitline"` and `reader_freshness` (900 seconds by default). Fresh Pharos files disable limitline refresh work and the Claude inbox relay. Legacy layouts read Pharos directly.

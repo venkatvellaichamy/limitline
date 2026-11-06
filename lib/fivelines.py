@@ -436,6 +436,16 @@ def codex_cells(now, usage=None):
 
 
 def cursor_cell(now, usage=None):
+    if usage is not None:
+        plan = plan_of(usage, "xai-plan")
+        reading = dict(plan, observed_at=plan.get("observed_at") or usage.get("generated_at")) if plan else None
+        hold = held(usage, reading, now)
+        if hold is not None:
+            return held_cell("cursor+grok", hold)
+        if plan is not None:
+            windows = plan.get("windows") or []
+            window = next((w for w in windows if isinstance(w, dict)), {})
+            return window_cell("cursor+grok", window.get("used_pct"), window.get("resets_at"), now)
     state, raw, mtime = read_raw(os.path.join(cache_dir(), "grok.line"))
     if state != "ok":
         return None
@@ -448,7 +458,8 @@ def cursor_cell(now, usage=None):
     if hold is not None:
         return held_cell("cursor+grok", hold)
     # The refresher rewrites grok.line every run; line 1 hides it after grok_ttl, and so does this.
-    kind, age = freshness(mtime, now)
+    reading_at = usage.get("generated_at") if usage is not None else mtime
+    kind, age = freshness(reading_at, now)
     ttl = num(env("LL_GROK_TTL")) or GROK_TTL
     if kind is None or kind == "future" or age > ttl:
         return Cell("cursor+grok", None, age=age)  # an old line, or one from the future: no percent

@@ -57,7 +57,11 @@ def write_grok(usage=None):
     The rows come from Pharos, or, inside Grok or Cursor without Pharos, from that
     tool's own files. Written even when empty, so a stale line does not outlive them."""
     text, flags = "", ""
-    rows = _cli().load_all()
+    if reader.is_pharos():
+        usage = pharos_view.read_usage() if usage is None else usage
+        rows = xaiplan.merge(pharos_view.plan_rows(usage)) if usage else []
+    else:
+        rows = _cli().load_all()
     for row in rows:
         if row.get("provider") == xaiplan.PROVIDER:
             text, flags = xaiplan.line_fields(row)
@@ -76,7 +80,6 @@ def main(argv=None):
     if reader.is_pharos():
         if "--verbose" in (sys.argv[1:] if argv is None else argv):
             print(reader.NOTE)
-        return ""
     usage = pharos_view.read_usage()
     for step in (lambda: write_grok(usage), write_jobs, write_fleet, lambda: write_machines(usage)):
         try:
