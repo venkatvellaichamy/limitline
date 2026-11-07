@@ -997,7 +997,7 @@ check "xai-log-missing" "$("$ROOT/providers/xai-plan")" '{"label":"cursor+grok",
 noplan_status=$("$BIN" status | tr -s " ")
 printf '%s' "$noplan_status" | grep -q -F 'cursor 7d ~11% estimate (110k of 1.0M tokens)' \
   && printf '%s' "$noplan_status" | grep -q -F 'grok 7d 14 tok' \
-  && ! printf '%s' "$noplan_status" | grep -q -F 'cursor+grok' \
+  && ! printf '%s' "$noplan_status" | grep -q -E '^Grok |cursor\+grok' \
   && check "plan-absent-estimate" "yes" "yes" || check "plan-absent-estimate" "$noplan_status" "cursor estimate and grok rows"
 noplan_host=$("$BIN" --host prompt)
 printf '%s' "$noplan_host" | grep -q -F 'cursor 7d ~11% estimate' \
@@ -1007,16 +1007,16 @@ printf '%s' "$noplan_host" | grep -q -F 'cursor 7d ~11% estimate' \
 # truncated one are skipped; an older 61% reading is not used.
 cp "$FIX/xai/unified.jsonl" "$LIMITLINE_GROK_LOG"
 check "provider-xai-live" "$("$ROOT/providers/xai-plan")" '{"age":1800,"label":"cursor+grok","observed_at":1762054200,"plan":"SuperGrok Plus","provider":"xai-plan","source":"live","stale":false,"windows":[{"name":"week","resets_at":1762492955,"used_pct":74}]}'
-live_status=$("$BIN" status)
-printf '%s' "$live_status" | grep -q -F 'cursor+grok 74% · resets Fri 05:22 · SuperGrok Plus · live · grok 7d 14 tok' \
+live_status=$("$BIN" status | tr -s " ")
+printf '%s' "$live_status" | grep -q -F 'Grok 74% · resets Fri 05:22 · SuperGrok Plus · live · grok 7d 14 tok' \
   && ! printf '%s' "$live_status" | grep -q -E '^cursor |^grok |estimate|manual' \
-  && check "plan-live-status" "yes" "yes" || check "plan-live-status" "$live_status" "one live cursor+grok row"
+  && check "plan-live-status" "yes" "yes" || check "plan-live-status" "$live_status" "one live Grok row"
 live_host=$("$BIN" --host prompt)
-printf '%s' "$live_host" | grep -q -F 'cursor+grok 74% · Fri 05:22 · grok 7d 14 tok' \
-  && check "plan-live-host" "yes" "yes" || check "plan-live-host" "$live_host" "cursor+grok 74% · Fri 05:22"
+printf '%s' "$live_host" | grep -q -F 'Grok 74% · Fri 05:22 · grok 7d 14 tok' \
+  && check "plan-live-host" "yes" "yes" || check "plan-live-host" "$live_host" "Grok 74% · Fri 05:22"
 plan_watch=$(LIMITLINE_WATCH_ONCE=1 "$BIN" watch)
-printf '%s' "$plan_watch" | grep -q -F 'cursor+grok' && ! printf '%s' "$plan_watch" | grep -q -F 'estimate' \
-  && check "plan-watch" "yes" "yes" || check "plan-watch" "$plan_watch" "cursor+grok column"
+printf '%s' "$plan_watch" | grep -q -E '^claude +Grok' && ! printf '%s' "$plan_watch" | grep -q -F 'estimate' \
+  && check "plan-watch" "yes" "yes" || check "plan-watch" "$plan_watch" "Grok column"
 python3 "$ROOT/lib/refresh.py" --no-fetch
 check "plan-live-grok-line" "$(cat "$LIMITLINE_GROK_LINE")" "$(printf '%s\n%s' 'cursor+grok 74% · Fri 05:22 · grok 7d 14 tok' '74 0 live')"
 plan_line=$(LIMITLINE_GROK=1 "$BIN" < "$FIX/no_rate_limits.json")
@@ -1031,13 +1031,13 @@ printf '%s' "$plan_nudge" | grep -q -F '→ cursor ok' \
 
 # Live beats an older manual value.
 printf '%s\n' '{"used_pct": 69, "resets_at": 1762333200, "observed_at": 1762052400, "plan": "Super", "source": "dashboard"}' > "$LIMITLINE_XAI_PLAN"
-older_manual=$("$BIN" status)
-printf '%s' "$older_manual" | grep -q -F 'cursor+grok 74% · resets Fri 05:22 · SuperGrok Plus · live' && ! printf '%s' "$older_manual" | grep -q -F '69%' \
+older_manual=$("$BIN" status | tr -s " ")
+printf '%s' "$older_manual" | grep -q -F 'Grok 74% · resets Fri 05:22 · SuperGrok Plus · live' && ! printf '%s' "$older_manual" | grep -q -F '69%' \
   && check "plan-live-over-older-manual" "yes" "yes" || check "plan-live-over-older-manual" "$older_manual" "live 74%"
 
 # A newer manual value is shown, but labelled manual and dimmed, never as live.
 set_out=$("$BIN" set xai-plan 69 --resets "2025-11-05 09:00" --plan Super)
-check "set-xai-plan" "$set_out" 'cursor+grok 69% · manual · resets Wed 09:00 · Super'
+check "set-xai-plan" "$set_out" 'Grok 69% · manual · resets Wed 09:00 · Super'
 check "set-xai-plan-cache" "$(python3 -c 'import json,sys; d=json.load(open(sys.argv[1])); print(d["used_pct"], d["resets_at"], d["observed_at"], d["plan"], d["source"])' "$LIMITLINE_XAI_PLAN")" '69 1762333200 1762056000 Super manual'
 check "provider-xai-manual" "$("$ROOT/providers/xai-plan")" '{"age":0,"label":"cursor+grok","observed_at":1762056000,"plan":"Super","provider":"xai-plan","source":"manual","stale":false,"windows":[{"name":"week","resets_at":1762333200,"used_pct":69}]}'
 check "plan-manual-grok-line" "$(cat "$LIMITLINE_GROK_LINE")" "$(printf '%s\n%s' 'cursor+grok 69% · manual · Wed 09:00 · grok 7d 14 tok' '69 1 manual')"
@@ -1078,8 +1078,8 @@ print(int((time.perf_counter() - start) * 1000))' "$ROOT/providers/xai-plan")
 
 # Older than 6 hours: dimmed, with its age.
 sed 's/2025-11-02T03:30:00.000Z/2025-11-01T19:00:00.000Z/' "$FIX/xai/unified.jsonl" | grep -v 'creditUsagePercent":61' > "$LIMITLINE_GROK_LOG"
-stale_status=$("$BIN" status)
-printf '%s' "$stale_status" | grep -q -F 'cursor+grok 74% · resets Fri 05:22 · SuperGrok Plus · live · grok 7d 14 tok · 9h old' \
+stale_status=$("$BIN" status | tr -s " ")
+printf '%s' "$stale_status" | grep -q -F 'Grok 74% · resets Fri 05:22 · SuperGrok Plus · live · grok 7d 14 tok · 9h old' \
   && check "plan-stale-age" "yes" "yes" || check "plan-stale-age" "$stale_status" "9h old"
 python3 "$ROOT/lib/refresh.py" --no-fetch
 # 0.16.0-beta.2: a stale reading is unknown on the status line, never its old percent.
@@ -1090,14 +1090,14 @@ printf '%s' "$stale_line" | grep -q -F $'\033[2mcursor+grok ? · 9h old' && ! pr
 
 # The window reset after the reading: no percent.
 printf '%s\n' '{"ts":"2025-11-01T17:00:00.000Z","msg":"billing: fetched credits config","ctx":{"config":{"creditUsagePercent":74.0,"currentPeriod":{"end":"2025-11-01T18:00:00.000+00:00"}}}}' > "$LIMITLINE_GROK_LOG"
-reset_status=$("$BIN" status)
-printf '%s' "$reset_status" | grep -q -F 'cursor+grok reset Sat 18:00, no newer reading' && ! printf '%s' "$reset_status" | grep -q -F '74%' \
+reset_status=$("$BIN" status | tr -s " ")
+printf '%s' "$reset_status" | grep -q -F 'Grok reset Sat 18:00, no newer reading' && ! printf '%s' "$reset_status" | grep -q -F '74%' \
   && check "plan-reset-passed" "yes" "yes" || check "plan-reset-passed" "$reset_status" "no stale percent"
 
 # Older than 7 days: hidden, and the labelled estimate comes back.
 printf '%s\n' '{"ts":"2025-10-25T00:00:00.000Z","msg":"billing: fetched credits config","ctx":{"config":{"creditUsagePercent":74.0,"currentPeriod":{"end":"2025-11-07T05:22:35.070+00:00"}}}}' > "$LIMITLINE_GROK_LOG"
 old_status=$("$BIN" status | tr -s " ")
-printf '%s' "$old_status" | grep -q -F 'cursor 7d ~11% estimate' && ! printf '%s' "$old_status" | grep -q -F 'cursor+grok' \
+printf '%s' "$old_status" | grep -q -F 'cursor 7d ~11% estimate' && ! printf '%s' "$old_status" | grep -q -E '^Grok |cursor\+grok' \
   && check "plan-hidden-after-7d" "yes" "yes" || check "plan-hidden-after-7d" "$old_status" "estimate back"
 
 if "$BIN" set xai-plan 150 >/dev/null 2>&1; then check "set-xai-plan-range" "accepted" "refused"; else check "set-xai-plan-range" "refused" "refused"; fi
