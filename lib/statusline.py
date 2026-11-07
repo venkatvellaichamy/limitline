@@ -49,7 +49,7 @@ ITEMS = [
     ("pace", "-", "ahead of / under pace", "rate_limits"),
     ("spark", "-", "5h and 7d sparklines", "local history"),
     ("codex", "-", "Codex 5h and 7d", "Pharos usage.json"),
-    ("grok", "-", "Cursor + Grok plan", "limitline refresh"),
+    ("grok", "-", "Grok (xAI plan)", "limitline refresh"),
     ("jobs", "-", "Pharos jobs", "Pharos summary.json"),
     ("fleet", "-", "Pharos open work", "Pharos summary.json"),
     ("machines", "-", "hosts' free memory", "Pharos"),

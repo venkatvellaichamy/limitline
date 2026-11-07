@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+- **Cursor row.** When Pharos writes its own `cursor` entry (the Cursor plan's month window), `limitline status`, host lines, and `watch` show it as a `cursor` row (`cursor month 42%`) next to the xAI plan, instead of folding Cursor into the plan row. A Cursor token estimate or an empty `cursor` entry (older Pharos) is still folded away, so older Pharos files show just the plan row.
+- **The xAI plan is labelled `Grok`.** The row that read `cursor+grok` now reads `Grok` (`Grok 74% · resets Fri 05:22 · SuperGrok Plus · live`). limitline still reads Pharos's `cursor+grok` entry and the `xai-plan` provider's `"label": "cursor+grok"` unchanged; `grok`, `cursor+grok`, `xai`, and `xai-plan` all still name the segment. `grok.line` keeps its `cursor+grok` prefix, which the status-line script and the five-line view parse, so the Claude Code `grok` segment and the five-line `used` cell still say `cursor+grok` for now.
+- Tests: `tests/test_cursor_rows.py` (run from `tests/run.sh`) renders `status` and `--host prompt` from fixture Pharos usage files with both entries and with only `cursor+grok`.
+
 ## 0.16.0-beta.1 - 2026-11-05
 
 - Select the usage reader with `reader = "auto" | "pharos" | "limitline"` and `reader_freshness` (900 seconds by default). Fresh Pharos files disable limitline refresh work and the Claude inbox relay. Legacy layouts read Pharos directly.

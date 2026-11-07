@@ -1,0 +1,14 @@
+{
+  "version": 1,
+  "generated_at": 1762055940,
+  "plans": [
+    {"key": "claude", "provider": "claude", "source": "live", "observed_at": 1762055900, "stale": false,
+     "windows": [{"name": "5h", "used_pct": 20, "resets_at": 1762070000}, {"name": "7d", "used_pct": 38, "resets_at": 1762400000}]},
+    {"key": "cursor", "provider": "cursor", "label": "cursor", "plan": "Pro", "source": "live", "observed_at": 1762055900, "stale": false,
+     "windows": [{"name": "month", "used_pct": 42, "resets_at": 1763856000}],
+     "auto": {"used_pct": 30}, "api": {"used_pct": 12}, "on_demand": {"usd": 0}},
+    {"key": "cursor+grok", "provider": "xai-plan", "label": "cursor+grok", "plan": "SuperGrok Plus", "source": "live", "observed_at": 1762055900, "stale": false,
+     "windows": [{"name": "week", "used_pct": 74, "resets_at": 1762492955}]}
+  ],
+  "hosts": {"hosts": []}
+}

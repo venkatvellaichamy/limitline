@@ -54,6 +54,8 @@ def _cli():
 
 def write_grok(usage=None):
     """grok.line: `cursor+grok 74% · Thu 23:22 · grok 7d 1.2M tok`, then `pct dim source`.
+    The xAI plan shows as `Grok` in rows; `cursor+grok` here is the plan's key, the
+    prefix bin/limitline and lib/fivelines.py parse (xaiplan.KEY).
     The rows come from Pharos, or, inside Grok or Cursor without Pharos, from that
     tool's own files. Written even when empty, so a stale line does not outlive them."""
     text, flags = "", ""

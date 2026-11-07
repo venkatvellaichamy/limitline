@@ -20,8 +20,10 @@ whenever it is at least as new as the manual one.
 A reading older than 6 hours is shown dimmed with its age, and so is a live
 reading when the last fetch after it failed. One older than 7 days is hidden.
 Once resets_at has passed, the percent belongs to an old window and is not
-shown. With a reading, Cursor and Grok are one row, and the Cursor token
-estimate is not shown at all.
+shown. With a reading, the plan row is labelled `Grok`; the Grok token row
+folds into it, and the Cursor token estimate is not shown at all. A measured
+Cursor plan row (Pharos's own `cursor` entry: the Cursor plan's month window)
+stays as its own `cursor` row next to it.
 """
 import json, os, sys, time
 
@@ -29,7 +31,10 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import timefmt
 
 PROVIDER = "xai-plan"
-LABEL = "cursor+grok"
+# KEY names the plan in Pharos's data and the provider's JSON, and starts grok.line
+# (bin/limitline and lib/fivelines.py parse that prefix). LABEL is what rows show.
+KEY = "cursor+grok"
+LABEL = "Grok"
 STALE_AFTER = 6 * 3600
 HIDE_AFTER = 7 * 86400
 LOG_MARKER = "fetched credits config"
@@ -180,7 +185,7 @@ def clean_text(value, limit=24):
 
 
 def empty():
-    return {"label": LABEL, "observed_at": None, "provider": PROVIDER, "source": "none", "stale": False, "windows": []}
+    return {"label": KEY, "observed_at": None, "provider": PROVIDER, "source": "none", "stale": False, "windows": []}
 
 
 def pick(live, manual):
@@ -231,8 +236,26 @@ def read(now=None):
     return out
 
 
+def is_plan(row):
+    """The xAI plan row: provider `xai-plan`, or Pharos's `cursor+grok` key."""
+    return isinstance(row, dict) and (row.get("provider") in (PROVIDER, KEY) or row.get("key") == KEY)
+
+
 def present(row):
-    return isinstance(row, dict) and row.get("provider") == PROVIDER and row.get("source") not in (None, "none")
+    return is_plan(row) and row.get("source") not in (None, "none")
+
+
+def measured(row):
+    """A row with at least one real (not estimated) percent window."""
+    if not isinstance(row, dict) or row.get("source") in (None, "none", "estimate"):
+        return False
+    for window in row.get("windows") or []:
+        if not isinstance(window, dict) or window.get("estimate"):
+            continue
+        used = window.get("used_pct")
+        if isinstance(used, (int, float)) and not isinstance(used, bool):
+            return True
+    return False
 
 
 def write(used, resets_at=None, plan=None, source="manual", now=None):
@@ -321,25 +344,28 @@ def brief(row, long=False):
 
 def line_fields(row):
     """grok.line for the status line: the text, then `pct dim source` on line 2.
-    A stale or manual reading is dimmed."""
+    A stale or manual reading is dimmed. The text starts with KEY, not LABEL:
+    bin/limitline and lib/fivelines.py find the plan by that prefix."""
     if not present(row):
         return "", ""
     pct, _bits = parts(row)
-    text = LABEL + " " + brief(row)
+    text = KEY + " " + brief(row)
     dim = row.get("stale") or row.get("source") != "live"
     flags = "%s %d %s" % (pct.rstrip("%") or "-", 1 if dim else 0, row.get("source") or "manual")
     return text, flags
 
 
 def merge(rows):
-    """Swap the cursor and grok rows for one cursor+grok row when the plan cache
-    exists. Without it, drop the empty plan row and keep the others."""
+    """With an xAI plan reading, fold the grok token row into one Grok plan row.
+    A measured cursor row (Pharos's Cursor plan, its own month window) stays; a
+    cursor token estimate or empty cursor row is dropped, as the plan covers it.
+    Without a reading, drop the empty plan row and keep the others."""
     plan = None
     for row in rows:
-        if isinstance(row, dict) and row.get("provider") == PROVIDER:
+        if is_plan(row):
             plan = row
     if not present(plan):
-        return [row for row in rows if not (isinstance(row, dict) and row.get("provider") == PROVIDER)]
+        return [row for row in rows if not is_plan(row)]
     merged = dict(plan)
     out = []
     placed = False
@@ -347,7 +373,10 @@ def merge(rows):
         name = row.get("provider") if isinstance(row, dict) else None
         if name == "grok" and isinstance(row.get("week"), dict):
             merged["grok_week"] = row["week"]
-        if name in ("cursor", "grok", PROVIDER):
+        if name == "cursor" and measured(row):
+            out.append(row)
+            continue
+        if name in ("cursor", "grok") or is_plan(row):
             if not placed:
                 out.append(merged)
                 placed = True
@@ -357,8 +386,9 @@ def merge(rows):
 
 
 def label(row):
-    if isinstance(row, dict) and row.get("provider") == PROVIDER:
-        return row.get("label") or LABEL
+    """The shown name. The xAI plan is `Grok` whatever label its data carries."""
+    if is_plan(row):
+        return LABEL
     return (row or {}).get("provider") or "tool"
 
 
