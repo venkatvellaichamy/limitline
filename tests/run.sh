@@ -1277,13 +1277,6 @@ if python3 -m unittest -q "$ROOT/tests/test_release.py" >/dev/null 2>&1; then
 else
   check "release-unit" "failed" "ok"
 fi
-# Pharos's own cursor entry is a row; the xAI plan (cursor+grok) is labelled Grok.
-if rows_out=$(python3 -m unittest -q "$ROOT/tests/test_cursor_rows.py" 2>&1); then
-  check "cursor-grok-rows-unit" "ok" "ok"
-else
-  check "cursor-grok-rows-unit" "failed" "ok"
-  printf '%s\n' "$rows_out" >&2
-fi
 
 # Display only (2026-11-03): the status line relays Claude's reading to Pharos and
 # refresh never starts agy, grok, or ssh. Pharos measures; limitline draws.

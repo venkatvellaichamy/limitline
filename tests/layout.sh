@@ -309,5 +309,14 @@ printf 'theme = "pill"\n' > "$legacy_only/limitline/config"
 (cd "$TEST_HOME" && env -u LIMITLINE_CONFIG XDG_CONFIG_HOME="$legacy_only" "$BIN" statusline set line1=model > /dev/null 2>&1)
 check "statusline-legacy-file" "$(cat "$legacy_only/limitline/config"; ls "$legacy_only/limitline")" "$(printf '%s\n' 'theme = "pill"' 'line1 = ["model"]' 'config' 'config.bak')"
 
+# Pharos's own cursor entry is a row; the xAI plan (cursor+grok) is labelled Grok.
+# Kept out of tests/run.sh like the 0.15 checks above.
+if rows_out=$(python3 -m unittest -q "$ROOT/tests/test_cursor_rows.py" 2>&1); then
+  check "cursor-grok-rows-unit" "ok" "ok"
+else
+  check "cursor-grok-rows-unit" "failed" "ok"
+  printf '%s\n' "$rows_out" >&2
+fi
+
 printf '\n%d passed, %d failed\n' "$pass" "$fail"
 [[ "$fail" -eq 0 ]]
